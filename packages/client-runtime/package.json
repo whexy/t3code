@@ -11,6 +11,10 @@
       "types": "./src/handoff.ts",
       "default": "./src/handoff.ts"
     },
+    "./queued-messages": {
+      "types": "./src/queuedMessages.ts",
+      "default": "./src/queuedMessages.ts"
+    },
     "./device/stream": {
       "types": "./src/device/stream.ts",
       "default": "./src/device/stream.ts"
