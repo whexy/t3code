@@ -1,0 +1,113 @@
+# Publishes the self-hosted images from the `self-hosted` branch: the web
+# client (`t3code-self-hosted`) and the MCP bridge (`t3code-mcp`). Runs on every
+# push to the branch, including the stable-release rebases self-hosted-sync.yaml
+# pushes, and on a manual run from the UI. A failed check publishes nothing,
+# so the last image keeps serving until the patch is fixed.
+#
+# Images get two tags: `sha-<commit>` identifies the exact inputs, and
+# `1.1.<pipeline>` gives deployments a monotonic version to follow.
+#
+# The branch does not commit its lockfile changes, which would conflict with
+# upstream's on most rebases; installs here resolve them instead.
+#
+# Needs the secret `ghcr_token`: a classic token of whexy's with
+# `write:packages`.
+variables:
+  # Typecheck and the web build outgrow the LimitRange's 2Gi step default.
+  - &node_resources
+    kubernetes:
+      resources:
+        requests:
+          cpu: "4"
+          memory: 8Gi
+        limits:
+          cpu: "8"
+          memory: 8Gi
+  - &image_settings
+    platforms: linux/amd64
+    registry: ghcr.io
+    username: whexy
+    password:
+      from_secret: ghcr_token
+    tags:
+      - sha-${CI_COMMIT_SHA:0:12}
+      - 1.1.${CI_PIPELINE_NUMBER}
+    # ghcr.io links the package to the repository named by the source label;
+    # the plugin's own labels would name the clone URL.
+    default_labels: false
+    labels:
+      - org.opencontainers.image.source=https://github.com/whexy/t3code
+    # One manifest per tag, so ghcr.io's untagged versions are only superseded
+    # builds.
+    provenance: false
+    # The pod network runs over Tailscale at MTU 1230; Docker's bridge defaults
+    # to 1500, which stalls downloads during the build.
+    mtu: 1230
+    # Docker cannot stack its layers on the step's overlay filesystem; the
+    # workspace volume is a plain directory on the node.
+    storage_path: /woodpecker/docker
+  # The step runs a Docker daemon and buildkit beside the build.
+  - &image_resources
+    kubernetes:
+      resources:
+        requests:
+          cpu: "2"
+          memory: 4Gi
+        limits:
+          cpu: "4"
+          memory: 6Gi
+
+when:
+  event: [push, manual]
+  branch: self-hosted
+
+steps:
+  - name: install
+    image: node:24
+    backend_options: *node_resources
+    commands:
+      - corepack pnpm install --no-frozen-lockfile --filter=@t3tools/scripts... --filter=@t3tools/web... --filter=@t3tools/mcp...
+
+  - name: web
+    image: node:24
+    backend_options: *node_resources
+    commands:
+      - export PATH="$PWD/node_modules/.bin:$PATH"
+      - vp test run apps/web/src/connection/sharedCatalog.test.ts apps/web/src/connection/storage.test.ts scripts/self-hosted/server.test.ts
+      - vp run --filter @t3tools/web typecheck
+      # The storage tests expect the browser catalog, so only the build sees the shared one.
+      - export VITE_HOSTED_APP_CHANNEL=latest VITE_SHARED_CATALOG_PATH=/__t3code/shared-catalog
+      - vp run --filter @t3tools/web build
+      - node scripts/apply-web-brand-assets.ts --channel latest
+      - mkdir -p .sync/web-image
+      - cp scripts/self-hosted/server.ts .sync/web-image/
+      - cp -R apps/web/dist .sync/web-image/web
+
+  - name: web-image
+    image: woodpeckerci/plugin-docker-buildx:6.1.2
+    backend_options: *image_resources
+    settings:
+      <<: *image_settings
+      repo: ghcr.io/whexy/t3code-self-hosted
+      dockerfile: scripts/self-hosted/Dockerfile
+      context: .sync/web-image
+
+  - name: mcp
+    image: node:24
+    backend_options: *node_resources
+    commands:
+      - export PATH="$PWD/node_modules/.bin:$PATH"
+      - vp test run apps/mcp/src
+      - vp run --filter @t3tools/mcp typecheck
+      - (cd apps/mcp && vp pack)
+      - mkdir -p .sync/mcp-image
+      - cp apps/mcp/dist/bin.mjs .sync/mcp-image/
+
+  - name: mcp-image
+    image: woodpeckerci/plugin-docker-buildx:6.1.2
+    backend_options: *image_resources
+    settings:
+      <<: *image_settings
+      repo: ghcr.io/whexy/t3code-mcp
+      dockerfile: scripts/self-hosted/mcp.Dockerfile
+      context: .sync/mcp-image
