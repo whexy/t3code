@@ -37,6 +37,7 @@ import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import { projectFaviconCache } from "../assets/projectFaviconCache";
+import { sharedCatalogBackendFromEnv } from "./sharedCatalog";
 
 const DATABASE_NAME = "t3code:connection-runtime";
 const DATABASE_VERSION = 4;
@@ -394,6 +395,8 @@ export interface CatalogBackend {
 }
 
 export function makeCatalogBackend(database: DatabaseHandle): CatalogBackend {
+  const shared = sharedCatalogBackendFromEnv();
+  if (shared !== null) return shared;
   const bridge = window.desktopBridge;
   if (bridge?.getConnectionCatalog !== undefined && bridge.setConnectionCatalog !== undefined) {
     return {
