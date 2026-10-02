@@ -132,3 +132,13 @@ Use `Ctrl+Shift+1/2/3/4` (`Cmd+Shift+1/2/3/4` on macOS) for the past
 24 hours, 7 days, 30 days, or 90 days. Period shortcuts do nothing on Limits.
 Press `Escape` to return to the previous page. Customize these shortcuts in
 **Settings → Keybindings**.
+
+## Query usage through MCP
+
+With the [T3 Code MCP bridge](../../apps/mcp/README.md#usage-analytics), use
+`get_usage` to retrieve structured token totals, cache savings, estimated
+API-equivalent costs, and provider/model or daily/hourly breakdowns. Specify
+inclusive calendar dates and your timezone, or an exact hourly period of up to
+24 hours. Select one server or merge all paired servers; shared histories count
+once. Check the returned source coverage when interpreting incomplete history.
+Project and individual agent attribution are not available.

@@ -3,6 +3,14 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./queued-messages": {
+      "types": "./src/queuedMessages.ts",
+      "default": "./src/queuedMessages.ts"
+    },
+    "./state/thread-reducer": {
+      "types": "./src/state/threadReducer.ts",
+      "default": "./src/state/threadReducer.ts"
+    },
     "./device/stream": {
       "types": "./src/device/stream.ts",
       "default": "./src/device/stream.ts"
