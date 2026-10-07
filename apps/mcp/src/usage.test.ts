@@ -13,9 +13,10 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import * as Tool from "effect/unstable/ai/Tool";
+import * as Tool from "effect/ai/Tool";
 
 import { BridgeError, Environments, type T3Environment } from "./environment.ts";
+import { fakeEnvironment } from "./testing.ts";
 import { BridgeToolkit, BridgeToolkitHandlersLive } from "./tools.ts";
 import { GetUsageTool, usageReport, usageWindow } from "./usage.ts";
 
@@ -239,29 +240,19 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const queries: Array<unknown> = [];
-      const environment = (id: string): T3Environment => ({
-        id,
-        name: id,
-        expiresAt: "2026-10-01T00:00:00Z",
-        shell: Effect.die("unused"),
-        interruptTurn: () => Effect.die("unused"),
-        waitForThread: () => Effect.die("unused"),
-        dispatchCommand: () => Effect.die("unused"),
-        createRef: () => Effect.die("unused"),
-        switchRef: () => Effect.die("unused"),
-        listRefs: () => Effect.die("unused"),
-        createProject: () => Effect.die("unused"),
-        cloneProject: () => Effect.die("unused"),
-        serverConfig: Effect.die("unused"),
-        thread: () => Effect.die("unused"),
-        startTurn: () => Effect.die("must not run agents"),
-        usageSummary: (window) => {
-          queries.push(window);
-          return id === "offline"
-            ? Effect.fail(new BridgeError({ message: "unreachable" }))
-            : Effect.succeed(summary());
-        },
-      });
+      // Every other server call dies, so the tool can neither read sessions nor run agents.
+      const environment = (id: string): T3Environment =>
+        fakeEnvironment({
+          id,
+          name: id,
+          expiresAt: "2026-10-01T00:00:00Z",
+          usageSummary: (window) => {
+            queries.push(window);
+            return id === "offline"
+              ? Effect.fail(new BridgeError({ message: "unreachable" }))
+              : Effect.succeed(summary());
+          },
+        });
       const environments = Environments.of({
         enabled: Effect.succeed([environment("home"), environment("offline")]),
         get: (id) =>

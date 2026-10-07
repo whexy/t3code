@@ -5,7 +5,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import { FetchHttpClient, HttpBody, HttpClient, HttpClientRequest } from "effect/unstable/http";
+import { FetchHttpClient, HttpBody, HttpClient, HttpClientRequest } from "effect/http";
 
 import * as Server from "./server.ts";
 import { BridgeState } from "./registry.ts";
@@ -101,16 +101,14 @@ describe("bridge listeners", () => {
         );
       const listed = decodeTools(yield* request(2, "tools/list", {}));
       expect(listed.result.tools.map((tool) => tool.name).sort()).toEqual([
-        "answer_session_question",
+        "control_session",
         "create_project",
         "create_session",
-        "get_model_capabilities",
         "get_session_status",
         "get_usage",
-        "interrupt_session",
         "list_projects",
         "list_sessions",
-        "respond_to_session_approval",
+        "respond_to_session",
         "send_session_message",
       ]);
       const called = decodeCall(

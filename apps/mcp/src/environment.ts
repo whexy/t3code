@@ -1,23 +1,29 @@
 import {
-  type ClientOrchestrationCommand,
-  CommandId,
   EnvironmentAuthorizationError,
   GitCommandError,
+  ORCHESTRATION_PROTOCOL_HEADER,
   ORCHESTRATION_PROTOCOL_QUERY_PARAM,
   ORCHESTRATION_PROTOCOL_VERSION,
-  ORCHESTRATION_WS_METHODS,
-  type ThreadId,
+  ORCHESTRATION_PROTOCOL_VERSION_TEXT,
+  ORCHESTRATION_V2_WS_METHODS,
+  OrchestrationV2DispatchCommandError,
+  OrchestrationV2ThreadLaunchError,
+  ProjectMutationError,
+  SourceControlRepositoryError,
+  type OrchestrationV2Command,
+  type OrchestrationV2ThreadLaunchInput,
+  type OrchestrationV2ThreadProjection,
+  type ProjectCloneSnapshot,
   type ProjectCloneStartInput,
   type ProjectCloneStartResult,
-  type ProjectCloneSnapshot,
-  OrchestrationDispatchCommandError,
-  SourceControlRepositoryError,
-  type OrchestrationThread,
-  type VcsCreateRefInput,
-  type VcsSwitchRefInput,
-  type VcsListRefsInput,
+  type ProjectMutation,
+  type ThreadId,
   type UsageSummaryInput,
+  type VcsCreateRefInput,
+  type VcsListRefsInput,
+  type VcsSwitchRefInput,
   WS_METHODS,
+  WsRpcGroup,
 } from "@t3tools/contracts";
 import { resolveRemoteWebSocketConnectionUrl } from "@t3tools/client-runtime/authorization";
 import { orchestrationProtocolCompatibilityError } from "@t3tools/client-runtime/connection";
@@ -29,7 +35,6 @@ import {
 import {
   executeEnvironmentHttpRequest,
   makeEnvironmentHttpApiGroupClient,
-  makeWsRpcProtocolClient,
   type RemoteEnvironmentRequestError,
   type WsRpcProtocolClient,
 } from "@t3tools/client-runtime/rpc";
@@ -42,12 +47,12 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Option from "effect/Option";
-import { HttpClient } from "effect/unstable/http";
-import * as RpcClient from "effect/unstable/rpc/RpcClient";
-import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization";
-import * as Socket from "effect/unstable/socket/Socket";
+import { HttpClient } from "effect/http";
+import * as RpcClient from "effect/rpc/RpcClient";
+import * as RpcSerialization from "effect/rpc/RpcSerialization";
+import * as Socket from "effect/socket/Socket";
 
-import { CLIENT_METADATA } from "./access.ts";
+import { CLIENT_METADATA, support, tooOldMessage } from "./access.ts";
 import { Registry, type ServerRecord } from "./registry.ts";
 
 const isBridgeError = Schema.is(BridgeError);
@@ -55,29 +60,51 @@ const isBridgeError = Schema.is(BridgeError);
 const REQUEST_TIMEOUT_MS = 15_000;
 const WORKTREE_SETUP_TIMEOUT_MS = 10 * 60_000;
 const isActionError = Schema.is(
-  Schema.Union([EnvironmentAuthorizationError, GitCommandError, OrchestrationDispatchCommandError]),
+  Schema.Union([
+    EnvironmentAuthorizationError,
+    GitCommandError,
+    OrchestrationV2DispatchCommandError,
+    OrchestrationV2ThreadLaunchError,
+  ]),
 );
-/** Status needs the running turn and the one before it, never the whole history. */
-const THREAD_TURN_WINDOW = 2;
-
-type StartTurnCommand = Extract<ClientOrchestrationCommand, { readonly type: "thread.turn.start" }>;
 
 const isProjectError = Schema.is(
-  Schema.Union([OrchestrationDispatchCommandError, SourceControlRepositoryError, BridgeError]),
+  Schema.Union([
+    ProjectMutationError,
+    OrchestrationV2DispatchCommandError,
+    SourceControlRepositoryError,
+    BridgeError,
+  ]),
 );
+
+/** What the model reads when the server turns a command down. */
+const commandFailure = (serverId: string, command: OrchestrationV2Command) => {
+  switch (command.type) {
+    case "message.dispatch":
+      return `T3 server "${serverId}" did not accept the message.`;
+    case "run.interrupt":
+      return `T3 server "${serverId}" did not accept the interruption.`;
+    case "queued-run.cancel":
+      return `T3 server "${serverId}" could not cancel a queued message.`;
+    default:
+      return `T3 server "${serverId}" did not accept the response.`;
+  }
+};
 
 /**
  * One paired T3 server, reached the way any remote client reaches it.
- * Reads use bearer-authenticated HTTP. The server config and turn starts use
- * a short-lived RPC socket: the config has no HTTP endpoint, and only the
- * socket handler runs a turn start's `bootstrap` that creates the thread.
+ * Reads use bearer-authenticated HTTP. Commands, launches, and the server
+ * config use a short-lived RPC socket: the config has no HTTP endpoint.
  */
 const makeEnvironment = Effect.fn("makeEnvironment")(function* (entry: ServerRecord) {
   const httpClient = yield* HttpClient.HttpClient;
   const webSocketConstructor = yield* Socket.WebSocketConstructor;
   const httpBaseUrl = normalizeHttpBaseUrl(entry.url);
   const wsBaseUrl = deriveWsBaseUrl(httpBaseUrl);
-  const headers = { authorization: `Bearer ${entry.token}` };
+  const headers = {
+    authorization: `Bearer ${entry.token}`,
+    [ORCHESTRATION_PROTOCOL_HEADER]: ORCHESTRATION_PROTOCOL_VERSION_TEXT,
+  } as const;
 
   const fail = (operation: string, message: string, detail: string) =>
     Effect.logWarning("T3 server request failed", { server: entry.id, operation, detail }).pipe(
@@ -120,7 +147,7 @@ const makeEnvironment = Effect.fn("makeEnvironment")(function* (entry: ServerRec
     operation: string,
     failureMessage: string,
     use: (client: WsRpcProtocolClient) => Effect.Effect<A, E>,
-    timeoutMs: number | false = REQUEST_TIMEOUT_MS,
+    timeoutMs: number = REQUEST_TIMEOUT_MS,
     canonicalErrors = false,
   ) =>
     Effect.gen(function* () {
@@ -150,9 +177,9 @@ const makeEnvironment = Effect.fn("makeEnvironment")(function* (entry: ServerRec
           ),
         ),
       );
-      const client = yield* makeWsRpcProtocolClient.pipe(Effect.provide(protocol));
+      const client = yield* RpcClient.make(WsRpcGroup).pipe(Effect.provide(protocol));
       return yield* use(client).pipe(
-        (effect) => (timeoutMs === false ? effect : effect.pipe(Effect.timeout(timeoutMs))),
+        Effect.timeout(timeoutMs),
         Effect.catch((error) => {
           if (isBridgeError(error)) return Effect.fail(error);
           return fail(
@@ -176,15 +203,15 @@ const makeEnvironment = Effect.fn("makeEnvironment")(function* (entry: ServerRec
     client.shellSnapshot({ headers }),
   ).pipe(Effect.catch(failRequest("shell")));
 
+  /**
+   * The thread's control state (runs, requests, checkpoints) in full, with
+   * only the recent timeline: status never needs the whole history.
+   */
   const thread = (threadId: ThreadId) =>
-    orchestration(`/api/orchestration/threads/${threadId}`, (client) =>
-      client.threadSnapshot({
-        headers,
-        params: { threadId },
-        // Servers without pagination or reasoning roles ignore these fields.
-        payload: { turnLimit: THREAD_TURN_WINDOW, reasoningMessages: "true" },
-      }),
+    orchestration(`/api/orchestration/threads/${threadId}/bounded`, (client) =>
+      client.threadBoundedSnapshot({ headers, params: { threadId } }),
     ).pipe(
+      Effect.map((snapshot) => snapshot.projection),
       Effect.catch((error) =>
         error._tag === "EnvironmentResourceNotFoundError"
           ? Effect.fail(
@@ -209,66 +236,31 @@ const makeEnvironment = Effect.fn("makeEnvironment")(function* (entry: ServerRec
     }),
   );
 
-  /** Creates the thread when the command carries a `bootstrap`; continues it otherwise. */
-  const dispatchCommand = (command: ClientOrchestrationCommand) =>
-    rpc(
-      command.type === "thread.turn.interrupt" ? "interrupt turn" : "start turn",
-      command.type === "thread.turn.interrupt"
-        ? `T3 server "${entry.id}" did not accept the interruption.`
-        : command.type !== "thread.turn.start" || command.bootstrap === undefined
-          ? `T3 server "${entry.id}" did not accept the message.`
-          : `T3 server "${entry.id}" could not start the session.`,
-      (client) => client[ORCHESTRATION_WS_METHODS.dispatchCommand](command),
-      command.type === "thread.turn.start" && command.bootstrap?.prepareWorktree
-        ? WORKTREE_SETUP_TIMEOUT_MS
-        : REQUEST_TIMEOUT_MS,
+  const dispatch = (command: OrchestrationV2Command) =>
+    rpc(command.type, commandFailure(entry.id, command), (client) =>
+      client[ORCHESTRATION_V2_WS_METHODS.dispatchCommand](command),
     );
 
-  const respondToRequest = (command: ClientOrchestrationCommand) =>
-    rpc("respond to request", `T3 server "${entry.id}" did not accept the response.`, (client) =>
-      client[ORCHESTRATION_WS_METHODS.dispatchCommand](command),
-    );
-  const createRef = (input: VcsCreateRefInput) =>
-    rpc("create branch", `T3 server "${entry.id}" could not create the branch.`, (client) =>
-      client[WS_METHODS.vcsCreateRef](input),
-    );
-  const switchRef = (input: VcsSwitchRefInput) =>
-    rpc("switch branch", `T3 server "${entry.id}" could not switch branches.`, (client) =>
-      client[WS_METHODS.vcsSwitchRef](input),
-    );
-  const listRefs = (input: VcsListRefsInput) =>
-    rpc("list branches", `T3 server "${entry.id}" could not list branches.`, (client) =>
-      client[WS_METHODS.vcsListRefs](input),
-    );
+  /** Creates the thread and sends its first message; workspace preparation continues on the server. */
+  const launchThread = (input: OrchestrationV2ThreadLaunchInput) =>
+    rpc("launch thread", `T3 server "${entry.id}" could not start the session.`, (client) =>
+      client[ORCHESTRATION_V2_WS_METHODS.launchThread](input),
+    ).pipe(Effect.map((result) => result.projection));
 
-  /** Snapshot + replay use the same reducer as the clients, with no polling or history reloads. */
+  /** Snapshot + replay through the clients' projection reducer, with no polling. */
   const waitForThread = (
     threadId: ThreadId,
-    ready: (thread: OrchestrationThread, now: string) => boolean,
+    ready: (projection: OrchestrationV2ThreadProjection) => boolean,
   ) =>
     rpc(
       "watch thread",
       `T3 server "${entry.id}" could not watch the session.`,
-      (client) => {
-        return waitForThreadState(
-          client[ORCHESTRATION_WS_METHODS.subscribeThread]({
-            threadId,
-            turnLimit: THREAD_TURN_WINDOW,
-            reasoningMessages: true,
-          }),
+      (client) =>
+        waitForThreadState(
+          client[ORCHESTRATION_V2_WS_METHODS.subscribeThread]({ threadId }),
           ready,
-        );
-      },
-      false,
-    );
-
-  const usageSummary = (input: UsageSummaryInput) =>
-    rpc(
-      "usage summary",
-      `T3 server "${entry.id}" did not return usage. It may need updating or its history may be unavailable.`,
-      (client) => client[WS_METHODS.serverGetUsageSummary](input),
-      // Cold scans read provider history and pricing before answering.
-      120_000,
+        ),
+      WORKTREE_SETUP_TIMEOUT_MS,
     );
 
   return {
@@ -277,21 +269,27 @@ const makeEnvironment = Effect.fn("makeEnvironment")(function* (entry: ServerRec
     expiresAt: entry.expiresAt,
     shell,
     thread,
-    startTurn: (command: StartTurnCommand) => dispatchCommand(command),
-    interruptTurn: (
-      command: Extract<ClientOrchestrationCommand, { type: "thread.turn.interrupt" }>,
-    ) => dispatchCommand(command),
-    waitForThread,
-    dispatchCommand: respondToRequest,
-    createRef,
-    switchRef,
-    listRefs,
     serverConfig,
-    createProject: (command: Extract<ClientOrchestrationCommand, { type: "project.create" }>) =>
+    dispatch,
+    launchThread,
+    waitForThread,
+    createRef: (input: VcsCreateRefInput) =>
+      rpc("create branch", `T3 server "${entry.id}" could not create the branch.`, (client) =>
+        client[WS_METHODS.vcsCreateRef](input),
+      ),
+    switchRef: (input: VcsSwitchRefInput) =>
+      rpc("switch branch", `T3 server "${entry.id}" could not switch branches.`, (client) =>
+        client[WS_METHODS.vcsSwitchRef](input),
+      ),
+    listRefs: (input: VcsListRefsInput) =>
+      rpc("list branches", `T3 server "${entry.id}" could not list branches.`, (client) =>
+        client[WS_METHODS.vcsListRefs](input),
+      ),
+    createProject: (mutation: Extract<ProjectMutation, { readonly type: "project.create" }>) =>
       rpc(
         "create project",
         `T3 server "${entry.id}" could not register the project. Call list_projects before retrying.`,
-        (client) => client[ORCHESTRATION_WS_METHODS.dispatchCommand](command),
+        (client) => client[WS_METHODS.projectsMutate](mutation),
         REQUEST_TIMEOUT_MS,
         true,
       ),
@@ -300,32 +298,24 @@ const makeEnvironment = Effect.fn("makeEnvironment")(function* (entry: ServerRec
         "clone project",
         `T3 server "${entry.id}" could not finish creating project ${input.projectId}. The clone may still be running; inspect it in T3 Code before retrying.`,
         (client) =>
-          Effect.gen(function* () {
-            const config = yield* client[WS_METHODS.serverGetConfig]({});
-            if (config.environment.capabilities.projectCloneTracking === true) {
-              return yield* cloneProjectAndWait(
-                {
-                  start: (input) => client[WS_METHODS.projectCloneStart](input),
-                  changes: client[WS_METHODS.subscribeProjectClones]({}),
-                },
-                input,
-              );
-            }
-            const cloned = yield* client[WS_METHODS.sourceControlCloneRepository](input);
-            yield* client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
-              type: "project.create",
-              commandId: CommandId.make(`mcp-project-create-${input.projectId}`),
-              projectId: input.projectId,
-              title: input.title,
-              workspaceRoot: cloned.cwd,
-              createdAt: input.createdAt,
-            });
-            return { ...cloned, projectId: input.projectId };
-          }),
+          cloneProjectAndWait(
+            {
+              start: (input) => client[WS_METHODS.projectCloneStart](input),
+              changes: client[WS_METHODS.subscribeProjectClones]({}),
+            },
+            input,
+          ),
         10 * 60_000,
         true,
       ),
-    usageSummary,
+    usageSummary: (input: UsageSummaryInput) =>
+      rpc(
+        "usage summary",
+        `T3 server "${entry.id}" did not return usage. It may need updating or its history may be unavailable.`,
+        (client) => client[WS_METHODS.serverGetUsageSummary](input),
+        // Cold scans read provider history and pricing before answering.
+        120_000,
+      ),
   };
 });
 
@@ -354,7 +344,11 @@ export const cloneProjectAndWait = Effect.fn("cloneProjectAndWait")(function* <E
 
 export type T3Environment = Effect.Success<ReturnType<typeof makeEnvironment>>;
 
-/** Paired servers, read from the registry on every call so admin edits apply at once. */
+/**
+ * Paired servers, read from the registry on every call so admin edits apply
+ * at once. A server too old for this bridge counts as disabled until it is
+ * upgraded; the check runs per call, so the upgrade takes effect on the next one.
+ */
 export class Environments extends Context.Service<
   Environments,
   {
@@ -369,20 +363,43 @@ export const layer = Layer.effect(
     const registry = yield* Registry;
     const services = yield* Effect.context<HttpClient.HttpClient | Socket.WebSocketConstructor>();
     const build = (record: ServerRecord) => makeEnvironment(record).pipe(Effect.provide(services));
+    const serverSupport = (record: ServerRecord) => support(record).pipe(Effect.provide(services));
     return Environments.of({
       enabled: registry.state.pipe(
         Effect.flatMap((state) =>
           Effect.forEach(
             state.servers.filter((server) => server.enabled),
-            build,
+            (server) =>
+              serverSupport(server).pipe(
+                Effect.flatMap((supported) =>
+                  supported.status === "too_old"
+                    ? Effect.succeed([])
+                    : Effect.map(build(server), (built) => [built]),
+                ),
+              ),
+            { concurrency: "unbounded" },
           ),
         ),
+        Effect.map((environments) => environments.flat()),
       ),
       get: (serverId) =>
         registry.state.pipe(
           Effect.flatMap((state) => {
             const server = state.servers.find((candidate) => candidate.id === serverId);
-            if (server?.enabled === true) return build(server);
+            if (server?.enabled === true) {
+              return serverSupport(server).pipe(
+                Effect.flatMap((supported) =>
+                  supported.status === "too_old"
+                    ? Effect.fail(
+                        new BridgeError({
+                          code: "server_too_old",
+                          message: tooOldMessage(server.id, supported.serverVersion),
+                        }),
+                      )
+                    : build(server),
+                ),
+              );
+            }
             const enabled = state.servers.filter((candidate) => candidate.enabled);
             return Effect.fail(
               new BridgeError({

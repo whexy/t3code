@@ -1,26 +1,19 @@
 import type {
-  OrchestrationLatestTurn,
-  OrchestrationSession,
-  OrchestrationThread,
-  OrchestrationThreadActivity,
+  OrchestrationV2ThreadProjection,
+  OrchestrationV2TurnItem,
+  RunId,
 } from "@t3tools/contracts";
-import { derivePendingRequests } from "@t3tools/client-runtime/pending-requests";
-import { hasQueuedTurnStart } from "@t3tools/client-runtime/state/thread-settled";
-import * as Predicate from "effect/Predicate";
+import type { ThreadRunSummary, ThreadRuntimeSummary } from "@t3tools/client-runtime/state/models";
+import {
+  deriveLatestThreadRun,
+  deriveThreadRuntime,
+} from "@t3tools/client-runtime/state/thread-execution";
+import { derivePendingThreadRequests } from "@t3tools/client-runtime/state/thread-requests";
+import * as DateTime from "effect/DateTime";
 
 const MAX_MESSAGE_CHARS = 4_000;
 const MAX_ACTIVITY_CHARS = 240;
 const MAX_CHANGED_FILES = 20;
-
-/** Activities worth narrating; tool starts, token meters, and task progress are noise. */
-const REPORTED_ACTIVITY_KINDS = new Set([
-  "tool.completed",
-  "task.completed",
-  "approval.requested",
-  "user-input.requested",
-  "runtime.error",
-  "runtime.warning",
-]);
 
 export type SessionState =
   | "queued"
@@ -40,81 +33,147 @@ export interface SessionUpdate {
   readonly truncated?: true;
 }
 
+const iso = DateTime.formatIso;
+
 const cut = (text: string, max: number) =>
   text.length > max ? { text: `${text.slice(0, max)}…`, truncated: true as const } : { text };
 
-function activityText(activity: OrchestrationThreadActivity): string {
-  const payload = Predicate.isObject(activity.payload) ? activity.payload : {};
-  const detail = [payload.detail, payload.message].find(
-    (value): value is string => typeof value === "string" && value.trim().length > 0,
-  );
-  return detail === undefined
-    ? activity.summary
-    : `${activity.summary}: ${detail.replace(/\s+/g, " ").trim()}`;
+const oneLine = (text: string) => text.replace(/\s+/g, " ").trim();
+
+const TERMINAL_ITEM_STATUSES = new Set(["completed", "failed", "cancelled", "interrupted"]);
+
+/** A finished tool call, labelled the way the old activity feed named it. */
+function toolText(item: OrchestrationV2TurnItem): string | null {
+  const failed = item.status === "failed" ? " failed" : "";
+  switch (item.type) {
+    case "command_execution":
+      return `Command run${failed}: ${oneLine(item.input)}`;
+    case "file_change":
+      return `File change${failed}: ${item.fileName}`;
+    case "dynamic_tool":
+      return `${item.toolName ?? "Tool call"}${failed}${item.title ? `: ${oneLine(item.title)}` : ""}`;
+    case "web_search":
+      return `Web search${failed}${item.patterns?.length ? `: ${item.patterns.join(", ")}` : ""}`;
+    case "file_search":
+      return `File search${failed}${item.pattern ? `: ${item.pattern}` : ""}`;
+    case "subagent":
+      return `Subagent ${item.status}: ${oneLine(item.title ?? item.prompt)}`;
+    default:
+      return null;
+  }
 }
 
-function collectUpdates(thread: OrchestrationThread): ReadonlyArray<SessionUpdate> {
-  const updates: Array<SessionUpdate> = [];
-  for (const message of thread.messages) {
-    if (message.role === "reasoning") continue;
-    updates.push({
-      // A streaming message grows in place; its updatedAt moves it past the cursor again.
-      at: message.updatedAt,
-      type: `${message.role}_message`,
-      ...cut(message.text, MAX_MESSAGE_CHARS),
-      ...(message.streaming ? { streaming: true as const } : {}),
-    });
+/** Messages and the timeline entries worth narrating; tool starts and reasoning are noise. */
+function itemUpdate(item: OrchestrationV2TurnItem): SessionUpdate | null {
+  switch (item.type) {
+    case "user_message":
+      return {
+        at: iso(item.updatedAt),
+        type: "user_message",
+        ...cut(item.text, MAX_MESSAGE_CHARS),
+      };
+    case "assistant_message":
+      return {
+        // A streaming message grows in place; its updatedAt moves it past the cursor again.
+        at: iso(item.updatedAt),
+        type: "assistant_message",
+        ...cut(item.text, MAX_MESSAGE_CHARS),
+        ...(item.streaming ? { streaming: true as const } : {}),
+      };
+    case "system_notice":
+      return {
+        at: iso(item.updatedAt),
+        type: "system_message",
+        ...cut(item.message, MAX_MESSAGE_CHARS),
+      };
+    case "approval_request":
+      return {
+        at: iso(item.startedAt ?? item.updatedAt),
+        type: "activity",
+        ...cut(
+          `Approval requested: ${oneLine(item.prompt ?? item.requestKind)}`,
+          MAX_ACTIVITY_CHARS,
+        ),
+      };
+    case "user_input_request":
+      return {
+        at: iso(item.startedAt ?? item.updatedAt),
+        type: "activity",
+        ...cut(
+          `Question: ${item.questions.map((question) => oneLine(question.question)).join(" ")}`,
+          MAX_ACTIVITY_CHARS,
+        ),
+      };
+    case "error":
+      return {
+        at: iso(item.updatedAt),
+        type: "activity",
+        ...cut(`Error: ${oneLine(item.failure.message)}`, MAX_ACTIVITY_CHARS),
+      };
+    default: {
+      if (!TERMINAL_ITEM_STATUSES.has(item.status)) return null;
+      const text = toolText(item);
+      return text === null
+        ? null
+        : {
+            at: iso(item.completedAt ?? item.updatedAt),
+            type: "activity",
+            ...cut(text, MAX_ACTIVITY_CHARS),
+          };
+    }
   }
-  for (const activity of thread.activities) {
-    if (!REPORTED_ACTIVITY_KINDS.has(activity.kind) && activity.tone !== "error") continue;
-    updates.push({
-      at: activity.createdAt,
-      type: "activity",
-      ...cut(activityText(activity), MAX_ACTIVITY_CHARS),
-    });
-  }
-  return updates.toSorted((left, right) => Date.parse(left.at) - Date.parse(right.at));
 }
 
-/** What the sidebar reads to place a thread. Shells carry it; full threads derive it. */
+function collectUpdates(projection: OrchestrationV2ThreadProjection) {
+  return projection.visibleTurnItems
+    .flatMap((row) => {
+      // Rows a fork inherits belong to the session it came from.
+      if (row.visibility !== "local") return [];
+      const update = itemUpdate(row.item);
+      return update === null ? [] : [update];
+    })
+    .toSorted((left, right) => Date.parse(left.at) - Date.parse(right.at));
+}
+
+/** What the sidebar reads to place a thread. Shells carry it; full projections derive it. */
 export interface StateSignals {
-  readonly session: OrchestrationSession | null;
-  readonly latestTurn: OrchestrationLatestTurn | null;
-  readonly latestUserMessageAt: string | null;
+  readonly runtime: Pick<ThreadRuntimeSummary, "status"> | null;
+  readonly latestRun: Pick<ThreadRunSummary, "status"> | null;
   /** An approval or a question is open. */
   readonly waiting: boolean;
 }
 
-/** Mirrors the sidebar's precedence: a raised hand, then live work, then how the last turn ended. */
-export function sessionState(signals: StateSignals, now: string): SessionState {
-  const { session, latestTurn } = signals;
+/** A raised hand first, then the run doing the work, then how the last run ended. */
+export function sessionState(signals: StateSignals): SessionState {
   if (signals.waiting) return "waiting";
-  if (session?.status === "starting") return "starting";
-  if (session?.status === "running" || latestTurn?.state === "running") return "running";
-  if (hasQueuedTurnStart(signals, { now })) return "queued";
-  if (session?.status === "error" || latestTurn?.state === "error") return "failed";
-  if (latestTurn?.state === "interrupted") return "interrupted";
-  if (latestTurn?.state === "completed") return "completed";
-  return "idle";
+  const runtimeStatus = signals.runtime?.status ?? "idle";
+  // Idle runtime with a run means background work holds it; report how that run ended.
+  const status = runtimeStatus === "idle" ? (signals.latestRun?.status ?? "idle") : runtimeStatus;
+  switch (status) {
+    case "preparing":
+    case "starting":
+      return "starting";
+    case "cancelled":
+      return "interrupted";
+    case "rolled_back":
+      return "idle";
+    default:
+      return status;
+  }
 }
 
-/** A full thread's state. Its activities hold the open requests the shell would flag. */
-export function threadState(thread: OrchestrationThread, now: string): SessionState {
-  const pending = derivePendingRequests(thread.activities);
-  return sessionState(
-    {
-      session: thread.session,
-      latestTurn: thread.latestTurn,
-      latestUserMessageAt:
-        thread.messages.findLast((message) => message.role === "user")?.createdAt ?? null,
-      waiting: pending.approvals.length > 0 || pending.userInputs.length > 0,
-    },
-    now,
-  );
+/** A projection's state. Its runtime requests hold the open requests the shell would flag. */
+export function threadState(projection: OrchestrationV2ThreadProjection): SessionState {
+  const pending = derivePendingThreadRequests(projection);
+  return sessionState({
+    runtime: deriveThreadRuntime(projection),
+    latestRun: deriveLatestThreadRun(projection),
+    waiting: pending.approvals.length > 0 || pending.userInputs.length > 0,
+  });
 }
 
-function waitingFor(thread: OrchestrationThread) {
-  const pending = derivePendingRequests(thread.activities);
+function waitingFor(projection: OrchestrationV2ThreadProjection) {
+  const pending = derivePendingThreadRequests(projection);
   return {
     approvals: pending.approvals.map((approval) => ({
       request_id: approval.requestId,
@@ -128,7 +187,7 @@ function waitingFor(thread: OrchestrationThread) {
         request_id: input.requestId,
         question_id: question.id,
         header: question.header,
-        multi_select: question.multiSelect === true,
+        multi_select: question.multiSelect,
         allow_custom_answer: question.allowCustomAnswer !== false,
         choices: question.options.map((option) => ({
           ...option,
@@ -141,22 +200,24 @@ function waitingFor(thread: OrchestrationThread) {
   };
 }
 
-export const turnTimes = (latestTurn: OrchestrationLatestTurn | null) =>
-  latestTurn === null
+export const turnTimes = (
+  latestRun: Pick<ThreadRunSummary, "requestedAt" | "startedAt" | "completedAt"> | null,
+) => {
+  const startedAt = latestRun?.startedAt ?? latestRun?.requestedAt ?? null;
+  return latestRun === null || startedAt === null
     ? null
-    : {
-        started_at: latestTurn.startedAt ?? latestTurn.requestedAt,
-        completed_at: latestTurn.completedAt,
-      };
+    : { started_at: startedAt, completed_at: latestRun.completedAt };
+};
 
-/** A cursor past everything the thread holds now, so the next status reports only what follows. */
-export const latestCursor = (thread: OrchestrationThread) =>
-  collectUpdates(thread).at(-1)?.at ?? thread.updatedAt;
+/** A cursor past everything the projection holds now, so the next status reports only what follows. */
+export const latestCursor = (projection: OrchestrationV2ThreadProjection) =>
+  collectUpdates(projection).at(-1)?.at ?? iso(projection.updatedAt);
 
-function changedFiles(thread: OrchestrationThread) {
-  const turnId = thread.latestTurn?.turnId;
-  const checkpoint = thread.checkpoints.findLast(
-    (candidate) => candidate.turnId === turnId && candidate.status === "ready",
+function changedFiles(projection: OrchestrationV2ThreadProjection, runId: RunId | undefined) {
+  // The root run's checkpoint; subagent checkpoints nest under it and do not count.
+  const checkpoint = projection.checkpoints.findLast(
+    (candidate) =>
+      candidate.runId === runId && candidate.appRunOrdinal !== null && candidate.status === "ready",
   );
   if (checkpoint === undefined || checkpoint.files.length === 0) return undefined;
   return {
@@ -175,29 +236,27 @@ function changedFiles(thread: OrchestrationThread) {
  * makes the next call report only what changed since this one.
  */
 export function summarizeSession(
-  thread: OrchestrationThread,
-  options: { readonly cursor?: string | undefined; readonly limit: number; readonly now: string },
+  projection: OrchestrationV2ThreadProjection,
+  options: { readonly cursor?: string | undefined; readonly limit: number },
 ) {
-  const state = threadState(thread, options.now);
-  const error =
-    state === "failed"
-      ? (thread.session?.lastError ??
-        thread.activities.findLast((activity) => activity.tone === "error")?.summary)
-      : undefined;
+  const runtime = deriveThreadRuntime(projection);
+  const latestRun = deriveLatestThreadRun(projection);
+  const state = threadState(projection);
+  const error = state === "failed" ? (runtime?.lastError ?? undefined) : undefined;
   const since = options.cursor === undefined ? Number.NaN : Date.parse(options.cursor);
-  const fresh = collectUpdates(thread).filter(
+  const fresh = collectUpdates(projection).filter(
     (update) => Number.isNaN(since) || Date.parse(update.at) > since,
   );
   const updates = fresh.slice(-options.limit);
-  const files = changedFiles(thread);
+  const files = changedFiles(projection, latestRun?.runId);
   return {
     state,
     ...(error === undefined ? {} : { error }),
-    ...(state === "waiting" ? { waiting_for: waitingFor(thread) } : {}),
-    turn: turnTimes(thread.latestTurn),
+    ...(state === "waiting" ? { waiting_for: waitingFor(projection) } : {}),
+    turn: turnTimes(latestRun),
     ...(files === undefined ? {} : { changed_files: files }),
     updates,
     omitted_updates: fresh.length - updates.length,
-    cursor: fresh.at(-1)?.at ?? options.cursor ?? thread.updatedAt,
+    cursor: fresh.at(-1)?.at ?? options.cursor ?? iso(projection.updatedAt),
   };
 }

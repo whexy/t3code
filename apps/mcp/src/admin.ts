@@ -2,7 +2,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
+import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 
 import { check, pair, type ServerHealth } from "./access.ts";
 import {
@@ -36,6 +36,12 @@ function healthLabel(health: ServerHealth | undefined, nowMs: number) {
         tone: days < EXPIRY_WARNING_DAYS ? "warn" : "ok",
       };
     }
+    case "too_old":
+      return {
+        text: "Automatically disabled because the server is too old",
+        tone: "warn",
+        detail: `T3 Code ${health.serverVersion}`,
+      };
     case "rejected":
       return { text: "Token rejected · re-pair", tone: "bad" };
     case "unreachable":
@@ -151,15 +157,17 @@ function renderPage(input: {
   const { state } = input;
   const cards = state.servers
     .map((server) => {
-      const health = healthLabel(input.health.get(server.id), input.nowMs);
+      const status = input.health.get(server.id);
+      const health = healthLabel(status, input.nowMs);
       const id = escape(server.id);
-      return `<article class="card server${server.enabled ? "" : " disabled"}">
+      const disabled = !server.enabled || status?.status === "too_old";
+      return `<article class="card server${disabled ? " disabled" : ""}">
   <div class="server-head">
     <div class="server-title"><strong>${escape(server.name)}</strong><span class="chip">${id}</span></div>
     ${button("/servers/toggle", server.enabled ? "Disable" : "Enable", { id: server.id })}
   </div>
   <div class="server-url">${escape(server.url)}</div>
-  <div class="status ${health.tone}">${escape(health.text)}${"detail" in health ? ` <span class="detail">${escape(health.detail)}</span>` : ""}${server.enabled ? "" : ` <span class="off">· disabled, hidden from tools</span>`}</div>
+  <div class="status ${health.tone}">${escape(health.text)}${"detail" in health ? ` <span class="detail">${escape(health.detail)}</span>` : ""}${server.enabled ? (status?.status === "too_old" ? ` <span class="off">· hidden from tools until it is updated</span>` : "") : ` <span class="off">· disabled, hidden from tools</span>`}</div>
   <details class="manage"><summary>Manage</summary>
     <div class="panel">
       <form method="post" action="/servers/update" class="stack">

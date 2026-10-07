@@ -53,7 +53,11 @@ export function summarizeAgents(providers: ReadonlyArray<ServerProvider>) {
         ? { message: provider.message }
         : {}),
       default_model: fallback?.slug ?? null,
-      models: ordered.map((model) => ({ model: model.slug, name: model.name })),
+      models: ordered.map((model) => ({
+        model: model.slug,
+        name: model.name,
+        ...describeEfforts(model),
+      })),
     };
   });
 }
@@ -212,26 +216,15 @@ const findModel = (providers: ReadonlyArray<ServerProvider>, selection: ModelSel
     .find((provider) => provider.instanceId === selection.instanceId)
     ?.models.find((model) => model.slug === selection.model);
 
-/** One model's configurable options, resolved from the same names create_session accepts. */
-export function describeModelCapabilities(input: {
-  readonly providers: ReadonlyArray<ServerProvider>;
-  readonly agent?: string | undefined;
-  readonly model: string;
-}) {
-  const selection = resolveModelSelection({ ...input, projectDefault: null });
-  if (Result.isFailure(selection)) return Result.fail(selection.failure);
-  // A named model always resolves to a catalog entry.
-  const model = findModel(input.providers, selection.success)!;
+/** What create_session's reasoning_effort accepts for one model. */
+function describeEfforts(model: ServerProviderModel) {
   const efforts = reasoningEffortOptions(model);
   const choices = efforts.support === "configurable" ? efforts.choices : [];
   const fallback =
     efforts.support === "configurable"
       ? getProviderOptionCurrentValue(efforts.descriptor)
       : undefined;
-  return Result.succeed({
-    agent: selection.success.instanceId,
-    model: model.slug,
-    name: model.name,
+  return {
     reasoning_effort_support: efforts.support,
     reasoning_efforts: choices.map((choice) => ({
       value: choice.id,
@@ -239,7 +232,7 @@ export function describeModelCapabilities(input: {
       ...(choice.description === undefined ? {} : { description: choice.description }),
     })),
     default_reasoning_effort: choices.find((choice) => choice.id === fallback)?.id ?? null,
-  });
+  };
 }
 
 /**

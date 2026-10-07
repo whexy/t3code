@@ -11,7 +11,6 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   applyReasoningEffort,
-  describeModelCapabilities,
   resolveModelSelection,
   selectedReasoningEffort,
   summarizeAgents,
@@ -219,39 +218,35 @@ const capable = [
   }),
 ];
 
-const capabilitiesOf = (agent: string | undefined, modelName: string) =>
-  describeModelCapabilities({ providers: capable, agent, model: modelName });
+const modelsOf = (agent: string) =>
+  summarizeAgents(capable).find((summary) => summary.agent === agent)!.models;
 const effortOf = (selection: ModelSelection, reasoningEffort: string) =>
   applyReasoningEffort({ providers: capable, selection, reasoningEffort });
 
-describe("describeModelCapabilities", () => {
-  it("lists a model's efforts and default, resolving spoken names as create_session does", () => {
-    expect(capabilitiesOf("Codex", "astra")).toEqual(
-      Result.succeed({
-        agent: "codex",
-        model: "gpt-6-astra",
-        name: "GPT-6 Astra",
-        reasoning_effort_support: "configurable",
-        reasoning_efforts: [
-          { value: "low", name: "Low" },
-          { value: "medium", name: "Medium" },
-          { value: "high", name: "High" },
-          { value: "xhigh", name: "Extra High" },
-        ],
-        default_reasoning_effort: "medium",
-      }),
-    );
+describe("model efforts in the agent summary", () => {
+  it("lists each model's efforts and default, as create_session accepts them", () => {
+    expect(modelsOf("codex")[0]).toEqual({
+      model: "gpt-6-astra",
+      name: "GPT-6 Astra",
+      reasoning_effort_support: "configurable",
+      reasoning_efforts: [
+        { value: "low", name: "Low" },
+        { value: "medium", name: "Medium" },
+        { value: "high", name: "High" },
+        { value: "xhigh", name: "Extra High" },
+      ],
+      default_reasoning_effort: "medium",
+    });
   });
 
   it("finds Claude's effort after other selects and leaves out prompt keywords", () => {
-    const described = Result.getOrThrow(capabilitiesOf(undefined, "opus"));
-    expect(described).toMatchObject({
-      agent: "claudeAgent",
+    const [opus] = modelsOf("claudeAgent");
+    expect(opus).toMatchObject({
       model: "claude-opus-5-5",
       reasoning_effort_support: "configurable",
       default_reasoning_effort: "high",
     });
-    expect(described.reasoning_efforts).toEqual([
+    expect(opus?.reasoning_efforts).toEqual([
       { value: "low", name: "Low" },
       { value: "medium", name: "Medium" },
       { value: "high", name: "High" },
@@ -264,26 +259,21 @@ describe("describeModelCapabilities", () => {
   });
 
   it("separates models without an effort setting from models without metadata", () => {
-    for (const [agent, name] of [
-      ["claude", "haiku"],
-      ["antigravity", "default"],
-    ] as const) {
-      expect(Result.getOrThrow(capabilitiesOf(agent, name))).toMatchObject({
-        reasoning_effort_support: "not_configurable",
-        reasoning_efforts: [],
-        default_reasoning_effort: null,
-      });
-    }
-    expect(Result.getOrThrow(capabilitiesOf("codex", "gpt-5.5"))).toMatchObject({
-      reasoning_effort_support: "unknown",
-      reasoning_efforts: [],
-      default_reasoning_effort: null,
+    const none = { reasoning_efforts: [], default_reasoning_effort: null };
+    expect(modelsOf("claudeAgent")[1]).toMatchObject({
+      model: "claude-haiku-4-5",
+      reasoning_effort_support: "not_configurable",
+      ...none,
     });
-  });
-
-  it("explains an unknown model with the agent's models", () => {
-    const unknown = capabilitiesOf("codex", "o9");
-    expect(Result.isFailure(unknown) && unknown.failure).toContain("gpt-6-astra, gpt-5.5");
+    expect(modelsOf("antigravity")[0]).toMatchObject({
+      reasoning_effort_support: "not_configurable",
+      ...none,
+    });
+    expect(modelsOf("codex")[1]).toMatchObject({
+      model: "gpt-5.5",
+      reasoning_effort_support: "unknown",
+      ...none,
+    });
   });
 });
 

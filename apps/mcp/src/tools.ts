@@ -1,14 +1,16 @@
 import {
-  ApprovalRequestId,
   ProviderApprovalDecision,
   ProviderApprovalOption,
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   MessageId,
   ProjectId,
+  RuntimeRequestId,
   SourceControlCloneProtocol,
   ThreadId,
   TrimmedNonEmptyString,
+  type OrchestrationV2ThreadLaunchWorkspaceStrategy,
+  type OrchestrationV2ThreadProjection,
 } from "@t3tools/contracts";
 import {
   buildProjectCreateCommand,
@@ -16,26 +18,24 @@ import {
   resolveAddProjectPath,
 } from "@t3tools/client-runtime/operations/projects";
 import { inferProjectTitleFromPath } from "@t3tools/client-runtime/state/projects";
-import { derivePendingRequests } from "@t3tools/client-runtime/pending-requests";
-import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
+import { derivePendingThreadRequests } from "@t3tools/client-runtime/state/thread-requests";
+import { derivePendingBackgroundWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
-import * as Tool from "effect/unstable/ai/Tool";
-import * as Toolkit from "effect/unstable/ai/Toolkit";
+import * as Tool from "effect/ai/Tool";
+import * as Toolkit from "effect/ai/Toolkit";
 
 import {
   applyReasoningEffort,
-  describeModelCapabilities,
   resolveModelSelection,
   selectedReasoningEffort,
   summarizeAgents,
 } from "./agents.ts";
 import { BridgeError, Environments } from "./environment.ts";
-import { makeMessageQueue } from "./messageQueue.ts";
 import { findSessions } from "./sessions.ts";
 import { GetUsageTool, getUsage } from "./usage.ts";
 import { latestCursor, summarizeSession, threadState } from "./status.ts";
@@ -77,7 +77,21 @@ const AgentSummary = Schema.Struct({
   status: Schema.String,
   message: Schema.optional(Schema.String),
   default_model: Schema.NullOr(Schema.String),
-  models: Schema.Array(Schema.Struct({ model: Schema.String, name: Schema.String })),
+  models: Schema.Array(
+    Schema.Struct({
+      model: Schema.String,
+      name: Schema.String,
+      reasoning_effort_support: Schema.Literals(["configurable", "not_configurable", "unknown"]),
+      reasoning_efforts: Schema.Array(
+        Schema.Struct({
+          value: Schema.String,
+          name: Schema.String,
+          description: Schema.optional(Schema.String),
+        }),
+      ),
+      default_reasoning_effort: Schema.NullOr(Schema.String),
+    }),
+  ),
 });
 
 const ListProjectsResult = Schema.Struct({
@@ -100,22 +114,6 @@ const ListProjectsResult = Schema.Struct({
       default_model: Schema.optional(Schema.String),
     }),
   ),
-});
-
-const ModelCapabilitiesResult = Schema.Struct({
-  server_id: Schema.String,
-  agent: Schema.String,
-  model: Schema.String,
-  name: Schema.String,
-  reasoning_effort_support: Schema.Literals(["configurable", "not_configurable", "unknown"]),
-  reasoning_efforts: Schema.Array(
-    Schema.Struct({
-      value: Schema.String,
-      name: Schema.String,
-      description: Schema.optional(Schema.String),
-    }),
-  ),
-  default_reasoning_effort: Schema.NullOr(Schema.String),
 });
 
 const ListSessionsResult = Schema.Struct({
@@ -169,20 +167,24 @@ const SendSessionMessageResult = Schema.Struct({
   cursor: Schema.String,
 });
 
+/** The thread's queue: waiting runs after the active turn; held waits for resume_queue. */
 const QueuedMessages = Schema.Array(
-  Schema.Struct({
-    message_id: Schema.String,
-    state: Schema.Literals(["queued", "dispatching", "failed", "cancelled"]),
-    error: Schema.optional(Schema.String),
-  }),
+  Schema.Struct({ message_id: Schema.String, state: Schema.Literals(["waiting", "held"]) }),
 );
 
-const InterruptSessionResult = Schema.Struct({
+const ControlSessionResult = Schema.Struct({
   server_id: Schema.String,
   session_id: Schema.String,
-  result: Schema.Literals(["interrupt_requested", "already_inactive", "turn_changed"]),
+  result: Schema.Literals([
+    "stop_requested",
+    "already_inactive",
+    "queue_resumed",
+    "nothing_held",
+    "dropped",
+  ]),
+  dropped_message_ids: Schema.Array(Schema.String),
   state: SessionState,
-  cancelled_message_ids: Schema.Array(Schema.String),
+  queued_messages: QueuedMessages,
   cursor: Schema.String,
 });
 
@@ -256,7 +258,7 @@ const SessionStatusResult = Schema.Struct({
 
 const ListProjectsTool = Tool.make("list_projects", {
   description:
-    "List the T3 Code projects a coding session can start in, across every configured T3 server, with the coding agents and models each server offers. Call this before create_project or create_session to get server_id and existing project_id values. To see a chosen model's reasoning effort levels, call get_model_capabilities. An unreachable server is reported with an error while the others still list.",
+    "List the T3 Code projects a coding session can start in, across every configured T3 server, with the coding agents and models each server offers. Call this before create_project or create_session to get server_id and existing project_id values. Each model reports its reasoning effort, how hard it thinks before answering: reasoning_effort_support is configurable when reasoning_efforts lists the values the model accepts, not_configurable when the model has no effort setting, and unknown when the server does not report the model's options; in the last two cases omit reasoning_effort from create_session. Pass a reasoning_efforts value unchanged as create_session's reasoning_effort, with that agent and model. default_reasoning_effort is what the model uses when none is requested, or null. An unreachable server is reported with an error while the others still list.",
   parameters: Schema.Struct({
     server_id: optionalInput(TextInput("Only list this server_id.")),
   }),
@@ -264,25 +266,6 @@ const ListProjectsTool = Tool.make("list_projects", {
   failure: BridgeError,
 })
   .annotate(Tool.Title, "List T3 Code projects")
-  .annotate(Tool.Readonly, true)
-  .annotate(Tool.Destructive, false)
-  .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, false);
-
-const GetModelCapabilitiesTool = Tool.make("get_model_capabilities", {
-  description:
-    'Report what can be configured for one model on one server before starting a session with it: currently its reasoning effort, how hard the model thinks before answering. Call it after choosing an agent and model from list_projects. reasoning_effort_support is configurable when reasoning_efforts lists the values the model accepts, not_configurable when the model has no effort setting, and unknown when the server does not report the model\'s options; in the last two cases omit reasoning_effort from create_session. Pass a reasoning_efforts value unchanged as create_session\'s reasoning_effort, with the returned agent and model so it applies to the same model. default_reasoning_effort is what the model uses when none is requested, or null. agent and model accept the same ids and spoken names as create_session ("Claude", "opus").',
-  parameters: Schema.Struct({
-    server_id: ServerIdInput,
-    agent: optionalInput(
-      TextInput("Agent id or name, e.g. codex or Claude. Omit to find the agent offering model."),
-    ),
-    model: TextInput("Model id or name from list_projects, e.g. gpt-6-astra or opus."),
-  }),
-  success: ModelCapabilitiesResult,
-  failure: BridgeError,
-})
-  .annotate(Tool.Title, "Inspect a model's options")
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true)
@@ -390,12 +373,6 @@ const CheckoutInput = Schema.Union([
           "Fetch origin and use its version of the base branch when available, falling back to local. Default false.",
       }),
     ),
-    run_setup_script: optionalInput(
-      Schema.Boolean.annotate({
-        description:
-          "Run the project's configured worktree setup actions. Default true. T3 controls path and submodules.",
-      }),
-    ),
   }),
   Schema.Struct({
     mode: Schema.Literal("existing_worktree"),
@@ -407,7 +384,7 @@ const CheckoutInput = Schema.Union([
 
 const CreateSessionTool = Tool.make("create_session", {
   description:
-    "Start a coding agent on a project. T3 Code creates a new session (thread) and runs the agent in the selected checkout with the project's configured permission mode; the agent keeps working after this returns. Write task as a complete, self-contained instruction for the coding agent. Omit agent and model to use the project's default; otherwise pass values from list_projects (spoken names such as \"Claude\" or \"opus\" also match). Omit reasoning_effort to keep the project's or model's default; to choose one, pass a value from get_model_capabilities for the same agent and model. Values the selected model does not support are rejected before anything starts. Omit checkout for the existing default: use the project checkout untouched, even if project settings prefer worktrees. checkout selects local (optionally switch/create branch), worktree (new isolated worktree from required base_branch; requires a server advertising required-worktree support), or existing_worktree (reuse a checked-out branch). Local switching affects other sessions sharing that checkout and T3 rejects Git conflicts. Worktree preparation uses T3 setup, path allocation, submodule settings, and conflict handling; it can take minutes. A timeout can leave preparation running: inspect list_sessions before retrying. Follow progress with get_session_status, and continue the same session with send_session_message.",
+    "Start a coding agent on a project. T3 Code creates a new session (thread) and runs the agent in the selected checkout with the project's configured permission mode; the agent keeps working after this returns. Write task as a complete, self-contained instruction for the coding agent. Omit agent and model to use the project's default; otherwise pass values from list_projects (spoken names such as \"Claude\" or \"opus\" also match). Omit reasoning_effort to keep the project's or model's default; to choose one, pass a reasoning_efforts value that list_projects reports for the same agent and model. Values the selected model does not support are rejected before anything starts. Omit checkout for the existing default: use the project checkout untouched, even if project settings prefer worktrees. checkout selects local (optionally switch/create branch), worktree (new isolated worktree from required base_branch), or existing_worktree (reuse a checked-out branch). Local switching affects other sessions sharing that checkout and T3 rejects Git conflicts. Worktree preparation uses T3 setup, path allocation, submodule settings, and conflict handling; it can take minutes. A timeout can leave preparation running: inspect list_sessions before retrying. Follow progress with get_session_status, and continue the same session with send_session_message.",
   parameters: Schema.Struct({
     server_id: ServerIdInput,
     project_id: TextInput("project_id from list_projects or create_project."),
@@ -417,7 +394,7 @@ const CreateSessionTool = Tool.make("create_session", {
     model: optionalInput(TextInput("Model id or name for that agent.")),
     reasoning_effort: optionalInput(
       TextInput(
-        "A reasoning_efforts value from get_model_capabilities for the selected model, e.g. high.",
+        "A reasoning_efforts value list_projects reports for the selected model, e.g. high.",
       ),
     ),
   }),
@@ -432,7 +409,7 @@ const CreateSessionTool = Tool.make("create_session", {
 
 const SendSessionMessageTool = Tool.make("send_session_message", {
   description:
-    "Send a message to an existing session, preserving its history, agent, and model. mode steer is T3's Send now: dispatch immediately using the provider's existing mid-turn behavior (delivery steered), which may incorporate input, cancel/re-prompt, or run it next depending on the provider; it does not guarantee instantaneous redirection. mode queue is T3's Queue: hold in the bridge until the next completed tool call or the end of the turn, then dispatch through the same path; it can therefore enter the current turn before it ends. delivery queued means held for later delivery; get_session_status reports queued_messages, including failures. Queues are in memory, lost on bridge restart, and cancelled by interrupt_session. Either mode starts a new turn when idle, completed, interrupted, or failed (delivery new_turn). While waiting for approval or an answer, queue holds until the user responds through the response tools or in T3 Code; steer refuses. Omit mode (or pass null) to preserve legacy immediate sending with delivery during_turn or new_turn, refusing while waiting. Dispatch is asynchronous: delivery describes routing, not provider completion; follow progress with get_session_status and the returned cursor.",
+    "Send a message to an existing session, preserving its history, agent, and model. mode steer is T3's Send now: steer the active turn using the provider's mid-turn behavior (delivery steered), which may incorporate input in place or interrupt and restart the turn with it; the server rejects it while the turn is still starting or when the provider cannot steer. mode queue is T3's Queue: T3 holds the message and runs it as the next turn once the active turn ends (delivery queued); it never enters the current turn. Queued messages wait on the server, survive bridge restarts, appear in T3 Code, and are listed in get_session_status queued_messages along with those queued there. Either mode starts a new turn when idle, completed, interrupted, or failed (delivery new_turn). While waiting for approval or an answer, queue waits for the turn to end; steer refuses. Omit mode (or pass null) for T3's default send: steer the active turn when the provider can (delivery during_turn), otherwise queue it (delivery queued), refusing while waiting. Dispatch is asynchronous: delivery describes routing, not provider completion; follow progress with get_session_status and the returned cursor.",
   parameters: Schema.Struct({
     server_id: ServerIdInput,
     session_id: SessionIdInput,
@@ -440,7 +417,7 @@ const SendSessionMessageTool = Tool.make("send_session_message", {
     mode: optionalInput(
       Schema.Literals(["queue", "steer"]).annotate({
         description:
-          "queue waits for a tool-completion/turn-end boundary; steer sends now. Omit for legacy immediate behavior.",
+          "queue runs after the active turn; steer redirects it now. Omit for T3's default send.",
       }),
     ),
   }),
@@ -453,22 +430,35 @@ const SendSessionMessageTool = Tool.make("send_session_message", {
   .annotate(Tool.Idempotent, false)
   .annotate(Tool.OpenWorld, false);
 
-const InterruptSessionTool = Tool.make("interrupt_session", {
+const ControlSessionTool = Tool.make("control_session", {
   description:
-    "Request T3 Code's Stop action for a running session, including one waiting for approval or input. Interrupts provider execution through the same command as the UI, retaining the thread and history so send_session_message can resume later. Provider-specific cancellation governs tool calls/subprocesses; some providers close their runtime and reopen on the next message. Cancels this bridge's queued messages for the session. Queued/starting sessions cannot yet be stopped with the composer's Stop action and return interrupt_not_applicable; retry after the provider is running. Inactive sessions (or a turn that finished before dispatch) return already_inactive. If a different active turn is observed before dispatch, turn_changed leaves it running. interrupt_requested confirms command acceptance, not that the provider has stopped; state is the observed state after acceptance, which may still be running/waiting. Use get_session_status to confirm settlement or see provider errors. Concurrent activity follows the UI's session-level Stop semantics.",
-  parameters: Schema.Struct({ server_id: ServerIdInput, session_id: SessionIdInput }),
-  success: InterruptSessionResult,
+    "Control a session's work and queue as T3 Code's UI does. action stop is T3's Stop for a starting or running session, including one waiting for approval or input: it interrupts the active run through the same command as the UI and keeps the thread and history, so send_session_message can resume later. Provider-specific cancellation governs tool calls and subprocesses. Like the UI's Stop, it holds queued messages rather than starting them next. result stop_requested confirms command acceptance, not that the provider has stopped; already_inactive means no work was running. action resume_queue releases held queued messages so they run in order once the session is idle (result queue_resumed), or reports nothing_held. action drop_queued deletes queued messages: every queued message on the thread when message_ids is omitted, otherwise exactly those listed. message_ids must all be queued messages from queued_messages; any other id (unknown, already started, or already dropped) fails the whole call and nothing is dropped. Dropping requires the user's explicit request. The result lists dropped_message_ids, the observed state, the updated queued_messages with each one waiting (runs after the active turn) or held (waits for resume_queue), and a cursor for get_session_status.",
+  parameters: Schema.Struct({
+    server_id: ServerIdInput,
+    session_id: SessionIdInput,
+    action: Schema.Literals(["stop", "resume_queue", "drop_queued"]).annotate({
+      description:
+        "stop interrupts the active run and holds the queue; resume_queue releases a held queue; drop_queued deletes queued messages.",
+    }),
+    message_ids: optionalInput(
+      Schema.Array(TextInput("message_id from queued_messages.")).annotate({
+        description:
+          "Only for drop_queued: the queued messages to delete. Omit to delete every queued message.",
+      }),
+    ),
+  }),
+  success: ControlSessionResult,
   failure: BridgeError,
 })
-  .annotate(Tool.Title, "Stop a coding session's work")
+  .annotate(Tool.Title, "Control a coding session")
   .annotate(Tool.Readonly, false)
-  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Destructive, true)
   .annotate(Tool.Idempotent, false)
   .annotate(Tool.OpenWorld, false);
 
 const GetSessionStatusTool = Tool.make("get_session_status", {
   description:
-    "Report queued_messages held by this bridge (and their delivery failures/cancellations) and how a coding session is going: its state, what the agent recently said and did, and the files its latest turn changed. state is queued, starting, running, waiting (the agent needs an approval or an answer, use answer_session_question or respond_to_session_approval only after obtaining the user’s response), completed, interrupted, failed, or idle. Pass the cursor from the previous call to receive only newer updates.",
+    "Report queued_messages, every message on the thread still waiting for its turn (from this bridge or T3 Code), each with state waiting (runs after the active turn) or held (held by a stop; release it with control_session resume_queue), and how a coding session is going: its state, what the agent recently said and did, and the files its latest turn changed. state is queued, starting, running, waiting (the agent needs an approval or an answer: waiting_for lists them; show the user the actual question or approval, get their explicit response, then submit it with respond_to_session), completed, interrupted, failed, or idle. Pass the cursor from the previous call to receive only newer updates.",
   parameters: Schema.Struct({
     server_id: ServerIdInput,
     session_id: SessionIdInput,
@@ -498,45 +488,33 @@ const RequestResponseResult = Schema.Struct({
   cursor: Schema.String,
 });
 
-const AnswerSessionQuestionTool = Tool.make("answer_session_question", {
+const RespondToSessionTool = Tool.make("respond_to_session", {
   description:
-    "Answer one pending agent request. First call get_session_status and present its actual questions and choices to the user. Obtain the user's response, then submit exactly that response; never choose for them. request_id identifies the request, which may contain several questions: answers must include every question_id in that request, with no extras. Each answer is a string (exact choice value, or free-form text only when allow_custom_answer is true) or an array of exact choice values for multi_select questions. choices contain labels, descriptions, and the actual values; options is the legacy label list. IDs and values are opaque: preserve whitespace. Stale requests, missing questions, invalid choices, and unsupported custom answers are rejected. Returns accepted plus a cursor for get_session_status; acceptance queues T3's existing response flow, and subsequent status can report provider errors or other pending requests.",
+    "Submit the user's response to one pending agent request from waiting_for in get_session_status: answers for a question request, or decision for an approval. Pass exactly one of them; the wrong kind for the request is rejected. First show the user the actual request and get their explicit response; never choose or approve for them. Questions: present the questions and choices, then submit exactly what the user answered. A request may contain several questions: answers must include every question_id in it, with no extras. Each answer is a string (exact choice value, or free-form text only when allow_custom_answer is true) or an array of exact choice values for multi_select questions. choices contain labels, descriptions, and the actual values; options is the legacy label list. IDs and values are opaque: preserve whitespace. Approvals: explain the complete request detail, application, available options, and warnings, and ask explicitly for approval or denial. Use accept for one approval or decline to deny; cancel cancels the request. acceptForSession and acceptAlways broaden permission and require explicit user agreement to that scope and an offered option. When options are present use an offered decision only; otherwise T3's default choices are accept, decline, cancel, and acceptForSession. Stale requests, missing questions, invalid choices, unsupported custom answers, and unavailable decisions are rejected. This uses T3's normal authorization and response path. Returns accepted plus a cursor for get_session_status; provider errors or other pending requests can appear asynchronously.",
   parameters: Schema.Struct({
     server_id: ServerIdInput,
     session_id: SessionIdInput,
-    request_id: TextInput("request_id from waiting_for.questions in get_session_status."),
-    answers: Schema.Record(
-      Schema.String,
-      Schema.Union([Schema.String, Schema.Array(Schema.String)]),
-    ).annotate({
-      description:
-        "All question_id keys for this request mapped to the user's exact answer or selected choice values.",
-    }),
+    request_id: TextInput("request_id from waiting_for in get_session_status."),
+    answers: optionalInput(
+      Schema.Record(
+        Schema.String,
+        Schema.Union([Schema.String, Schema.Array(Schema.String)]),
+      ).annotate({
+        description:
+          "For a question request only: all question_id keys mapped to the user's exact answer or selected choice values.",
+      }),
+    ),
+    decision: optionalInput(
+      ProviderApprovalDecision.annotate({
+        description:
+          "For an approval only: the user's explicit decision, with exactly the permission scope they approved.",
+      }),
+    ),
   }),
   success: RequestResponseResult,
   failure: BridgeError,
 })
-  .annotate(Tool.Title, "Answer an agent question")
-  .annotate(Tool.Readonly, false)
-  .annotate(Tool.Destructive, false)
-  .annotate(Tool.Idempotent, false)
-  .annotate(Tool.OpenWorld, false);
-
-const RespondToSessionApprovalTool = Tool.make("respond_to_session_approval", {
-  description:
-    "Submit the user's explicit decision on one pending agent approval. First inspect waiting_for.approvals in get_session_status and explain the complete request detail, application, available options, and warnings to the user. Explicitly ask for approval or denial; only call this after receiving their decision. Never automatically approve. Use accept for one approval or decline to deny; cancel cancels the request. acceptForSession and acceptAlways broaden permission and require explicit user agreement to that scope and an offered option. When options are present use an offered decision only; otherwise T3's default choices are accept, decline, cancel, and acceptForSession. Stale requests and unavailable decisions are rejected. This uses T3's normal authorization and provider approval path. Returns accepted plus a cursor to monitor get_session_status; provider failures can appear asynchronously.",
-  parameters: Schema.Struct({
-    server_id: ServerIdInput,
-    session_id: SessionIdInput,
-    request_id: TextInput("request_id from waiting_for.approvals in get_session_status."),
-    decision: ProviderApprovalDecision.annotate({
-      description: "The user's explicit decision, with exactly the permission scope they approved.",
-    }),
-  }),
-  success: RequestResponseResult,
-  failure: BridgeError,
-})
-  .annotate(Tool.Title, "Respond to an agent approval")
+  .annotate(Tool.Title, "Respond to an agent request")
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, false)
@@ -544,16 +522,14 @@ const RespondToSessionApprovalTool = Tool.make("respond_to_session_approval", {
 
 export const BridgeToolkit = Toolkit.make(
   ListProjectsTool,
-  GetModelCapabilitiesTool,
   GetUsageTool,
   ListSessionsTool,
   CreateProjectTool,
   CreateSessionTool,
   SendSessionMessageTool,
-  InterruptSessionTool,
+  ControlSessionTool,
   GetSessionStatusTool,
-  AnswerSessionQuestionTool,
-  RespondToSessionApprovalTool,
+  RespondToSessionTool,
 );
 
 /** The placeholder title a new thread shows until the server generates one. */
@@ -562,11 +538,42 @@ const sessionTitle = (task: string) => {
   return compact.length <= 72 ? compact : `${compact.slice(0, 69).trimEnd()}...`;
 };
 
+const ACTIVE_RUN_STATUSES = new Set(["preparing", "starting", "running", "waiting"]);
+
+/**
+ * The run T3 Code's Stop interrupts: the newest active one, else a settled
+ * run whose background work still holds the thread.
+ */
+function interruptibleRunId(projection: OrchestrationV2ThreadProjection) {
+  const active = projection.runs.findLast((run) => ACTIVE_RUN_STATUSES.has(run.status));
+  if (active !== undefined) return active.id;
+  const latestRun = projection.runs.at(-1);
+  const backgroundWork = derivePendingBackgroundWork({
+    latestRun,
+    providerThreads: projection.providerThreads,
+    turnItems: projection.turnItems,
+    activeProviderThreadId: projection.thread.activeProviderThreadId,
+    runs: projection.runs,
+  });
+  return backgroundWork.length > 0 ? latestRun?.id : undefined;
+}
+
+/** Messages waiting on the thread's queue, whether held after a Stop or due after the active run. */
+const queuedRuns = (projection: OrchestrationV2ThreadProjection) =>
+  projection.runs.filter((run) => run.status === "queued");
+
+/** What get_session_status and control_session report as queued_messages. */
+const queuedMessages = (projection: OrchestrationV2ThreadProjection): typeof QueuedMessages.Type =>
+  queuedRuns(projection).map((run) => ({
+    message_id: run.userMessageId,
+    state: run.queueHeld === true ? "held" : "waiting",
+  }));
+
 const make = Effect.gen(function* () {
   const environments = yield* Environments;
-  const messageQueue = yield* makeMessageQueue;
   const crypto = yield* Crypto.Crypto;
   const uuid = crypto.randomUUIDv4.pipe(Effect.orDie);
+  const commandId = uuid.pipe(Effect.map(CommandId.make));
   const now = DateTime.now.pipe(Effect.map(DateTime.formatIso));
   const targets = (serverId: string | null | undefined) =>
     serverId == null
@@ -641,21 +648,6 @@ const make = Effect.gen(function* () {
         };
       }),
 
-    get_model_capabilities: (input) =>
-      Effect.gen(function* () {
-        const environment = yield* environments.get(input.server_id);
-        const config = yield* environment.serverConfig;
-        const described = describeModelCapabilities({
-          providers: config.providers,
-          agent: input.agent ?? undefined,
-          model: input.model,
-        });
-        if (Result.isFailure(described)) {
-          return yield* new BridgeError({ message: described.failure });
-        }
-        return { server_id: environment.id, ...described.success };
-      }),
-
     list_sessions: (input) =>
       Effect.gen(function* () {
         const shells = yield* Effect.forEach(
@@ -678,7 +670,6 @@ const make = Effect.gen(function* () {
               projectId: input.project_id ?? undefined,
               query: input.query ?? undefined,
               limit: input.limit ?? DEFAULT_SESSION_LIMIT,
-              now: yield* now,
             },
           ),
         };
@@ -695,22 +686,20 @@ const make = Effect.gen(function* () {
         });
         if (!resolved.ok) return yield* new BridgeError({ message: resolved.error });
         const projectId = ProjectId.make(yield* uuid);
-        const createdAt = yield* now;
         const source = input.source;
         if (source.type === "local") {
           yield* environment.createProject(
             buildProjectCreateCommand({
-              commandId: CommandId.make(yield* uuid),
+              commandId: yield* commandId,
               projectId,
               workspaceRoot: resolved.path,
-              createdAt,
             }),
           );
         } else {
           yield* environment.cloneProject({
             projectId,
             title: inferProjectTitleFromPath(resolved.path),
-            createdAt,
+            createdAt: yield* now,
             destinationPath: resolved.path,
             ...(source.type === "url"
               ? { remoteUrl: normalizePastedCloneUrl(source.remote_url) }
@@ -777,19 +766,9 @@ const make = Effect.gen(function* () {
         const interactionMode = DEFAULT_PROVIDER_INTERACTION_MODE;
         const threadId = ThreadId.make(yield* uuid);
         const title = sessionTitle(input.task);
-        const createdAt = yield* now;
         const checkout = input.checkout;
         let branch: string | null = null;
         let worktreePath: string | null = null;
-        if (
-          checkout?.mode === "worktree" &&
-          config.environment.capabilities.requiredWorktreeBootstrap !== true
-        ) {
-          return yield* new BridgeError({
-            message:
-              "This server cannot guarantee an isolated worktree. Update T3 Code before using checkout.mode worktree.",
-          });
-        }
         if (checkout?.mode === "local") {
           if (checkout.create_branch && !checkout.branch) {
             return yield* new BridgeError({
@@ -838,51 +817,57 @@ const make = Effect.gen(function* () {
             return yield* new BridgeError({
               message: `Branch "${checkout.branch}" has no existing worktree in this project.`,
             });
-        } else if (checkout?.mode === "worktree") {
-          branch = checkout.branch ?? buildTemporaryWorktreeBranchName(() => threadId);
         }
-        yield* environment.startTurn({
-          type: "thread.turn.start",
-          commandId: CommandId.make(yield* uuid),
+        const workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy =
+          checkout?.mode === "worktree"
+            ? {
+                type: "worktree",
+                baseRef: checkout.base_branch,
+                ...(checkout.branch == null ? {} : { branch: checkout.branch }),
+                startFromOrigin: checkout.start_from_origin ?? false,
+              }
+            : worktreePath !== null
+              ? { type: "existing_worktree", worktreePath, ...(branch === null ? {} : { branch }) }
+              : { type: "root", ...(branch === null ? {} : { branch }) };
+        const messageId = MessageId.make(yield* uuid);
+        const launched = yield* environment.launchThread({
+          commandId: yield* commandId,
+          creationSource: "mcp",
           threadId,
-          message: {
-            messageId: MessageId.make(yield* uuid),
-            role: "user",
-            text: input.task,
-            attachments: [],
-          },
+          projectId: project.id,
+          title,
+          generateTitle: true,
           modelSelection,
-          titleSeed: title,
           runtimeMode,
           interactionMode,
-          bootstrap: {
-            ...(checkout?.mode === "worktree"
-              ? {
-                  prepareWorktree: {
-                    projectCwd: project.workspaceRoot,
-                    baseBranch: checkout.base_branch,
-                    branch: branch!,
-                    startFromOrigin: checkout.start_from_origin ?? false,
-                    requireWorktree: true,
-                  },
-                  runSetupScript: checkout.run_setup_script ?? true,
-                }
-              : {}),
-            createThread: {
-              projectId: project.id,
-              title,
-              modelSelection,
-              runtimeMode,
-              interactionMode,
-              branch: checkout?.mode === "worktree" ? checkout.base_branch : branch,
-              worktreePath,
-              createdAt,
-            },
-          },
-          createdAt,
+          workspaceStrategy,
+          initialMessage: { messageId, text: input.task, attachments: [] },
         });
-        const preparedThread =
-          checkout?.mode === "worktree" ? (yield* environment.thread(threadId)).thread : null;
+        const runId = launched.runs.find((run) => run.userMessageId === messageId)?.id;
+        // The server prepares a new worktree after launch returns. The run
+        // leaves preparation once the checkout and its setup are done or failed.
+        const prepared =
+          checkout?.mode === "worktree" && runId !== undefined
+            ? yield* environment.waitForThread(
+                threadId,
+                (projection) =>
+                  projection.thread.deletedAt !== null ||
+                  projection.runs.some((run) => run.id === runId && run.status !== "preparing"),
+              )
+            : launched;
+        if (prepared.thread.deletedAt !== null) {
+          return yield* new BridgeError({
+            message: `Session ${threadId} was deleted before its worktree was ready.`,
+          });
+        }
+        if (prepared.runs.some((run) => run.id === runId && run.status === "failed")) {
+          const failure = prepared.turnItems.findLast(
+            (item) => item.type === "error" && item.runId === runId,
+          );
+          return yield* new BridgeError({
+            message: `T3 server "${environment.id}" could not prepare the worktree${failure?.type === "error" ? `: ${failure.failure.message}` : "."} Session ${threadId} keeps the task; retry its preparation in T3 Code or start another session.`,
+          });
+        }
         yield* Effect.logInfo("created session", {
           server: environment.id,
           project: project.id,
@@ -901,8 +886,8 @@ const make = Effect.gen(function* () {
           model: modelSelection.model,
           reasoning_effort: selectedReasoningEffort(modelSelection),
           runtime_mode: runtimeMode,
-          branch: preparedThread?.branch ?? branch,
-          worktree_path: preparedThread?.worktreePath ?? worktreePath,
+          branch: prepared.thread.branch ?? branch,
+          worktree_path: prepared.thread.worktreePath,
           state: "queued" as const,
         };
       }),
@@ -910,51 +895,50 @@ const make = Effect.gen(function* () {
     send_session_message: (input) =>
       Effect.gen(function* () {
         const environment = yield* environments.get(input.server_id);
-        const { thread } = yield* environment.thread(ThreadId.make(input.session_id));
-        const createdAt = yield* now;
-        const state = threadState(thread, createdAt);
+        const projection = yield* environment.thread(ThreadId.make(input.session_id));
+        const thread = projection.thread;
+        const state = threadState(projection);
         // A message would sit behind the request, or cancel it on agents
-        // that steer by re-prompting.
+        // that steer by restarting the turn.
         if (state === "waiting" && input.mode !== "queue") {
           return yield* new BridgeError({
             code: "message_not_applicable",
             state,
-            message: `Session ${thread.id} is waiting for an approval or an answer, use answer_session_question or respond_to_session_approval only after obtaining the user’s response. The message was not sent. Call get_session_status to see what the agent is asking.`,
+            message: `Session ${thread.id} is waiting for an approval or an answer, answer it with respond_to_session only after obtaining the user’s response. The message was not sent. Call get_session_status to see what the agent is asking.`,
           });
         }
-        // No bootstrap and no model selection: the server continues this thread
-        // with its own agent, model, and provider session.
-        const command = {
-          type: "thread.turn.start" as const,
-          commandId: CommandId.make(yield* uuid),
+        const messageId = MessageId.make(yield* uuid);
+        // No model selection: the server continues this thread with its own
+        // agent, model, and provider session.
+        yield* environment.dispatch({
+          type: "message.dispatch",
+          commandId: yield* commandId,
+          createdBy: "user",
+          creationSource: "mcp",
           threadId: thread.id,
-          message: {
-            messageId: MessageId.make(yield* uuid),
-            role: "user" as const,
-            text: input.message,
-            attachments: [],
-          },
-          runtimeMode: thread.runtimeMode,
-          interactionMode: thread.interactionMode,
-          createdAt,
-        };
-        const active =
-          state === "queued" || state === "starting" || state === "running" || state === "waiting";
-        const queued =
-          input.mode === "queue" &&
-          (active ||
-            messageQueue
-              .list(environment.id, thread.id)
-              .some((entry) => entry.state === "queued" || entry.state === "dispatching"));
-        if (queued) yield* messageQueue.enqueue(environment, thread, command);
-        else yield* environment.startTurn(command);
-        const delivery = queued
-          ? ("queued" as const)
-          : !active
-            ? ("new_turn" as const)
-            : input.mode === "steer"
+          messageId,
+          text: input.message,
+          attachments: [],
+          ...(input.mode === "queue"
+            ? { dispatchMode: { type: "queue_after_active" } }
+            : {
+                dispatchMode: { type: "start_immediately" },
+                deliveryIntent: input.mode === "steer" ? "steer" : "auto",
+              }),
+        });
+        // The server routes the message against its own serialized state.
+        // Its run says where it went: none means it joined the active run.
+        const run = (yield* environment.thread(thread.id)).runs.find(
+          (candidate) => candidate.userMessageId === messageId,
+        );
+        const delivery =
+          run === undefined
+            ? input.mode === "steer"
               ? ("steered" as const)
-              : ("during_turn" as const);
+              : ("during_turn" as const)
+            : run.status === "queued"
+              ? ("queued" as const)
+              : ("new_turn" as const);
         yield* Effect.logInfo("sent message", {
           server: environment.id,
           session: thread.id,
@@ -966,175 +950,198 @@ const make = Effect.gen(function* () {
           title: thread.title,
           agent: thread.modelSelection.instanceId,
           delivery,
-          message_id: command.message.messageId,
+          message_id: messageId,
           // Taken before the send, so the next status includes the message and all that follows.
-          cursor: latestCursor(thread),
+          cursor: latestCursor(projection),
         };
       }),
 
-    interrupt_session: (input) =>
+    control_session: (input) =>
       Effect.gen(function* () {
         const environment = yield* environments.get(input.server_id);
         const threadId = ThreadId.make(input.session_id);
-        let { thread } = yield* environment.thread(threadId);
-        let state = threadState(thread, yield* now);
-        if (state === "queued" || state === "starting") {
-          return yield* new BridgeError({
-            code: "interrupt_not_applicable",
-            state,
-            message:
-              "The provider is not running yet. T3's composer Stop action is not available until startup finishes. Call get_session_status and retry when running or waiting.",
-          });
+        if (input.message_ids != null && input.action !== "drop_queued") {
+          return yield* new BridgeError({ message: "message_ids applies only to drop_queued." });
         }
-        const observedTurnId = thread.session?.activeTurnId;
-        const observedSessionStatus = thread.session?.status;
-        const cancelled = yield* messageQueue.cancel(environment.id, thread.id);
-        // Re-read after cancelling the outbox: completion during this step must
-        // not be reported as a successful interruption.
-        ({ thread } = yield* environment.thread(threadId));
-        state = threadState(thread, yield* now);
-        let result: "interrupt_requested" | "already_inactive" | "turn_changed" =
-          "already_inactive";
-        if (
-          thread.session?.status === "running" &&
-          (observedSessionStatus !== "running" || thread.session.activeTurnId !== observedTurnId)
-        ) {
-          result = "turn_changed";
-        } else if (thread.session?.status === "running") {
-          yield* environment.interruptTurn({
-            type: "thread.turn.interrupt",
-            commandId: CommandId.make(yield* uuid),
-            threadId,
-            ...(thread.session.activeTurnId === null
-              ? {}
-              : { turnId: thread.session.activeTurnId }),
-            createdAt: yield* now,
-          });
-          result = "interrupt_requested";
-          ({ thread } = yield* environment.thread(threadId));
-          state = threadState(thread, yield* now);
-        } else if (
-          state === "running" ||
-          state === "waiting" ||
-          state === "starting" ||
-          state === "queued"
-        ) {
-          return yield* new BridgeError({
-            code: "interrupt_not_applicable",
-            state,
-            message:
-              "No running provider session is bound to this thread. Call get_session_status before retrying Stop.",
-          });
-        }
-        return {
-          server_id: environment.id,
-          session_id: thread.id,
-          result,
-          state,
-          cancelled_message_ids: cancelled,
-          cursor: latestCursor(thread),
-        };
-      }),
-
-    answer_session_question: (input) =>
-      Effect.gen(function* () {
-        const environment = yield* environments.get(input.server_id);
-        const { thread } = yield* environment.thread(ThreadId.make(input.session_id));
-        const request = derivePendingRequests(thread.activities).userInputs.find(
-          (request) => request.requestId === input.request_id,
-        );
-        if (!request)
-          return yield* new BridgeError({
-            message:
-              "This question request is no longer pending. Call get_session_status for current requests.",
-          });
-        if (
-          Object.keys(input.answers).length !== request.questions.length ||
-          Object.keys(input.answers).some(
-            (id) => !request.questions.some((question) => question.id === id),
-          )
-        ) {
-          return yield* new BridgeError({
-            message: "Answer every question_id in this request, with no extra IDs.",
-          });
-        }
-        for (const question of request.questions) {
-          const answer = input.answers[question.id];
-          const values = new Set(question.options.map((option) => option.value ?? option.label));
-          const valid =
-            typeof answer === "string"
-              ? values.has(answer) ||
-                (question.allowCustomAnswer !== false && answer.trim().length > 0)
-              : Array.isArray(answer) &&
-                question.multiSelect === true &&
-                answer.length > 0 &&
-                new Set(answer).size === answer.length &&
-                answer.every((value) => values.has(value));
-          if (!valid)
-            return yield* new BridgeError({
-              message: `Invalid answer for question_id "${question.id}". Use its choices and custom/multi-select constraints from get_session_status.`,
+        let projection = yield* environment.thread(threadId);
+        let result: typeof ControlSessionResult.Type.result;
+        const dropped: Array<string> = [];
+        if (input.action === "stop") {
+          const runId = interruptibleRunId(projection);
+          if (runId === undefined) {
+            const state = threadState(projection);
+            if (state === "running" || state === "waiting" || state === "starting") {
+              return yield* new BridgeError({
+                code: "interrupt_not_applicable",
+                state,
+                message:
+                  "This session's work is not a run T3 can stop. Call get_session_status before retrying stop.",
+              });
+            }
+            result = "already_inactive";
+          } else {
+            // As in the UI's Stop, queued messages are held rather than started next.
+            yield* environment.dispatch({
+              type: "run.interrupt",
+              commandId: yield* commandId,
+              threadId,
+              runId,
+              holdQueue: true,
             });
+            result = "stop_requested";
+          }
+        } else if (input.action === "resume_queue") {
+          if (!queuedRuns(projection).some((run) => run.queueHeld === true)) {
+            result = "nothing_held";
+          } else {
+            yield* environment.dispatch({
+              type: "queue.resume",
+              commandId: yield* commandId,
+              threadId,
+            });
+            result = "queue_resumed";
+          }
+        } else {
+          const queued = queuedRuns(projection);
+          const wanted = [...new Set(input.message_ids ?? queued.map((run) => run.userMessageId))];
+          const notQueued = wanted.filter((id) => !queued.some((run) => run.userMessageId === id));
+          if (notQueued.length > 0) {
+            return yield* new BridgeError({
+              code: "not_queued",
+              message: `Not queued on this session: ${notQueued.join(", ")}. They are unknown, already started, or already dropped. Nothing was dropped; call get_session_status for current queued_messages.`,
+            });
+          }
+          for (const id of wanted) {
+            const run = queued.find((candidate) => candidate.userMessageId === id)!;
+            yield* environment
+              .dispatch({
+                type: "queued-run.cancel",
+                commandId: yield* commandId,
+                threadId,
+                runId: run.id,
+              })
+              .pipe(
+                Effect.mapError(
+                  (error) =>
+                    new BridgeError({
+                      code: "not_queued",
+                      message: `${error.message} Message ${id} was not dropped${dropped.length > 0 ? `; already dropped: ${dropped.join(", ")}` : ""}. Call get_session_status for current queued_messages.`,
+                    }),
+                ),
+              );
+            dropped.push(id);
+          }
+          result = "dropped";
         }
-        yield* environment.dispatchCommand({
-          type: "thread.user-input.respond",
-          commandId: CommandId.make(yield* uuid),
-          threadId: thread.id,
-          requestId: ApprovalRequestId.make(input.request_id),
-          answers: input.answers,
-          createdAt: yield* now,
-        });
+        if (result !== "already_inactive" && result !== "nothing_held") {
+          projection = yield* environment.thread(threadId);
+        }
         return {
           server_id: environment.id,
-          session_id: thread.id,
-          request_id: input.request_id,
-          accepted: true as const,
-          cursor: latestCursor(thread),
+          session_id: projection.thread.id,
+          result,
+          dropped_message_ids: dropped,
+          state: threadState(projection),
+          queued_messages: queuedMessages(projection),
+          cursor: latestCursor(projection),
         };
       }),
 
-    respond_to_session_approval: (input) =>
+    respond_to_session: (input) =>
       Effect.gen(function* () {
         const environment = yield* environments.get(input.server_id);
-        const { thread } = yield* environment.thread(ThreadId.make(input.session_id));
-        const request = derivePendingRequests(thread.activities).approvals.find(
-          (request) => request.requestId === input.request_id,
-        );
-        if (!request)
+        if ((input.answers == null) === (input.decision == null)) {
           return yield* new BridgeError({
             message:
-              "This approval request is no longer pending. Call get_session_status for current requests.",
+              "Pass exactly one of answers (for a question request) or decision (for an approval).",
           });
-        const decisions = request.options?.map((option) => option.decision) ?? [
-          "accept",
-          "decline",
-          "cancel",
-          "acceptForSession",
-        ];
-        if (!decisions.includes(input.decision))
+        }
+        const projection = yield* environment.thread(ThreadId.make(input.session_id));
+        const pending = derivePendingThreadRequests(projection);
+        const question = pending.userInputs.find(
+          (request) => request.requestId === input.request_id,
+        );
+        const approval = pending.approvals.find(
+          (request) => request.requestId === input.request_id,
+        );
+        if (question === undefined && approval === undefined)
           return yield* new BridgeError({
-            message: "This decision is not offered for the pending approval.",
+            message:
+              "This request is no longer pending. Call get_session_status for current requests.",
           });
-        yield* environment.dispatchCommand({
-          type: "thread.approval.respond",
-          commandId: CommandId.make(yield* uuid),
-          threadId: thread.id,
-          requestId: ApprovalRequestId.make(input.request_id),
-          decision: input.decision,
-          createdAt: yield* now,
-        });
+        const request = {
+          type: "runtime-request.respond" as const,
+          threadId: projection.thread.id,
+          requestId: RuntimeRequestId.make(input.request_id),
+        };
+        if (question !== undefined) {
+          const answers = input.answers;
+          if (answers == null) {
+            return yield* new BridgeError({
+              message: `Request ${input.request_id} is a question; respond with answers, not decision.`,
+            });
+          }
+          if (
+            Object.keys(answers).length !== question.questions.length ||
+            Object.keys(answers).some(
+              (id) => !question.questions.some((candidate) => candidate.id === id),
+            )
+          ) {
+            return yield* new BridgeError({
+              message: "Answer every question_id in this request, with no extra IDs.",
+            });
+          }
+          for (const candidate of question.questions) {
+            const answer = answers[candidate.id];
+            const values = new Set(candidate.options.map((option) => option.value ?? option.label));
+            const valid =
+              typeof answer === "string"
+                ? values.has(answer) ||
+                  (candidate.allowCustomAnswer !== false && answer.trim().length > 0)
+                : Array.isArray(answer) &&
+                  candidate.multiSelect &&
+                  answer.length > 0 &&
+                  new Set(answer).size === answer.length &&
+                  answer.every((value) => values.has(value));
+            if (!valid)
+              return yield* new BridgeError({
+                message: `Invalid answer for question_id "${candidate.id}". Use its choices and custom/multi-select constraints from get_session_status.`,
+              });
+          }
+          yield* environment.dispatch({ ...request, commandId: yield* commandId, answers });
+        } else {
+          const decision = input.decision;
+          if (decision == null) {
+            return yield* new BridgeError({
+              message: `Request ${input.request_id} is an approval; respond with decision, not answers.`,
+            });
+          }
+          const decisions = approval!.options?.map((option) => option.decision) ?? [
+            "accept",
+            "decline",
+            "cancel",
+            "acceptForSession",
+          ];
+          if (!decisions.includes(decision))
+            return yield* new BridgeError({
+              message: "This decision is not offered for the pending approval.",
+            });
+          yield* environment.dispatch({ ...request, commandId: yield* commandId, decision });
+        }
         return {
           server_id: environment.id,
-          session_id: thread.id,
+          session_id: projection.thread.id,
           request_id: input.request_id,
           accepted: true as const,
-          cursor: latestCursor(thread),
+          cursor: latestCursor(projection),
         };
       }),
 
     get_session_status: (input) =>
       Effect.gen(function* () {
         const environment = yield* environments.get(input.server_id);
-        const { thread } = yield* environment.thread(ThreadId.make(input.session_id));
+        const projection = yield* environment.thread(ThreadId.make(input.session_id));
+        const thread = projection.thread;
         return {
           server_id: environment.id,
           session_id: thread.id,
@@ -1143,13 +1150,12 @@ const make = Effect.gen(function* () {
           agent: thread.modelSelection.instanceId,
           model: thread.modelSelection.model,
           reasoning_effort: selectedReasoningEffort(thread.modelSelection),
-          queued_messages: messageQueue.list(environment.id, thread.id),
+          queued_messages: queuedMessages(projection),
           branch: thread.branch,
           worktree_path: thread.worktreePath,
-          ...summarizeSession(thread, {
+          ...summarizeSession(projection, {
             cursor: input.cursor ?? undefined,
             limit: input.limit ?? DEFAULT_UPDATE_LIMIT,
-            now: yield* now,
           }),
         };
       }),

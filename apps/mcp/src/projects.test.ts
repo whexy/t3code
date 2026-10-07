@@ -1,4 +1,3 @@
-import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import {
   DEFAULT_SERVER_SETTINGS,
@@ -7,26 +6,28 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   SourceControlRepositoryError,
-  type ClientOrchestrationCommand,
   type OrchestrationProjectShell,
+  type OrchestrationV2ThreadLaunchInput,
   type ProjectCloneSnapshot,
   type ProjectCloneStartInput,
+  type ProjectMutation,
   type ServerConfig,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import type * as Tool from "effect/unstable/ai/Tool";
 
+import { BridgeError, cloneProjectAndWait } from "./environment.ts";
 import {
-  BridgeError,
-  cloneProjectAndWait,
-  Environments,
-  type T3Environment,
-} from "./environment.ts";
-import { at } from "./testing.ts";
-import { BridgeToolkit, BridgeToolkitHandlersLive } from "./tools.ts";
+  appThread,
+  at,
+  bridgeLayer,
+  callTool as handle,
+  fakeEnvironment,
+  projection,
+  run,
+} from "./testing.ts";
+import { BridgeToolkit } from "./tools.ts";
 
 const config: ServerConfig = {
   environment: {
@@ -81,7 +82,8 @@ const decodeProjectInput = Schema.decodeUnknownEffect(
 
 function bridge(failure?: string, connectionFailure?: string) {
   const projects: Array<OrchestrationProjectShell> = [];
-  const commands: Array<ClientOrchestrationCommand> = [];
+  const mutations: Array<ProjectMutation> = [];
+  const launches: Array<OrchestrationV2ThreadLaunchInput> = [];
   const clones: Array<ProjectCloneStartInput> = [];
   const save = (id: ProjectId, title: string, path: string) => {
     if (failure) throw new BridgeError({ message: failure });
@@ -90,7 +92,7 @@ function bridge(failure?: string, connectionFailure?: string) {
         message: "An active project already exists for this workspace root.",
       });
     }
-    projects.push({
+    const project = {
       id,
       title,
       workspaceRoot: path,
@@ -98,35 +100,32 @@ function bridge(failure?: string, connectionFailure?: string) {
       scripts: [],
       createdAt: at(0),
       updatedAt: at(0),
-    });
+    };
+    projects.push(project);
+    return { ...project, deletedAt: null };
   };
-  const environment: T3Environment = {
-    id: "home",
-    name: "Home",
+  const environment = fakeEnvironment({
     expiresAt: "2027-01-01T00:00:00.000Z",
-    interruptTurn: () => Effect.die("unused"),
-    waitForThread: () => Effect.die("unused"),
-    dispatchCommand: () => Effect.die("unused"),
-    createRef: () => Effect.die("unused"),
-    switchRef: () => Effect.die("unused"),
-    listRefs: () => Effect.die("unused"),
-    usageSummary: () => Effect.die("unused"),
     serverConfig: connectionFailure
       ? Effect.fail(new BridgeError({ message: connectionFailure }))
       : Effect.succeed(config),
     shell: Effect.sync(() => ({
+      schemaVersion: 1,
       snapshotSequence: projects.length,
       projects: [...projects],
       threads: [],
-      updatedAt: at(0),
+      archivedThreads: [],
     })),
-    thread: () => Effect.die("unused"),
-    createProject: (command) =>
+    createProject: (mutation) =>
       Effect.try({
         try: () => {
-          save(command.projectId, command.title, command.workspaceRoot.replace("~", "/home/user"));
-          commands.push(command);
-          return { sequence: commands.length };
+          const project = save(
+            mutation.projectId,
+            mutation.title,
+            mutation.workspaceRoot.replace("~", "/home/user"),
+          );
+          mutations.push(mutation);
+          return project;
         },
         catch: (error) =>
           isBridgeError(error) ? error : new BridgeError({ message: String(error) }),
@@ -146,38 +145,17 @@ function bridge(failure?: string, connectionFailure?: string) {
         catch: (error) =>
           isBridgeError(error) ? error : new BridgeError({ message: String(error) }),
       }),
-    startTurn: (command) =>
+    launchThread: (input) =>
       Effect.sync(() => {
-        commands.push(command);
-        return { sequence: commands.length };
+        launches.push(input);
+        return projection({
+          thread: appThread({ id: input.threadId!, projectId: input.projectId }),
+          runs: [run({ userMessageId: input.initialMessage!.messageId!, status: "starting" })],
+        });
       }),
-  };
-  const layer = BridgeToolkitHandlersLive.pipe(
-    Layer.provide(
-      Layer.succeed(
-        Environments,
-        Environments.of({
-          enabled: Effect.succeed([environment]),
-          get: (id) =>
-            id === "home"
-              ? Effect.succeed(environment)
-              : Effect.fail(new BridgeError({ message: `Unknown server_id "${id}".` })),
-        }),
-      ),
-    ),
-    Layer.provide(NodeServices.layer),
-  );
-  return { projects, commands, clones, layer };
+  });
+  return { projects, mutations, launches, clones, layer: bridgeLayer(environment) };
 }
-
-const handle = Effect.fnUntraced(function* <Name extends keyof typeof BridgeToolkit.tools>(
-  name: Name,
-  input: Tool.ParametersEncoded<(typeof BridgeToolkit.tools)[Name]>,
-) {
-  const toolkit = yield* BridgeToolkit;
-  const results = yield* toolkit.handle(name, input).pipe(Effect.flatMap(Stream.runCollect));
-  return results[0]!.result;
-});
 
 describe("create_project", () => {
   it.effect(
@@ -209,14 +187,14 @@ describe("create_project", () => {
           server_id: "home",
           state: "queued",
         });
-        expect(fixture.commands[0]).toMatchObject({
-          type: "project.create",
-          createWorkspaceRootIfMissing: true,
-          defaultModelSelection: null,
-        });
-        expect(fixture.commands[1]).toMatchObject({
-          bootstrap: { createThread: { projectId: created.project_id } },
-        });
+        expect(fixture.mutations).toMatchObject([
+          {
+            type: "project.create",
+            createWorkspaceRootIfMissing: true,
+            defaultModelSelection: null,
+          },
+        ]);
+        expect(fixture.launches).toMatchObject([{ projectId: created.project_id }]);
         const error = yield* Effect.flip(
           handle("create_project", {
             server_id: "home",
@@ -339,7 +317,7 @@ describe("create_project", () => {
       );
       expect(error.message).toContain("unreachable");
       expect(fixture.projects).toEqual([]);
-      expect(fixture.commands).toEqual([]);
+      expect(fixture.mutations).toEqual([]);
     }).pipe(Effect.provide(fixture.layer));
   });
 });

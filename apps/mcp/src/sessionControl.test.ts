@@ -1,363 +1,435 @@
-import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
-import type { ClientOrchestrationCommand, OrchestrationThread } from "@t3tools/contracts";
+import {
+  MessageId,
+  RunId,
+  type OrchestrationV2Command,
+  type OrchestrationV2ThreadProjection,
+} from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
-import * as Stream from "effect/Stream";
 
-import { BridgeError, Environments, type T3Environment } from "./environment.ts";
+import { BridgeError } from "./environment.ts";
 import { summarizeSession } from "./status.ts";
-import { activity, at, message, NOW, thread } from "./testing.ts";
-import { BridgeToolkit, BridgeToolkitHandlersLive } from "./tools.ts";
+import {
+  approvalItem,
+  at,
+  callTool,
+  completed,
+  message,
+  projection,
+  run,
+  runtimeRequest,
+  threadId,
+  threadServer,
+  userMessage,
+} from "./testing.ts";
 
-/** A bridge paired with one server that holds `session` and records turn starts. */
-function bridgeWith(
-  session: OrchestrationThread,
-  options: { snapshots?: OrchestrationThread[]; interruptError?: BridgeError } = {},
-) {
-  let reads = 0;
-  const sent: Array<ClientOrchestrationCommand> = [];
-  const environment: T3Environment = {
-    id: "home",
-    name: "Home",
-    expiresAt: "2026-10-28T12:00:00.000Z",
-    shell: Effect.die("unused"),
-    dispatchCommand: () => Effect.die("unused"),
-    createRef: () => Effect.die("unused"),
-    switchRef: () => Effect.die("unused"),
-    listRefs: () => Effect.die("unused"),
-    usageSummary: () => Effect.die("unused"),
-    serverConfig: Effect.die("unused"),
-    thread: (threadId) =>
-      threadId === session.id
-        ? Effect.sync(() => ({
-            snapshotSequence: 1,
-            thread: options.snapshots?.[reads++] ?? session,
-          }))
-        : Effect.fail(new BridgeError({ message: `Session ${threadId} was not found.` })),
-    createProject: () => Effect.die("unused"),
-    cloneProject: () => Effect.die("unused"),
-    waitForThread: () => Effect.never,
-    interruptTurn: (command) =>
-      options.interruptError
-        ? Effect.fail(options.interruptError)
-        : Effect.sync(() => {
-            sent.push(command);
-            return { sequence: sent.length };
-          }),
-    startTurn: (command) =>
-      Effect.sync(() => {
-        sent.push(command);
-        return { sequence: sent.length };
-      }),
-  };
-  const handlers = BridgeToolkitHandlersLive.pipe(
-    Layer.provide(
-      Layer.succeed(
-        Environments,
-        Environments.of({
-          enabled: Effect.succeed([environment]),
-          get: () => Effect.succeed(environment),
-        }),
-      ),
-    ),
-    Layer.provide(NodeServices.layer),
-  );
-  const sendMessage = (message: string, mode?: "queue" | "steer" | null) =>
-    Effect.gen(function* () {
-      const toolkit = yield* BridgeToolkit;
-      const results = yield* toolkit
-        .handle("send_session_message", {
-          server_id: "home",
-          session_id: session.id,
-          message,
-          ...(mode === undefined ? {} : { mode }),
-        })
-        .pipe(Effect.flatMap(Stream.runCollect));
-      const { result } = results[0]!;
-      // A tool failure fails the stream, so anything else here is unexpected.
-      return "delivery" in result ? result : yield* Effect.die(result);
-    }).pipe(Effect.provide(handlers));
-  const interrupt = Effect.gen(function* () {
-    const toolkit = yield* BridgeToolkit;
-    const results = yield* toolkit
-      .handle("interrupt_session", { server_id: "home", session_id: session.id })
-      .pipe(Effect.flatMap(Stream.runCollect));
-    const { result } = results[0]!;
-    return "cancelled_message_ids" in result ? result : yield* Effect.die(result);
-  }).pipe(Effect.provide(handlers));
-  return { sent, sendMessage, interrupt, handlers };
-}
-
-const completed = thread({
-  latestTurn: { ...thread().latestTurn!, state: "completed", completedAt: at(20) },
-  session: { ...thread().session!, status: "ready", activeTurnId: null },
-  messages: [...thread().messages, message("reply", "assistant", "Fixed the retry loop", 20)],
+const running = projection();
+const waitingForApproval = projection({
+  items: [userMessage("user-1", "Fix the flaky test", 1), approvalItem("request-1", 3)],
+  runtimeRequests: [runtimeRequest("request-1", "command")],
 });
 
+/**
+ * How the server routes a dispatched message: into the active run, behind it
+ * as a queued run, or as a new run that starts.
+ */
+const route =
+  (outcome: "joined" | "queued" | "started") =>
+  (command: OrchestrationV2Command, current: OrchestrationV2ThreadProjection) => {
+    if (command.type !== "message.dispatch") return;
+    const newRun = run({
+      id: RunId.make("run-2"),
+      ordinal: 2,
+      userMessageId: command.messageId,
+      status: outcome === "queued" ? "queued" : "starting",
+      startedAt: null,
+    });
+    return [
+      {
+        ...current,
+        runs: outcome === "joined" ? current.runs : [...current.runs, newRun],
+        messages: [
+          ...current.messages,
+          message(command.messageId, command.text, 25, {
+            createdBy: command.createdBy,
+            creationSource: command.creationSource,
+          }),
+        ],
+      },
+    ];
+  };
+
+const send = (message: string, mode?: "queue" | "steer" | null) =>
+  callTool("send_session_message", {
+    server_id: "home",
+    session_id: threadId,
+    message,
+    ...(mode === undefined ? {} : { mode }),
+  });
+
+const control = (
+  action: "stop" | "resume_queue" | "drop_queued",
+  messageIds?: ReadonlyArray<string>,
+) =>
+  callTool("control_session", {
+    server_id: "home",
+    session_id: threadId,
+    action,
+    ...(messageIds === undefined ? {} : { message_ids: messageIds }),
+  });
+const stop = control("stop");
+
 describe("send_session_message", () => {
-  it.effect("continues the session's own thread, as a new turn or into the running one", () =>
-    Effect.gen(function* () {
-      const finished = bridgeWith(completed);
-      const sent = yield* finished.sendMessage("Also update the docs");
-      expect(sent).toMatchObject({ session_id: completed.id, delivery: "new_turn" });
+  it.effect("continues the session's own thread as a new turn, keeping its agent and model", () => {
+    const server = threadServer(completed, route("started"));
+    return Effect.gen(function* () {
+      const sent = yield* send("Also update the docs");
+      expect(sent).toMatchObject({ session_id: threadId, delivery: "new_turn" });
+      const [command] = server.sent;
+      expect(command).toEqual({
+        type: "message.dispatch",
+        commandId: expect.any(String),
+        createdBy: "user",
+        creationSource: "mcp",
+        threadId,
+        messageId: sent.message_id,
+        text: "Also update the docs",
+        attachments: [],
+        dispatchMode: { type: "start_immediately" },
+        deliveryIntent: "auto",
+      });
       // The returned cursor makes the next status report the follow-up, not the earlier turn.
-      const followedUp = thread({
-        ...completed,
-        messages: [...completed.messages, message("follow-up", "user", "Also update the docs", 25)],
+      const followedUp = projection({
+        runs: completed.runs,
+        items: [...completed.turnItems, userMessage(sent.message_id, "Also update the docs", 25)],
       });
       expect(
-        summarizeSession(followedUp, { cursor: sent.cursor, limit: 10, now: NOW }).updates.map(
+        summarizeSession(followedUp, { cursor: sent.cursor, limit: 10 }).updates.map(
           (update) => update.text,
         ),
       ).toEqual(["Also update the docs"]);
-      const [command] = finished.sent;
-      expect(command).toMatchObject({
-        type: "thread.turn.start",
-        threadId: completed.id,
-        message: { role: "user", text: "Also update the docs" },
-        runtimeMode: completed.runtimeMode,
-        interactionMode: completed.interactionMode,
-      });
-      // A bootstrap would create another thread; a model selection would switch agents.
-      expect(command).not.toHaveProperty("bootstrap");
-      expect(command).not.toHaveProperty("modelSelection");
+    }).pipe(Effect.provide(server.layer));
+  });
 
-      const running = bridgeWith(thread());
-      expect(yield* running.sendMessage("Skip the e2e suite")).toMatchObject({
-        delivery: "during_turn",
-      });
-      expect(running.sent).toHaveLength(1);
+  it.effect("reports where the server routed a message sent during a running turn", () =>
+    Effect.gen(function* () {
+      for (const [outcome, mode, delivery] of [
+        ["joined", null, "during_turn"],
+        ["queued", null, "queued"],
+        ["joined", "steer", "steered"],
+        ["queued", "queue", "queued"],
+      ] as const) {
+        const server = threadServer(running, route(outcome));
+        expect(
+          yield* send("Skip the e2e suite", mode).pipe(Effect.provide(server.layer)),
+        ).toMatchObject({ delivery });
+        expect(server.sent).toHaveLength(1);
+      }
     }),
   );
 
-  it.effect("refuses while the agent waits for an approval, sending nothing", () =>
+  it.effect("asks the server to steer, or to queue behind the active turn, as requested", () =>
     Effect.gen(function* () {
-      const waiting = bridgeWith(
-        thread({
-          activities: [
-            activity(
-              "ask",
-              "approval.requested",
-              3,
-              { requestId: "request-1", requestKind: "command", detail: "rm -rf build" },
-              { tone: "approval" },
-            ),
-          ],
-        }),
-      );
-      const error = yield* Effect.flip(waiting.sendMessage("Go ahead"));
-      expect(error.message).toContain("waiting for an approval or an answer");
-      expect(waiting.sent).toEqual([]);
-    }),
-  );
-});
-
-describe("explicit message modes", () => {
-  it.effect("steers immediately and retains the legacy null default", () =>
-    Effect.gen(function* () {
-      const active = bridgeWith(thread());
-      expect(yield* active.sendMessage("Change direction", "steer")).toMatchObject({
-        delivery: "steered",
-        message_id: expect.any(String),
+      const steering = threadServer(running, route("joined"));
+      yield* send("Change direction", "steer").pipe(Effect.provide(steering.layer));
+      expect(steering.sent[0]).toMatchObject({
+        dispatchMode: { type: "start_immediately" },
+        deliveryIntent: "steer",
       });
-      expect(yield* active.sendMessage("Keep going", null)).toMatchObject({
-        delivery: "during_turn",
-      });
-      expect(active.sent).toHaveLength(2);
+      const queueing = threadServer(running, route("queued"));
+      yield* send("After this turn", "queue").pipe(Effect.provide(queueing.layer));
+      expect(queueing.sent[0]).toMatchObject({ dispatchMode: { type: "queue_after_active" } });
+      expect(queueing.sent[0]).not.toHaveProperty("deliveryIntent");
     }),
   );
 
   it.effect("both modes start a new turn for settled sessions", () =>
     Effect.gen(function* () {
-      for (const state of ["completed", "interrupted", "error"] as const) {
-        const settled = { ...completed, latestTurn: { ...completed.latestTurn!, state } };
+      for (const status of ["completed", "interrupted", "failed"] as const) {
+        const settled = { ...completed, runs: [run({ status, completedAt: completed.updatedAt })] };
         for (const mode of ["queue", "steer"] as const) {
-          const bridge = bridgeWith(settled);
-          expect(yield* bridge.sendMessage("Continue", mode)).toMatchObject({
+          const server = threadServer(settled, route("started"));
+          expect(yield* send("Continue", mode).pipe(Effect.provide(server.layer))).toMatchObject({
             delivery: "new_turn",
           });
-          expect(bridge.sent).toHaveLength(1);
         }
       }
-      const idle = bridgeWith(thread({ latestTurn: null, session: null, messages: [] }));
-      expect(yield* idle.sendMessage("Start", "queue")).toMatchObject({ delivery: "new_turn" });
     }),
   );
 
-  it.effect("reports structured refusal for steering over a question", () =>
+  it.effect("refuses to steer over a pending request, sending nothing, but queues behind it", () =>
     Effect.gen(function* () {
-      const bridge = bridgeWith(
-        thread({
-          activities: [
-            activity("ask", "user-input.requested", 3, {
-              requestId: "question-1",
-              questions: [{ id: "q", header: "Choice", question: "Which?", options: [] }],
-            }),
-          ],
-        }),
-      );
-      expect(yield* Effect.flip(bridge.sendMessage("Yes", "steer"))).toMatchObject({
-        code: "message_not_applicable",
-        state: "waiting",
+      for (const mode of [undefined, null, "steer"] as const) {
+        const server = threadServer(waitingForApproval, route("joined"));
+        const error = yield* Effect.flip(send("Go ahead", mode).pipe(Effect.provide(server.layer)));
+        expect(error).toMatchObject({ code: "message_not_applicable", state: "waiting" });
+        expect(error.message).toContain("waiting for an approval or an answer");
+        expect(server.sent).toEqual([]);
+      }
+      const server = threadServer(waitingForApproval, route("queued"));
+      expect(yield* send("Then this", "queue").pipe(Effect.provide(server.layer))).toMatchObject({
+        delivery: "queued",
       });
-      expect(bridge.sent).toEqual([]);
     }),
   );
+
+  it.effect("reports the server's rejection", () => {
+    const server = threadServer(running, undefined, {
+      dispatch: () =>
+        Effect.fail(new BridgeError({ message: "codex cannot satisfy message dispatch mode." })),
+    });
+    return Effect.gen(function* () {
+      expect((yield* Effect.flip(send("Change", "steer"))).message).toContain("cannot satisfy");
+    }).pipe(Effect.provide(server.layer));
+  });
 });
 
-describe("interrupt_session", () => {
+/** Run 2 queued by this bridge and run 3 queued in T3 Code, both behind the running run 1. */
+const withQueue = projection({
+  runs: [
+    run(),
+    run({
+      id: RunId.make("run-2"),
+      ordinal: 2,
+      userMessageId: MessageId.make("from-bridge"),
+      status: "queued",
+      startedAt: null,
+    }),
+    run({
+      id: RunId.make("run-3"),
+      ordinal: 3,
+      userMessageId: MessageId.make("from-web"),
+      status: "queued",
+      startedAt: null,
+    }),
+  ],
+  messages: [
+    message("user-1", "Fix the flaky test", 1),
+    message("from-bridge", "Then the docs", 5, { creationSource: "mcp" }),
+    message("from-web", "Then the changelog", 6),
+  ],
+});
+
+/** The same queue after a Stop: run 1 interrupted, both queued runs held. */
+const held = {
+  ...withQueue,
+  runs: withQueue.runs.map((candidate) =>
+    candidate.status === "queued"
+      ? { ...candidate, queueHeld: true }
+      : { ...candidate, status: "interrupted" as const },
+  ),
+};
+
+const stopped = {
+  ...completed,
+  runs: [run({ status: "interrupted", completedAt: DateTime.makeUnsafe(at(21)) })],
+};
+
+/** How the server applies queue commands to the thread it holds. */
+const queueServer = (command: OrchestrationV2Command, current: OrchestrationV2ThreadProjection) => {
+  switch (command.type) {
+    case "run.interrupt":
+      return [held];
+    case "queue.resume":
+      return [
+        {
+          ...current,
+          runs: current.runs.map((candidate) => ({ ...candidate, queueHeld: false })),
+        },
+      ];
+    case "queued-run.cancel":
+      return [
+        {
+          ...current,
+          runs: current.runs.map((candidate) =>
+            candidate.id === command.runId
+              ? { ...candidate, status: "cancelled" as const }
+              : candidate,
+          ),
+        },
+      ];
+    default:
+      return undefined;
+  }
+};
+
+describe("control_session stop", () => {
   it.effect(
-    "uses the UI interrupt command, without deleting the thread or claiming settlement",
-    () =>
-      Effect.gen(function* () {
-        const bridge = bridgeWith(thread());
-        expect(yield* bridge.interrupt).toMatchObject({
-          result: "interrupt_requested",
-          state: "running",
-          cancelled_message_ids: [],
+    "stops the active run as the UI does, keeping the thread, and reports the state after",
+    () => {
+      const server = threadServer(running, (command) =>
+        command.type === "run.interrupt" ? [stopped] : undefined,
+      );
+      return Effect.gen(function* () {
+        expect(yield* stop).toEqual({
+          server_id: "home",
+          session_id: threadId,
+          result: "stop_requested",
+          dropped_message_ids: [],
+          state: "interrupted",
+          queued_messages: [],
+          cursor: expect.any(String),
         });
-        expect(bridge.sent).toHaveLength(1);
-        expect(bridge.sent[0]).toMatchObject({
-          type: "thread.turn.interrupt",
-          threadId: thread().id,
-          turnId: thread().session!.activeTurnId,
-        });
-      }),
+        expect(server.sent).toEqual([
+          {
+            type: "run.interrupt",
+            commandId: expect.any(String),
+            threadId,
+            runId: run().id,
+            holdQueue: true,
+          },
+        ]);
+      }).pipe(Effect.provide(server.layer));
+    },
   );
 
-  it.effect("allows Stop while waiting for approval or input", () =>
+  it.effect("stops work that is still starting or waiting for the user", () =>
     Effect.gen(function* () {
-      for (const kind of ["approval.requested", "user-input.requested"]) {
-        const bridge = bridgeWith(
-          thread({
-            activities: [
-              activity("ask", kind, 3, {
-                requestId: "request-1",
-                requestKind: "command",
-                questions: [{ id: "q", header: "Choice", question: "Which?", options: [] }],
-              }),
-            ],
-          }),
-        );
-        expect(yield* bridge.interrupt).toMatchObject({ result: "interrupt_requested" });
-        expect(bridge.sent[0]?.type).toBe("thread.turn.interrupt");
+      for (const session of [
+        projection({ runs: [run({ status: "preparing", startedAt: null })] }),
+        projection({ runs: [run({ status: "starting", startedAt: null })] }),
+        waitingForApproval,
+      ]) {
+        const server = threadServer(session);
+        expect(yield* stop.pipe(Effect.provide(server.layer))).toMatchObject({
+          result: "stop_requested",
+        });
+        expect(server.sent.map((command) => command.type)).toEqual(["run.interrupt"]);
       }
     }),
   );
 
-  it.effect("handles idle sessions and completion races without issuing Stop", () =>
+  it.effect("holds every queued message, whoever queued it, as the UI does", () => {
+    const server = threadServer(withQueue, queueServer);
+    const status = callTool("get_session_status", { server_id: "home", session_id: threadId });
+    return Effect.gen(function* () {
+      const queue = (state: "waiting" | "held") =>
+        ["from-bridge", "from-web"].map((message_id) => ({ message_id, state }));
+      expect((yield* status).queued_messages).toEqual(queue("waiting"));
+      expect((yield* stop).queued_messages).toEqual(queue("held"));
+      expect(server.sent).toMatchObject([
+        { type: "run.interrupt", runId: "run-1", holdQueue: true },
+      ]);
+      // A later status shows the queue is held, not about to run.
+      expect((yield* status).queued_messages).toEqual(queue("held"));
+    }).pipe(Effect.provide(server.layer));
+  });
+
+  it.effect("issues no Stop for settled or idle sessions", () =>
     Effect.gen(function* () {
-      const bridge = bridgeWith(thread(), { snapshots: [thread(), completed] });
-      expect(yield* bridge.interrupt).toMatchObject({
+      const settled = threadServer(completed);
+      expect(yield* stop.pipe(Effect.provide(settled.layer))).toMatchObject({
         result: "already_inactive",
         state: "completed",
       });
-      expect(bridge.sent).toEqual([]);
-      const idle = bridgeWith(thread({ latestTurn: null, session: null, messages: [] }));
-      expect(yield* idle.interrupt).toMatchObject({ result: "already_inactive", state: "idle" });
-    }),
-  );
-
-  it.effect("does not stop a newly observed replacement turn", () =>
-    Effect.gen(function* () {
-      const replacement = thread({ session: { ...thread().session!, activeTurnId: null } });
-      const bridge = bridgeWith(thread(), { snapshots: [thread(), replacement] });
-      expect(yield* bridge.interrupt).toMatchObject({ result: "turn_changed" });
-      expect(bridge.sent).toEqual([]);
-    }),
-  );
-
-  it.effect("does not stop work that starts after an inactive observation", () =>
-    Effect.gen(function* () {
-      const bridge = bridgeWith(completed, { snapshots: [completed, thread()] });
-      expect(yield* bridge.interrupt).toMatchObject({ result: "turn_changed", state: "running" });
-      expect(bridge.sent).toEqual([]);
-    }),
-  );
-
-  it.effect("rejects startup states and propagates command rejection", () =>
-    Effect.gen(function* () {
-      const starting = bridgeWith(
-        thread({ session: { ...thread().session!, status: "starting" } }),
-      );
-      expect(yield* Effect.flip(starting.interrupt)).toMatchObject({
-        code: "interrupt_not_applicable",
-        state: "starting",
-      });
-      expect(starting.sent).toEqual([]);
-      const timestamp = DateTime.formatIso(yield* DateTime.now);
-      const queued = bridgeWith(
-        thread({
-          session: null,
-          latestTurn: null,
-          messages: [
-            message("pending", "user", "Starting", 1, {
-              createdAt: timestamp,
-              updatedAt: timestamp,
-            }),
-          ],
-        }),
-      );
-      expect(yield* Effect.flip(queued.interrupt)).toMatchObject({
-        code: "interrupt_not_applicable",
-        state: "queued",
-      });
-      expect(queued.sent).toEqual([]);
-      const rejected = bridgeWith(thread(), {
-        interruptError: new BridgeError({ message: "Server refused Stop" }),
-      });
-      expect((yield* Effect.flip(rejected.interrupt)).message).toBe("Server refused Stop");
-    }),
-  );
-
-  it.effect("returns the state observed after acceptance", () =>
-    Effect.gen(function* () {
-      const interrupted = {
-        ...completed,
-        latestTurn: { ...completed.latestTurn!, state: "interrupted" as const },
-      };
-      const bridge = bridgeWith(thread(), { snapshots: [thread(), thread(), interrupted] });
-      expect(yield* bridge.interrupt).toMatchObject({
-        result: "interrupt_requested",
-        state: "interrupted",
+      expect(settled.sent).toEqual([]);
+      const idle = threadServer(projection({ runs: [], items: [], messages: [] }));
+      expect(yield* stop.pipe(Effect.provide(idle.layer))).toMatchObject({
+        result: "already_inactive",
+        state: "idle",
       });
     }),
   );
+
+  it.effect("propagates the server's rejection", () => {
+    const server = threadServer(running, undefined, {
+      dispatch: () => Effect.fail(new BridgeError({ message: "Server refused Stop" })),
+    });
+    return Effect.gen(function* () {
+      expect((yield* Effect.flip(stop)).message).toBe("Server refused Stop");
+    }).pipe(Effect.provide(server.layer));
+  });
 });
 
-it.effect("keeps an MCP queued message visible across calls and cancels it through Stop", () => {
-  const bridge = bridgeWith(thread());
-  return Effect.gen(function* () {
-    const toolkit = yield* BridgeToolkit;
-    const sent = yield* toolkit
-      .handle("send_session_message", {
-        server_id: "home",
-        session_id: thread().id,
-        message: "After the tool",
-        mode: "queue",
-      })
-      .pipe(Effect.flatMap(Stream.runCollect));
-    expect(sent[0]!.result).toMatchObject({ delivery: "queued", message_id: expect.any(String) });
-    expect(bridge.sent).toEqual([]);
-    const status = yield* toolkit
-      .handle("get_session_status", {
-        server_id: "home",
-        session_id: thread().id,
-      })
-      .pipe(Effect.flatMap(Stream.runCollect));
-    expect(status[0]!.result).toMatchObject({ queued_messages: [{ state: "queued" }] });
-    const stopped = yield* toolkit
-      .handle("interrupt_session", {
-        server_id: "home",
-        session_id: thread().id,
-      })
-      .pipe(Effect.flatMap(Stream.runCollect));
-    expect(stopped[0]!.result).toMatchObject({
-      result: "interrupt_requested",
-      cancelled_message_ids: [expect.any(String)],
+describe("control_session resume_queue", () => {
+  it.effect("releases a held queue with T3's queue.resume command", () => {
+    const server = threadServer(held, queueServer);
+    return Effect.gen(function* () {
+      const resumed = yield* control("resume_queue");
+      expect(resumed).toMatchObject({
+        result: "queue_resumed",
+        queued_messages: [
+          { message_id: "from-bridge", state: "waiting" },
+          { message_id: "from-web", state: "waiting" },
+        ],
+      });
+      expect(server.sent).toEqual([
+        { type: "queue.resume", commandId: expect.any(String), threadId },
+      ]);
+    }).pipe(Effect.provide(server.layer));
+  });
+
+  it.effect("sends nothing when no queued message is held", () => {
+    const server = threadServer(withQueue, queueServer);
+    return Effect.gen(function* () {
+      expect(yield* control("resume_queue")).toMatchObject({ result: "nothing_held" });
+      expect(server.sent).toEqual([]);
+    }).pipe(Effect.provide(server.layer));
+  });
+});
+
+describe("control_session drop_queued", () => {
+  it.effect("drops every queued message when message_ids is omitted", () => {
+    const server = threadServer(withQueue, queueServer);
+    return Effect.gen(function* () {
+      expect(yield* control("drop_queued")).toMatchObject({
+        result: "dropped",
+        dropped_message_ids: ["from-bridge", "from-web"],
+        queued_messages: [],
+        state: "running",
+      });
+      expect(server.sent).toMatchObject([
+        { type: "queued-run.cancel", runId: "run-2" },
+        { type: "queued-run.cancel", runId: "run-3" },
+      ]);
+    }).pipe(Effect.provide(server.layer));
+  });
+
+  it.effect("drops only the selected messages", () => {
+    const server = threadServer(held, queueServer);
+    return Effect.gen(function* () {
+      expect(yield* control("drop_queued", ["from-web"])).toMatchObject({
+        dropped_message_ids: ["from-web"],
+        queued_messages: [{ message_id: "from-bridge", state: "held" }],
+      });
+      expect(server.sent).toMatchObject([{ type: "queued-run.cancel", runId: "run-3" }]);
+    }).pipe(Effect.provide(server.layer));
+  });
+
+  it.effect("drops nothing when any id is not queued: unknown, started, or already dropped", () => {
+    const server = threadServer(withQueue, queueServer);
+    return Effect.gen(function* () {
+      const error = yield* Effect.flip(control("drop_queued", ["from-web", "user-1", "missing"]));
+      expect(error).toMatchObject({ code: "not_queued" });
+      expect(error.message).toContain("user-1, missing");
+      expect(error.message).toContain("Nothing was dropped");
+      expect(server.sent).toEqual([]);
+    }).pipe(Effect.provide(server.layer));
+  });
+
+  it.effect("reports what it dropped when a message starts before its turn to drop", () => {
+    const server = threadServer(withQueue, undefined, {
+      dispatch: (command) =>
+        command.type === "queued-run.cancel" && command.runId === "run-3"
+          ? Effect.fail(new BridgeError({ message: "Run run-3 is no longer queued." }))
+          : Effect.succeed({ sequence: 1 }),
     });
-    expect(bridge.sent.map((command) => command.type)).toEqual(["thread.turn.interrupt"]);
-  }).pipe(Effect.provide(bridge.handlers));
+    return Effect.gen(function* () {
+      const error = yield* Effect.flip(control("drop_queued"));
+      expect(error.message).toContain(
+        "Message from-web was not dropped; already dropped: from-bridge",
+      );
+    }).pipe(Effect.provide(server.layer));
+  });
+
+  it.effect("accepts message_ids only with drop_queued", () => {
+    const server = threadServer(withQueue, queueServer);
+    return Effect.gen(function* () {
+      expect((yield* Effect.flip(control("stop", ["from-web"]))).message).toContain(
+        "only to drop_queued",
+      );
+      expect(server.sent).toEqual([]);
+    }).pipe(Effect.provide(server.layer));
+  });
 });

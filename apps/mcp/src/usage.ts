@@ -14,7 +14,7 @@ import { mergeUsage, type EnvironmentUsage, type MergedUsage } from "@t3tools/sh
 import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
-import * as Tool from "effect/unstable/ai/Tool";
+import * as Tool from "effect/ai/Tool";
 
 import { BridgeError, type Environments } from "./environment.ts";
 

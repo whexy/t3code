@@ -1,162 +1,197 @@
-import { CheckpointRef } from "@t3tools/contracts";
+import { NodeId, ThreadId, TurnItemId } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import { describe, expect, it } from "vite-plus/test";
 
 import { summarizeSession } from "./status.ts";
-import { activity, at, message, NOW, thread, turnId } from "./testing.ts";
+import {
+  approvalItem,
+  assistantMessage,
+  at,
+  checkpoint,
+  command,
+  projection,
+  questionItem,
+  run,
+  runtimeRequest,
+  userMessage,
+} from "./testing.ts";
+
+const user = userMessage("user-1", "Fix the flaky test", 1);
 
 describe("summarizeSession", () => {
   it("reports what changed since the cursor, including a message that kept streaming", () => {
-    const running = thread({
-      messages: [
-        message("user-1", "user", "Fix the flaky test", 1),
-        message("thinking", "reasoning", "private chain of thought", 2),
-        message("reply", "assistant", "Looking at", 4, { streaming: true }),
-      ],
-      activities: [
-        activity("start", "tool.started", 2),
-        activity("run", "tool.completed", 3, { detail: "Bash:  vp test\n run" }),
-        activity("meter", "context-window.updated", 3, {}, { tone: "info" }),
+    const reasoning = {
+      ...assistantMessage("thinking", "private chain of thought", 2),
+      type: "reasoning" as const,
+    };
+    const running = projection({
+      items: [
+        user,
+        reasoning,
+        command("started", "vp lint", 2, { status: "running", completedAt: null }),
+        command("tests", "vp test\n run", 3),
+        assistantMessage("reply", "Looking at", 4, { streaming: true }),
       ],
     });
-    const first = summarizeSession(running, { limit: 2, now: NOW });
+    const first = summarizeSession(running, { limit: 2 });
     expect(first.state).toBe("running");
     expect(first.updates).toEqual([
-      { at: at(3), type: "activity", text: "Command run: Bash: vp test run" },
+      { at: at(3), type: "activity", text: "Command run: vp test run" },
       { at: at(4), type: "assistant_message", text: "Looking at", streaming: true },
     ]);
     expect(first.omitted_updates).toBe(1);
 
-    const later = thread({
-      ...running,
-      messages: [
-        ...running.messages.slice(0, 2),
-        message("reply", "assistant", "Looking at the retry loop", 4, { updatedAt: at(6) }),
+    const later = projection({
+      items: [
+        user,
+        command("tests", "vp test\n run", 3),
+        assistantMessage("reply", "Looking at the retry loop", 4, {
+          updatedAt: DateTime.makeUnsafe(at(6)),
+        }),
+        command("edit", "git diff", 5, { status: "failed" }),
       ],
-      activities: [...running.activities, activity("edit", "tool.completed", 5)],
     });
-    const second = summarizeSession(later, { cursor: first.cursor, limit: 10, now: NOW });
+    const second = summarizeSession(later, { cursor: first.cursor, limit: 10 });
     expect(second.updates.map((update) => update.text)).toEqual([
-      "Command run",
+      "Command run failed: git diff",
       "Looking at the retry loop",
     ]);
-    expect(second.omitted_updates).toBe(0);
-    expect(summarizeSession(later, { cursor: second.cursor, limit: 10, now: NOW }).updates).toEqual(
-      [],
-    );
+    expect(summarizeSession(later, { cursor: second.cursor, limit: 10 }).updates).toEqual([]);
   });
 
-  it("waits while an approval is open and resumes once it is resolved", () => {
-    const requested = activity(
-      "ask",
-      "approval.requested",
-      3,
-      { requestId: "request-1", requestKind: "command", detail: "rm -rf build" },
-      { tone: "approval" },
+  it("waits while an approval is pending and resumes once the server resolves it", () => {
+    const item = approvalItem("request-1", 3, { prompt: "rm -rf build" });
+    const waiting = summarizeSession(
+      projection({
+        items: [user, item],
+        runtimeRequests: [runtimeRequest("request-1", "command")],
+      }),
+      { limit: 5 },
     );
-    const waiting = summarizeSession(thread({ activities: [requested] }), { limit: 5, now: NOW });
     expect(waiting.state).toBe("waiting");
     expect(waiting.waiting_for).toEqual({
       approvals: [{ request_id: "request-1", kind: "command", detail: "rm -rf build" }],
       questions: [],
     });
+    expect(waiting.updates.at(-1)).toMatchObject({ text: "Approval requested: rm -rf build" });
 
-    const resolved = activity(
-      "answer",
-      "approval.resolved",
-      4,
-      { requestId: "request-1" },
-      { tone: "approval" },
+    const resumed = summarizeSession(
+      projection({
+        items: [user, item],
+        runtimeRequests: [runtimeRequest("request-1", "command", { status: "resolved" })],
+      }),
+      { limit: 5 },
     );
-    const resumed = summarizeSession(thread({ activities: [requested, resolved] }), {
-      limit: 5,
-      now: NOW,
-    });
     expect(resumed.state).toBe("running");
     expect(resumed.waiting_for).toBeUndefined();
   });
 
-  it("is queued until a session adopts the turn, and failed when the session errors", () => {
-    const unadopted = thread({ latestTurn: null, session: null });
-    expect(summarizeSession(unadopted, { limit: 5, now: NOW }).state).toBe("queued");
+  it("is starting while the workspace prepares, and failed with the run's error", () => {
+    expect(
+      summarizeSession(projection({ runs: [run({ status: "preparing", startedAt: null })] }), {
+        limit: 5,
+      }).state,
+    ).toBe("starting");
 
+    const failure = {
+      ...command("failure", "", 5),
+      type: "error" as const,
+      status: "failed" as const,
+      failure: {
+        class: "permission_error" as const,
+        message: "Codex is not signed in.",
+        code: null,
+        retryable: false,
+      },
+    };
     const failed = summarizeSession(
-      thread({
-        latestTurn: null,
-        session: {
-          ...thread().session!,
-          status: "error",
-          activeTurnId: null,
-          lastError: "Codex is not signed in.",
-        },
+      projection({
+        runs: [run({ status: "failed", completedAt: DateTime.makeUnsafe(at(5)) })],
+        items: [user, failure],
       }),
-      { limit: 5, now: NOW },
+      { limit: 5 },
     );
     expect(failed).toMatchObject({ state: "failed", error: "Codex is not signed in." });
+    expect(failed.updates.at(-1)).toMatchObject({ text: "Error: Codex is not signed in." });
   });
 
-  it("reports the files the completed turn changed", () => {
-    const completed = summarizeSession(
-      thread({
-        latestTurn: {
-          ...thread().latestTurn!,
-          state: "completed",
-          completedAt: at(20),
-        },
-        session: { ...thread().session!, status: "ready", activeTurnId: null },
+  it("reports the files the latest run changed, not a subagent's nested checkpoint", () => {
+    const summary = summarizeSession(
+      projection({
+        runs: [run({ status: "completed", completedAt: DateTime.makeUnsafe(at(20)) })],
         checkpoints: [
-          {
-            turnId,
-            checkpointTurnCount: 1,
-            checkpointRef: CheckpointRef.make("refs/t3/checkpoint-1"),
-            status: "ready",
-            files: [
-              { path: "src/retry.ts", kind: "modified", additions: 12, deletions: 3 },
-              { path: "src/retry.test.ts", kind: "added", additions: 40, deletions: 0 },
-            ],
-            assistantMessageId: null,
-            completedAt: at(20),
-          },
+          checkpoint([
+            { path: "src/retry.ts", kind: "modified", additions: 12, deletions: 3 },
+            { path: "src/retry.test.ts", kind: "added", additions: 40, deletions: 0 },
+          ]),
+          checkpoint([{ path: "notes.md", kind: "added", additions: 1, deletions: 0 }], {
+            appRunOrdinal: null,
+            nodeId: NodeId.make("node-subagent"),
+          }),
         ],
       }),
-      { limit: 5, now: NOW },
+      { limit: 5 },
     );
-    expect(completed.state).toBe("completed");
-    expect(completed.turn).toEqual({ started_at: at(2), completed_at: at(20) });
-    expect(completed.changed_files).toMatchObject({ count: 2, additions: 52, deletions: 3 });
+    expect(summary.state).toBe("completed");
+    expect(summary.turn).toEqual({ started_at: at(2), completed_at: at(20) });
+    expect(summary.changed_files).toMatchObject({ count: 2, additions: 52, deletions: 3 });
+  });
+
+  it("leaves out the history a fork inherited from its source session", () => {
+    const inherited = userMessage("source", "Earlier work in the source thread", 0);
+    const fork = projection();
+    const summary = summarizeSession(
+      {
+        ...fork,
+        visibleTurnItems: [
+          {
+            position: 0,
+            visibility: "inherited",
+            sourceThreadId: ThreadId.make("source-thread"),
+            sourceItemId: TurnItemId.make("source"),
+            item: { ...inherited, threadId: ThreadId.make("source-thread") },
+          },
+          ...fork.visibleTurnItems.map((row) => ({ ...row, position: row.position + 1 })),
+        ],
+      },
+      { limit: 5 },
+    );
+    expect(summary.updates.map((update) => update.text)).toEqual(["Fix the flaky test"]);
   });
 });
 
 it("preserves complete approval details and warnings alongside actionable question values", () => {
   const detail = "deploy production " + "important context ".repeat(80);
   const result = summarizeSession(
-    thread({
-      activities: [
-        activity("approve", "approval.requested", 3, {
-          requestId: "approve-id",
+    projection({
+      items: [
+        user,
+        approvalItem("approve-id", 3, {
           requestKind: "permission",
           appName: "Deploy",
-          detail,
+          prompt: detail,
           options: [{ decision: "accept", label: "Allow once", warning: "Production" }],
         }),
-        activity("questions", "user-input.requested", 4, {
-          requestId: "input-id",
-          questions: [
-            {
-              id: " native-id ",
-              header: "Target",
-              question: "Which target?",
-              allowCustomAnswer: false,
-              multiSelect: true,
-              options: [
-                { label: "Production", value: " production-id ", description: "Live target" },
-              ],
-            },
-            { id: "notes", header: "Notes", question: "Any notes?", options: [] },
-          ],
-        }),
+        questionItem("input-id", 4, [
+          {
+            id: " native-id ",
+            header: "Target",
+            question: "Which target?",
+            allowCustomAnswer: false,
+            multiSelect: true,
+            options: [
+              { label: "Production", value: " production-id ", description: "Live target" },
+            ],
+          },
+          { id: "notes", header: "Notes", question: "Any notes?", options: [] },
+        ]),
+      ],
+      runtimeRequests: [
+        runtimeRequest("approve-id", "permission"),
+        runtimeRequest("input-id", "user_input"),
       ],
     }),
-    { cursor: at(20), limit: 1, now: NOW },
+    { cursor: at(20), limit: 1 },
   );
   expect(result.updates).toEqual([]);
   expect(result.waiting_for).toEqual({

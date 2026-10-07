@@ -1,63 +1,43 @@
-import type { OrchestrationThread, OrchestrationThreadStreamItem } from "@t3tools/contracts";
-import { applyThreadDetailEvent } from "@t3tools/client-runtime/state/thread-reducer";
-import * as DateTime from "effect/DateTime";
+import type {
+  OrchestrationV2ThreadProjection,
+  OrchestrationV2ThreadStreamItem,
+} from "@t3tools/contracts";
+import { applyOrchestrationV2ProjectionEvent } from "@t3tools/client-runtime/state/orchestration-v2-projection";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 
 import { BridgeError } from "./errors.ts";
-import { threadState } from "./status.ts";
 
-/** Stop cancels held intent; it must not restart the agent at the ensuing idle boundary. */
+/** The first projection, from the subscription's snapshot and replayed events, that is `ready`. */
 export const waitForThreadState = <E, R>(
-  updates: Stream.Stream<OrchestrationThreadStreamItem, E, R>,
-  ready: (thread: OrchestrationThread, now: string) => boolean,
+  updates: Stream.Stream<OrchestrationV2ThreadStreamItem, E, R>,
+  ready: (projection: OrchestrationV2ThreadProjection) => boolean,
 ) =>
   Effect.suspend(() => {
-    let current: OrchestrationThread | undefined;
+    let current: OrchestrationV2ThreadProjection | null = null;
     return updates.pipe(
-      Stream.mapEffect((item) =>
-        Effect.gen(function* () {
-          if (item.kind === "snapshot") current = item.snapshot.thread;
-          if (item.kind === "event") {
-            if (
-              item.event.type === "thread.turn-interrupt-requested" ||
-              item.event.type === "thread.deleted"
-            ) {
-              return yield* new BridgeError({
-                code: "queue_cancelled",
-                message: "The session was stopped or deleted. The queued message was not sent.",
-              });
-            }
-            if (current !== undefined) {
-              const reduced = applyThreadDetailEvent(current, item.event);
-              if (reduced.kind === "updated") current = reduced.thread;
-            }
-          }
-          const now = DateTime.formatIso(yield* DateTime.now);
-          if (current !== undefined && threadState(current, now) === "interrupted") {
-            return yield* new BridgeError({
-              code: "queue_cancelled",
-              message: "The session was interrupted. The queued message was not sent.",
-            });
-          }
-          return { thread: current, now };
-        }),
-      ),
+      Stream.map((item) => {
+        if (item.kind === "snapshot") current = item.projection;
+        if (item.kind === "event")
+          current = applyOrchestrationV2ProjectionEvent(current, item.event);
+        return current;
+      }),
       Stream.filter(
-        (item): item is { thread: OrchestrationThread; now: string } =>
-          item.thread !== undefined && ready(item.thread, item.now),
+        (projection): projection is OrchestrationV2ThreadProjection =>
+          projection !== null && ready(projection),
       ),
-      Stream.map((item) => item.thread),
-      Stream.take(1),
-      Stream.runCollect,
-      Effect.flatMap((threads) =>
-        threads[0] === undefined
-          ? Effect.fail(
+      Stream.runHead,
+      Effect.flatMap(
+        Option.match({
+          onNone: () =>
+            Effect.fail(
               new BridgeError({
-                message: "The session subscription ended before the queued message could be sent.",
+                message: "The session subscription ended before the session was ready.",
               }),
-            )
-          : Effect.succeed(threads[0]),
+            ),
+          onSome: Effect.succeed,
+        }),
       ),
     );
   });

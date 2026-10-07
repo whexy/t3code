@@ -1,7 +1,9 @@
 import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
+  ORCHESTRATION_PROTOCOL_VERSION,
   type AuthClientPresentationMetadata,
+  type ExecutionEnvironmentDescriptor,
 } from "@t3tools/contracts";
 import {
   bootstrapRemoteBearerSession,
@@ -80,13 +82,51 @@ export const pair = Effect.fn("pair")(function* (link: string) {
   } satisfies Pairing;
 });
 
+/** Whether a server speaks the orchestration protocol this bridge uses. */
+export type ServerSupport =
+  | { readonly status: "supported" }
+  | { readonly status: "too_old"; readonly serverVersion: string }
+  | { readonly status: "unknown" };
+
+/**
+ * Reads the protocol from the descriptor every client negotiates with.
+ * Servers from before negotiation omit it and speak protocol 1, as in
+ * client-runtime's compatibility check.
+ */
+export function supportOf(descriptor: ExecutionEnvironmentDescriptor): ServerSupport {
+  return (descriptor.orchestrationProtocolVersion ?? 1) < ORCHESTRATION_PROTOCOL_VERSION
+    ? { status: "too_old", serverVersion: descriptor.serverVersion }
+    : { status: "supported" };
+}
+
+/**
+ * Checked on every use, so an upgraded server comes back on its next call.
+ * An unreachable server is "unknown", never too old: its own call reports why.
+ */
+export const support = (server: ServerRecord) =>
+  fetchRemoteEnvironmentDescriptor({ httpBaseUrl: server.url, timeoutMs: CHECK_TIMEOUT_MS }).pipe(
+    Effect.map(supportOf),
+    Effect.orElseSucceed((): ServerSupport => ({ status: "unknown" })),
+  );
+
+export const tooOldMessage = (serverId: string, serverVersion: string) =>
+  `Server "${serverId}" is disabled automatically because its T3 Code (${serverVersion}) is too old for this bridge. Update T3 Code on that server; the bridge enables it again on the next call.`;
+
 export type ServerHealth =
   | { readonly status: "connected"; readonly expiresAt: string | null }
+  | { readonly status: "too_old"; readonly serverVersion: string }
   | { readonly status: "rejected" }
   | { readonly status: "unreachable"; readonly detail: string };
 
-/** Asks the server whether the bridge's token still works and when it expires. */
+/** Asks the server whether it is new enough, and whether the bridge's token still works. */
 export const check = (server: ServerRecord) =>
+  support(server).pipe(
+    Effect.flatMap((supported) =>
+      supported.status === "too_old" ? Effect.succeed<ServerHealth>(supported) : checkToken(server),
+    ),
+  );
+
+const checkToken = (server: ServerRecord) =>
   fetchRemoteSessionState({
     httpBaseUrl: server.url,
     bearerToken: server.token,

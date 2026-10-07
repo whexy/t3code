@@ -9,10 +9,9 @@ web and mobile apps do.
 It exposes these tools:
 
 - `list_projects`: projects on every enabled server, plus the agents and models
-  each server offers. An unreachable server is reported with an error, and the
-  other servers still list.
-- `get_model_capabilities`: the reasoning effort levels one model accepts, for
-  `create_session`'s `reasoning_effort`. See [Reasoning effort](#reasoning-effort).
+  each server offers, with each model's reasoning effort levels. An unreachable
+  server is reported with an error, and the other servers still list. See
+  [Reasoning effort](#reasoning-effort).
 - `create_project`: registers a folder or clones a repository on a selected server,
   returning `server_id` and `project_id` ready for `create_session`. See
   [Creating projects](#creating-projects).
@@ -29,16 +28,14 @@ It exposes these tools:
 - `send_session_message`: sends a message into an existing session, which
   keeps its thread, history, agent, and model. See
   [Follow-up messages](#follow-up-messages).
-- `interrupt_session`: requests Stop for running work while preserving the
-  session and history. See [Stopping work](#stopping-work).
+- `control_session`: stops running work, resumes a held queue, or drops queued
+  messages, as T3 Code's UI does. See [Controlling work](#controlling-work).
 - `get_session_status`: reports state, recent agent messages and tool
-  activity, and files changed. Pass back the returned `cursor` to get only
-  newer updates.
-
-- `answer_session_question`: submits the user's answers to a pending question
-  request, including choice values, multiple selections, and supported free text.
-- `respond_to_session_approval`: submits the user's explicit approval decision
-  through T3's existing permission flow.
+  activity, files changed, queued messages, and pending questions or approvals.
+  Pass back the returned `cursor` to get only newer updates.
+- `respond_to_session`: submits the user's answers to a pending question, or
+  their explicit decision on a pending approval. See
+  [Questions and approvals](#questions-and-approvals).
 
 ## Creating projects
 
@@ -88,7 +85,7 @@ prefer new worktrees. Paths and Git operations belong to the selected server.
 {"mode":"local","branch":"feature/existing"}
 {"mode":"local","branch":"feature/new","create_branch":true}
 {"mode":"worktree","base_branch":"main"}
-{"mode":"worktree","base_branch":"main","branch":"feature/new","start_from_origin":true,"run_setup_script":true}
+{"mode":"worktree","base_branch":"main","branch":"feature/new","start_from_origin":true}
 {"mode":"existing_worktree","branch":"feature/already-checked-out"}
 ```
 
@@ -99,15 +96,14 @@ T3's existing Git validation and conflict errors apply. Remote refs use T3's
 normal local tracking-branch behavior. A successful branch change remains if
 starting the agent subsequently fails.
 
-`worktree` requires `base_branch`. Omit `branch` for T3's temporary branch naming.
-T3 allocates the directory, creates the branch/worktree, applies the project's
-submodule configuration, and runs its configured worktree setup actions by
-default. `run_setup_script:false` skips those actions. `start_from_origin` defaults
-to false; when true, T3 fetches origin and uses its version of the base branch
-when available, falling back to the local branch. Existing branch names, invalid
-refs, checkout conflicts, and setup failures are handled by the server's normal
-bootstrap flow. Servers without the required-worktree capability are rejected
-so they cannot silently run in the project checkout.
+`worktree` requires `base_branch`. Omit `branch` to let T3 name the branch, as it
+does for new worktrees in the UI. T3 allocates the directory, creates the
+branch/worktree, applies the project's submodule configuration, and runs its
+configured worktree setup actions. `start_from_origin` defaults to false; when
+true, T3 fetches origin and uses its version of the base branch when available,
+falling back to the local branch. Existing branch names, invalid refs, checkout
+conflicts, and setup failures fail the session's first turn; the error names the
+cause, and the session stays in T3 Code, where its preparation can be retried.
 
 `existing_worktree` reuses the given local branch's checkout, discovered from
 T3's project ref list; it fails if no such checkout exists. Selecting the main
@@ -121,14 +117,11 @@ retrying, then monitor `get_session_status` for completion or failure.
 
 ## Reasoning effort
 
-`list_projects` names each server's models without their options. After
-choosing one, call `get_model_capabilities` with `server_id`, `model`, and
-optionally `agent`; they resolve the same names `create_session` accepts:
+`list_projects` reports every model's reasoning effort with the model, under
+its agent:
 
 ```json
 {
-  "server_id": "mudd",
-  "agent": "codex",
   "model": "gpt-6-astra",
   "name": "GPT-6 Astra",
   "reasoning_effort_support": "configurable",
@@ -148,8 +141,8 @@ with Antigravity. `unknown` means the server sent no option metadata for the
 model. Claude's `ultrathink` is not listed because T3 Code applies it by
 writing it into the prompt; write it in the task instead.
 
-Pass a `value` as `create_session`'s `reasoning_effort`, with the returned
-`agent` and `model`. Spoken forms of a listed level ("Extra High", "x-high")
+Pass a `value` as `create_session`'s `reasoning_effort`, with that model and its
+`agent`. Spoken forms of a listed level ("Extra High", "x-high")
 also match. Levels the model does not list, and any level for a
 `not_configurable` or `unknown` model, are rejected before a session starts.
 Omitting `reasoning_effort` keeps the project's default, or the model's.
@@ -163,8 +156,10 @@ follows changes made later in T3 Code.
 When `get_session_status` reports `waiting`, inspect `waiting_for`. Pending
 requests are returned even when the status cursor filters out older updates.
 Present the actual question or complete approval request to the user and obtain
-their response before submitting it. Never infer approval from a task instruction
-or automatically choose a question's suggested answer.
+their response before submitting it with `respond_to_session`. Never infer
+approval from a task instruction or automatically choose a question's suggested
+answer. Pass exactly one of `answers` (for a question) or `decision` (for an
+approval); a response of the wrong kind for the request is rejected.
 
 Each entry in `waiting_for.questions` includes `request_id`, `question_id`,
 `header`, the question text, `multi_select`, `allow_custom_answer`, and `choices`
@@ -190,12 +185,12 @@ choice values for multiple selections. Preserve IDs, values, and the user's
 text, including whitespace. Unsupported custom answers, invalid selections,
 missing/extra question IDs, and stale requests fail without dispatching a
 response. Both native provider questions and T3's async message-mode questions
-use the existing `thread.user-input.respond` flow.
+are answered through T3's runtime request response, as in the UI.
 
 Each entry in `waiting_for.approvals` includes `request_id`, kind, the complete
 available detail, optional application name, and provider-supplied options with
 warnings. Explain these to the user, explicitly ask whether they approve or deny,
-then call `respond_to_session_approval` with the IDs and their `decision`:
+then call `respond_to_session` with the IDs and their `decision`:
 
 ```json
 {
@@ -214,7 +209,7 @@ decisions are accepted. Older requests without options use T3's defaults:
 explicitly offered. Provider-specific meanings and safeguards remain with T3's
 existing approval adapters and authorization.
 
-Both response tools return `accepted:true` and a status `cursor`. This means T3
+`respond_to_session` returns `accepted:true` and a status `cursor`. This means T3
 accepted the response command, not that the provider has finished resolving it.
 Pass the cursor to `get_session_status` and keep monitoring: provider failures,
 including a request becoming stale between inspection and submission, appear
@@ -274,6 +269,12 @@ Tokens from pairing last 30 days. The admin page shows how long each has left,
 and `list_projects` warns during the last week so the chat can remind you.
 Re-pair with a new link from the same server to refresh one.
 
+The bridge needs T3 Code with Orchestrator V2 on each server. A server running
+an older version shows "Automatically disabled because the server is too old"
+with its version. Its projects and sessions are hidden from the tools, and calls
+that name it fail with that reason. Update T3 Code on that server, and the
+bridge uses it again on the next call; there is nothing to re-enable.
+
 ## Behavior to know
 
 - A session uses the project's default agent, model, reasoning effort, and
@@ -282,7 +283,7 @@ Re-pair with a new link from the same server to refresh one.
 - Sessions start in the project's checkout by default; `checkout` selects a
   branch or worktree explicitly.
 - When the agent asks for approval or input, the state is `waiting`. Obtain the
-  user's response and submit it through the matching response tool or T3 Code.
+  user's response and submit it with `respond_to_session` or in T3 Code.
 - The bridge logs every session it creates, with its server, project, agent,
   model, and reasoning effort, and every message it sends, without the text.
 
@@ -291,52 +292,64 @@ Re-pair with a new link from the same server to refresh one.
 `send_session_message` takes `server_id`, `session_id`, `message`, and an
 optional `mode`:
 
-- `steer`: send immediately, like T3 Code's **Send now**. During active work,
-  `delivery` is `steered`. The provider may incorporate the message, cancel and
-  re-prompt, or handle it next; acceptance does not guarantee immediate uptake.
-- `queue`: hold until the next completed tool call or the end of the turn,
-  like T3 Code's **Queue**. This can deliver into the current turn before it
-  ends. `delivery: queued` confirms the bridge is holding the message, not that
-  the provider has received it. While waiting for approval or input, the queue
-  holds until the user answers through the response tools or in T3 Code.
-- Omit `mode` (or pass `null`) for the existing immediate-send behavior:
-  `delivery: during_turn` while active. Like explicit steering, this refuses
-  messages while waiting for approval or input.
+- `steer`: redirect the active turn, like T3 Code's **Send now**. During active
+  work, `delivery` is `steered`. Depending on the provider, the turn takes the
+  message in place or is interrupted and restarted with it. T3 rejects steering
+  while the turn is still starting or when the provider cannot steer.
+- `queue`: run the message as the next turn once the active one ends, like T3
+  Code's **Queue**. `delivery: queued` means T3 holds it; it never enters the
+  current turn. While waiting for approval or input, it waits for that turn to
+  end.
+- Omit `mode` (or pass `null`) for T3 Code's default send: steer the active turn
+  when the provider can (`delivery: during_turn`), and queue it otherwise
+  (`delivery: queued`). Like explicit steering, this refuses messages while
+  waiting for approval or input.
 
 Both explicit modes and the default return `delivery: new_turn` when the
-session is idle, completed, interrupted, or failed and no queue is holding the
-message. They continue the same session with its agent and model.
+session is idle, completed, interrupted, or failed. They continue the same
+session with its agent and model.
 
 The result includes `message_id` and `cursor`. Pass the cursor to
 `get_session_status` to see what happens after the send. Its `queued_messages`
-field shows messages held by this bridge, dispatches in progress, and delivery
-failures or cancellations. Delivered messages leave the queue and appear in
-the session history. Queue entries are in memory and are lost on bridge restart;
-a connection failure marks them failed rather than automatically replaying a
-potentially accepted message. An archived or deleted session is reported as
-not found.
+field lists every message on the session still waiting for its turn, whether
+queued through the bridge or in T3 Code. Each has `state` `waiting`, to run
+after the active turn, or `held` after a stop, until `control_session`
+resumes the queue; `control_session` reports the queue the same way. Queued
+messages wait on the T3
+server, so they survive a bridge restart. Drop them with `control_session`, or
+edit or remove them in T3 Code. Once a queued message starts, it leaves the list and appears in the session history. An
+archived or deleted session is reported as not found.
 
-## Stopping work
+## Controlling work
 
-Call `interrupt_session` with `server_id` and `session_id` to use T3 Code's
-Stop action. It cancels the bridge's held messages and requests provider
-interruption, including when a running agent is waiting for approval or input.
-The session and history remain available; send another message to resume.
-Providers use their existing cancellation behavior for tools and subprocesses;
-some close the provider runtime and reopen it on the next message.
+`control_session` takes `server_id`, `session_id`, and an `action`. Each result
+reports `result`, `dropped_message_ids`, the observed `state`, the updated
+`queued_messages` (each `waiting` to run after the active turn, or `held`), and
+a status `cursor`.
 
-`result: interrupt_requested` confirms command acceptance. `state` is the
-observed state afterward and may still be active; use `get_session_status` to
-confirm settlement or see provider errors. `already_inactive` means no running
-work remained when checked, including completion races. `turn_changed` means
-a different active turn was observed before dispatch and was left running.
-`cancelled_message_ids` identifies messages removed from automatic delivery.
-Concurrent activity after dispatch follows T3's session-level Stop semantics.
+- `stop` is T3 Code's Stop. It requests provider interruption, including while
+  the session is starting or the agent is waiting for approval or input. As in
+  the UI, queued messages are held instead of starting next. The session and
+  history remain available; send another message to continue. Providers use
+  their existing cancellation behavior for tools and subprocesses; some close
+  the provider runtime and reopen it on the next message. `stop_requested`
+  confirms command acceptance, and `state` may still be active; use
+  `get_session_status` to confirm settlement or see provider errors.
+  `already_inactive` means no running work remained when checked. Work that is
+  not a run T3 can stop, such as a subagent's own session, returns
+  `BridgeError` with `code: interrupt_not_applicable`.
+- `resume_queue` releases held messages, as the UI's resume does, so they run
+  in order (`queue_resumed`). With nothing held it sends nothing and returns
+  `nothing_held`.
+- `drop_queued` deletes queued messages: all of them, or only those in
+  `message_ids`. Every listed ID must be in `queued_messages`; an unknown ID,
+  or one that already started or was dropped, fails the call with
+  `code: not_queued` and nothing is dropped. If a message starts while the
+  bridge is dropping several, the error names the ones already dropped. Only
+  drop messages at the user's request.
 
-The composer's Stop action is unavailable during queued/starting work. The
-bridge returns `BridgeError` with `code: interrupt_not_applicable` and the
-observed `state`; retry once the provider is running. Steering over a pending
-question or approval returns `code: message_not_applicable` and `state: waiting`.
+Steering over a pending question or approval returns
+`code: message_not_applicable` and `state: waiting`.
 
 ## Usage analytics
 

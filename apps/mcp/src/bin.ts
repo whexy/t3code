@@ -3,7 +3,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { Command, Flag } from "effect/unstable/cli";
+import { Command, Flag } from "effect/cli";
 
 import packageJson from "../package.json" with { type: "json" };
 import * as Server from "./server.ts";

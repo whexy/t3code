@@ -1,17 +1,18 @@
 // @effect-diagnostics nodeBuiltinImport:off - The bridge's listeners are a Node HTTP boundary.
+/* oxlint-disable t3code/no-raw-mcp-registration -- The bridge is its own MCP server, outside apps/server; its secret path is the perimeter. */
 import * as NodeHttp from "node:http";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { McpProtocol, McpServer } from "effect/unstable/ai";
+import { McpProtocol, McpServer } from "effect/ai";
 import {
   FetchHttpClient,
   HttpRouter,
   HttpServer,
   HttpServerRequest,
   HttpServerResponse,
-} from "effect/unstable/http";
-import * as Socket from "effect/unstable/socket/Socket";
+} from "effect/http";
+import * as Socket from "effect/socket/Socket";
 
 import packageJson from "../package.json" with { type: "json" };
 import * as Admin from "./admin.ts";
