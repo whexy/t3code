@@ -205,7 +205,10 @@ import * as ProjectEnrichmentService from "./project/ProjectEnrichmentService.ts
 import * as ProjectService from "./project/ProjectService.ts";
 import { threadWorkspaceRoot } from "./project/threadWorkspaceRoot.ts";
 import * as ManagedProjectFolders from "./project/ManagedProjectFolders.ts";
-import { projectMutationOperation } from "./project/ProjectMutation.ts";
+import {
+  projectMutationFailureMessage,
+  projectMutationOperation,
+} from "./project/ProjectMutation.ts";
 import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts";
 import * as ProjectCloneTracker from "./project/ProjectCloneTracker.ts";
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
@@ -2565,7 +2568,8 @@ export const layerWsRpc = (
                   Effect.mapError(
                     (cause) =>
                       new OrchestrationDispatchCommandError({
-                        message: "Failed to create clone project.",
+                        message:
+                          projectMutationFailureMessage(cause) ?? "Failed to create clone project.",
                         cause,
                       }),
                   ),
@@ -2687,10 +2691,7 @@ export const layerWsRpc = (
               (cause) =>
                 new ProjectMutationError({
                   commandId: mutation.commandId,
-                  message:
-                    cause._tag === "ProjectNotEmptyError"
-                      ? cause.message
-                      : "Failed to mutate project.",
+                  message: projectMutationFailureMessage(cause) ?? "Failed to mutate project.",
                   cause,
                 }),
             ),
