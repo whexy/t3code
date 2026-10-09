@@ -1,7 +1,10 @@
 import { type ProjectMutation } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 
-import { type ProjectService } from "./ProjectService.ts";
+import { type ServerRuntimeStartupError } from "../serverRuntimeStartup.ts";
+import { WorkspacePathsError } from "../workspace/WorkspacePaths.ts";
+import { type ProjectService, type ProjectServiceError } from "./ProjectService.ts";
 
 type ProjectMutations = Pick<ProjectService["Service"], "create" | "delete" | "update">;
 
@@ -51,3 +54,26 @@ export const projectMutationOperation = Effect.fn("projectMutationOperation")(fu
       });
   }
 });
+
+const isWorkspacePathsError = Schema.is(WorkspacePathsError);
+
+/**
+ * Why a project command was refused, in words a client can act on, or
+ * undefined for an internal failure whose detail stays in the server log.
+ */
+export function projectMutationFailureMessage(
+  cause: ProjectServiceError | ServerRuntimeStartupError,
+): string | undefined {
+  switch (cause._tag) {
+    case "ProjectNotFoundError":
+    case "ProjectConflictError":
+    case "ProjectNotEmptyError":
+      return cause.message;
+    case "ProjectOperationError":
+      return cause.operation === "normalize-workspace" && isWorkspacePathsError(cause.cause)
+        ? cause.cause.message
+        : undefined;
+    case "ServerRuntimeStartupError":
+      return undefined;
+  }
+}
