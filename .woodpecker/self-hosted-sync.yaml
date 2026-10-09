@@ -1,0 +1,53 @@
+# Keeps the `self-hosted-nightly` branch on top of the latest published
+# nightly release. Checks hourly from the repository cron
+# `self-hosted-nightly-sync` on branch `self-hosted-nightly`, schedule
+# `53 * * * *`. The `self-hosted` branch follows stable releases with its own
+# copy of this pipeline.
+#
+# When the nightly release changes, the fork's patches are rebased onto it and
+# pushed back, which starts self-hosted-build.yaml. Unreleased upstream commits
+# do not trigger builds. An unchanged nightly tag ends the run without
+# pushing. A failed rebase pushes nothing, so the last image keeps
+# serving until the patch is fixed. The push is leased on the commit this run
+# started from, so a patch pushed meanwhile is never overwritten.
+#
+# Pushes as the `whexy-bot` GitHub App through the secrets `github_app_id`,
+# `github_app_installation_id`, and `github_app_private_key`.
+when:
+  event: cron
+
+# The rebase needs the branch's history back to its upstream merge base.
+# Submodules stay out for the reason in self-hosted-build.yaml.
+clone:
+  - name: git
+    image: woodpeckerci/plugin-git
+    settings:
+      partial: false
+      depth: 0
+      recursive: false
+
+steps:
+  - name: rebase
+    image: node:24
+    environment:
+      GITHUB_APP_ID:
+        from_secret: github_app_id
+      GITHUB_APP_INSTALLATION_ID:
+        from_secret: github_app_installation_id
+      GITHUB_APP_PRIVATE_KEY:
+        from_secret: github_app_private_key
+    commands:
+      - release_tag="$(node scripts/self-hosted/nightly-release.ts)"
+      - git fetch --no-tags https://github.com/pingdotgg/t3code.git +refs/heads/main:refs/remotes/upstream/main "+refs/tags/$release_tag:refs/remotes/upstream/nightly"
+      - release_sha="$(git rev-parse 'refs/remotes/upstream/nightly^{commit}')"
+      - upstream_base="$(git merge-base HEAD refs/remotes/upstream/main)"
+      - |
+        if [ "$upstream_base" = "$release_sha" ]; then
+          echo "self-hosted-nightly already follows nightly $release_tag."
+          exit 0
+        fi
+      - git config user.name "whexy-bot[bot]"
+      - git config user.email "315421218+whexy-bot[bot]@users.noreply.github.com"
+      - git rebase --onto "$release_sha" "$upstream_base"
+      - token="$(node scripts/self-hosted/github-app-token.ts)"
+      - git push --force-with-lease="self-hosted-nightly:$CI_COMMIT_SHA" "https://x-access-token:$token@github.com/${CI_REPO}.git" HEAD:self-hosted-nightly
