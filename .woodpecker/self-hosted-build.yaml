@@ -87,14 +87,14 @@ steps:
     backend_options: *node_resources
     commands:
       - export PATH="$PWD/node_modules/.bin:$PATH"
-      - vp test run apps/web/src/connection/sharedCatalog.test.ts apps/web/src/connection/storage.test.ts scripts/self-hosted/server.test.ts scripts/self-hosted/stable-release.test.ts
+      - vp test run apps/web/src/connection/sharedCatalog.test.ts apps/web/src/connection/storage.test.ts scripts/self-hosted/server.test.ts scripts/self-hosted/gateway.test.ts scripts/self-hosted/stable-release.test.ts
       - vp run --filter @t3tools/web typecheck
       # The storage tests expect the browser catalog, so only the build sees the shared one.
       - export VITE_HOSTED_APP_CHANNEL=latest VITE_SHARED_CATALOG_PATH=/__t3code/shared-catalog
       - vp run --filter @t3tools/web build
       - node scripts/apply-web-brand-assets.ts --channel latest
       - mkdir -p .sync/web-image
-      - cp scripts/self-hosted/server.ts .sync/web-image/
+      - cp scripts/self-hosted/server.ts scripts/self-hosted/gateway.ts scripts/self-hosted/gateway-client.js scripts/self-hosted/gateway-worker.js .sync/web-image/
       - cp -R apps/web/dist .sync/web-image/web
 
   - name: web-image

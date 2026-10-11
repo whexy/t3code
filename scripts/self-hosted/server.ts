@@ -10,9 +10,13 @@
  * - `CATALOG_DIR`: writable directory for `catalog.json` and `history/`.
  * - `PORT`: listen port, default 8080.
  * - `HISTORY_LIMIT`: saved catalog versions to keep, default 100.
- * - `CF_ACCESS_TEAM_DOMAIN` and `CF_ACCESS_AUD`: catalog requests must carry a
- *   valid Cloudflare Access JWT for that application. Without them the catalog
- *   refuses every request, unless `ALLOW_UNVERIFIED_CATALOG=true` (local use).
+ * - `CF_ACCESS_TEAM_DOMAIN` and `CF_ACCESS_AUD`: catalog and gateway requests
+ *   must carry a valid Cloudflare Access JWT for that application. Without them
+ *   both refuse every request, unless `ALLOW_UNVERIFIED_CATALOG=true` (local use).
+ * - `GATEWAY_UPSTREAMS`: backend origins, separated by commas, that browsers
+ *   reach through this server instead of directly; see `gateway.ts`. Unset
+ *   leaves browsers connecting to every backend themselves, and removes the
+ *   gateway's service worker from browsers that installed it.
  *
  * The catalog holds bearer tokens for every paired environment, so run this
  * only behind an access gate. Every accepted write is kept in `history/`; to
@@ -22,6 +26,9 @@ import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeHttp from "node:http";
 import * as NodePath from "node:path";
+import type * as NodeStream from "node:stream";
+
+import { makeGateway, parseGatewayUpstreams } from "./gateway.ts";
 
 export const SHARED_CATALOG_PATH = "/__t3code/shared-catalog";
 const MAX_CATALOG_BYTES = 4 * 1024 * 1024;
@@ -49,24 +56,38 @@ export interface SelfHostedServerOptions {
   readonly catalogDir: string;
   readonly historyLimit: number;
   readonly access: AccessVerifier;
+  readonly gatewayUpstreams?: ReadonlyArray<string>;
 }
 
 export type AccessVerifier = (request: NodeHttp.IncomingMessage) => Promise<boolean>;
 
 export function createSelfHostedServer(options: SelfHostedServerOptions): NodeHttp.Server {
   const catalog = makeCatalogFile(options.catalogDir, options.historyLimit);
-  return NodeHttp.createServer((request, response) => {
+  const gateway = makeGateway({
+    upstreams: options.gatewayUpstreams ?? [],
+    access: options.access,
+  });
+  const server = NodeHttp.createServer((request, response) => {
     const pathname = new URL(request.url ?? "/", "http://localhost").pathname;
     const handled =
       pathname === SHARED_CATALOG_PATH
         ? handleCatalog(request, response, catalog, options.access)
-        : serveStatic(request, response, options.webRoot, pathname);
+        : gateway.owns(pathname)
+          ? gateway.handle(request, response, pathname)
+          : serveStatic(request, response, options.webRoot, pathname, gateway.injectClient);
     handled.catch((error: unknown) => {
       console.error(error);
       if (!response.headersSent) response.writeHead(500);
       response.end();
     });
   });
+  server.on("upgrade", (request: NodeHttp.IncomingMessage, socket: NodeStream.Duplex, head) => {
+    gateway.handleUpgrade(request, socket, head).catch((error: unknown) => {
+      console.error(error);
+      socket.destroy();
+    });
+  });
+  return server;
 }
 
 async function handleCatalog(
@@ -195,6 +216,7 @@ async function serveStatic(
   response: NodeHttp.ServerResponse,
   webRoot: string,
   pathname: string,
+  injectIndex: (html: string) => string,
 ) {
   if (request.method !== "GET" && request.method !== "HEAD") {
     response.writeHead(405, { Allow: "GET, HEAD" }).end();
@@ -206,7 +228,9 @@ async function serveStatic(
     // Client-side routes resolve to the app shell.
     filePath = NodePath.join(root, "index.html");
   }
-  const body = await NodeFSP.readFile(filePath);
+  const indexPath = NodePath.join(root, "index.html");
+  const file = await NodeFSP.readFile(filePath);
+  const body = filePath === indexPath ? injectIndex(file.toString("utf8")) : file;
   const hashedAsset = filePath.startsWith(NodePath.join(root, "assets") + NodePath.sep);
   response.writeHead(200, {
     "Content-Type":
@@ -298,6 +322,7 @@ if (import.meta.main) {
   const teamDomain = process.env.CF_ACCESS_TEAM_DOMAIN?.trim();
   const audience = process.env.CF_ACCESS_AUD?.trim();
   const port = Number(process.env.PORT ?? 8080);
+  const gatewayUpstreams = parseGatewayUpstreams(process.env.GATEWAY_UPSTREAMS ?? "");
   let access: AccessVerifier;
   if (teamDomain && audience) {
     access = makeCloudflareAccessVerifier({ teamDomain, audience });
@@ -315,8 +340,12 @@ if (import.meta.main) {
     catalogDir: required("CATALOG_DIR"),
     historyLimit: Number(process.env.HISTORY_LIMIT ?? 100),
     access,
+    gatewayUpstreams,
   }).listen(port, () => {
     console.log(`Serving T3 Code web with a shared connection catalog on :${port}`);
+    if (gatewayUpstreams.length > 0) {
+      console.log(`Routing browsers to ${gatewayUpstreams.join(", ")} through the gateway`);
+    }
   });
   // As PID 1 in a container, Node installs no default signal handlers. Exiting
   // at once is safe because catalog writes land by atomic rename.
