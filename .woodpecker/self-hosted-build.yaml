@@ -1,15 +1,18 @@
 # Publishes the self-hosted images from the `self-hosted` branch: the web
 # client (`t3code-self-hosted`) and the MCP bridge (`t3code-mcp`). Runs on every
 # push to the branch, including the stable-release rebases self-hosted-sync.yaml
-# pushes, and on a manual run from the UI. A failed check publishes nothing,
-# so the last image keeps serving until the patch is fixed.
+# pushes, and on a manual run from the UI. Each image is pushed right after its
+# own checks, web first: a failed web check publishes nothing, while a failed
+# bridge check comes after the web image is out. Either way the image whose
+# checks failed keeps its last version serving until the patch is fixed.
 #
 # Images get two tags: `sha-<commit>` identifies the exact inputs, and
 # `1.1.<pipeline>` gives deployments a monotonic version to follow.
 #
-# The branch does not commit its lockfile changes, which would conflict with
-# upstream's on most rebases. The install adds the fork's importers to
-# upstream's lockfile first: a filtered install that resolves on its own
+# The bridge's commit adds its `apps/mcp` importer to the lockfile; the branch
+# commits no other lockfile changes, which would conflict with upstream's on
+# most rebases. The install resolves the whole workspace's lockfile first and
+# then installs frozen: a filtered install that resolves on its own
 # re-resolves upstream packages too, and those drifts break the web typecheck.
 #
 # Needs the secret `ghcr_token`: a classic token of whexy's with
