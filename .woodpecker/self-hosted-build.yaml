@@ -15,12 +15,20 @@
 # The branch does not commit its lockfile changes, which would conflict with
 # upstream's on most rebases; installs here resolve them instead.
 #
-# Needs the secret `ghcr_token`: a classic token of whexy's with
-# `write:packages`.
+# Needs the secret `ghcr_token`, a classic token of whexy's with
+# `write:packages`, and the CI cache's `ci_cache_access_key` and
+# `ci_cache_secret_key`.
 variables:
+  # The cache plugin is amd64-only, and every step runs on the clone's node.
+  - &amd64
+    kubernetes:
+      nodeSelector:
+        kubernetes.io/arch: amd64
   # Typecheck and the web build outgrow the LimitRange's 2Gi step default.
   - &node_resources
     kubernetes:
+      nodeSelector:
+        kubernetes.io/arch: amd64
       resources:
         requests:
           cpu: "4"
@@ -54,6 +62,8 @@ variables:
   # The step runs a Docker daemon and buildkit beside the build.
   - &image_resources
     kubernetes:
+      nodeSelector:
+        kubernetes.io/arch: amd64
       resources:
         requests:
           cpu: "2"
@@ -61,6 +71,19 @@ variables:
         limits:
           cpu: "4"
           memory: 6Gi
+  # pnpm's registry metadata, which also records that the lockfile passed the
+  # supply-chain check. The package store stays out: restoring its files takes
+  # longer than downloading them. The lockfile leaves out the apps/mcp importer.
+  - &pnpm_cache
+    key: 'pnpm-metadata-{{ arch }}-{{ hashFiles "pnpm-lock.yaml" "apps/mcp/package.json" }}'
+    restore_keys:
+      - "pnpm-metadata-{{ arch }}-"
+    paths:
+      - .pnpm-cache
+    access_key:
+      from_secret: ci_cache_access_key
+    secret_key:
+      from_secret: ci_cache_secret_key
   # A pull request's branch is the one it merges into, so only the event keeps
   # its runs from publishing.
   - &publish
@@ -71,12 +94,35 @@ when:
   event: [push, manual, pull_request]
   branch: self-hosted
 
+# The clone's pod binds the local-path workspace to its node, and every later
+# step follows it there, so it asks for what the node steps need.
+clone:
+  - name: git
+    image: woodpeckerci/plugin-git
+    backend_options: *node_resources
+
 steps:
+  - name: restore-pnpm
+    image: ghcr.io/whexy/ci-cache:0.1.0-alpha.3
+    backend_options: *amd64
+    settings:
+      <<: *pnpm_cache
+      mode: restore
+
   - name: install
     image: node:24
     backend_options: *node_resources
     commands:
-      - corepack pnpm install --no-frozen-lockfile --filter=@t3tools/scripts... --filter=@t3tools/web... --filter=@t3tools/mcp...
+      - corepack pnpm install --no-frozen-lockfile --cache-dir .pnpm-cache --filter=@t3tools/scripts... --filter=@t3tools/web... --filter=@t3tools/mcp...
+      # The cache key hashes the committed lockfile, which the install rewrites.
+      - git restore pnpm-lock.yaml
+
+  - name: save-pnpm
+    image: ghcr.io/whexy/ci-cache:0.1.0-alpha.3
+    backend_options: *amd64
+    settings:
+      <<: *pnpm_cache
+      mode: save
 
   - name: web
     image: node:24
