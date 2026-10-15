@@ -6,6 +6,9 @@
 # bridge check comes after the web image is out. Either way the image whose
 # checks failed keeps its last version serving until the patch is fixed.
 #
+# A pull request into `self-hosted` runs the same install and checks but no
+# image step, so a change is validated without publishing anything.
+#
 # Images get two tags: `sha-<commit>` identifies the exact inputs, and
 # `1.1.<pipeline>` gives deployments a monotonic version to follow.
 #
@@ -61,9 +64,14 @@ variables:
         limits:
           cpu: "4"
           memory: 6Gi
+  # A pull request's branch is the one it merges into, so only the event keeps
+  # its runs from publishing.
+  - &publish
+    event: [push, manual]
+    branch: self-hosted
 
 when:
-  event: [push, manual]
+  event: [push, manual, pull_request]
   branch: self-hosted
 
 # Upstream vendors `.repos/alchemy-effect` with gitlinks but no .gitmodules
@@ -102,6 +110,7 @@ steps:
 
   - name: web-image
     image: woodpeckerci/plugin-docker-buildx:6.1.2
+    when: *publish
     backend_options: *image_resources
     settings:
       <<: *image_settings
@@ -122,6 +131,7 @@ steps:
 
   - name: mcp-image
     image: woodpeckerci/plugin-docker-buildx:6.1.2
+    when: *publish
     backend_options: *image_resources
     settings:
       <<: *image_settings
