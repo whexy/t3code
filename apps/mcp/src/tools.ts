@@ -575,7 +575,7 @@ const queuedMessages = (projection: OrchestrationV2ThreadProjection): typeof Que
 const make = Effect.gen(function* () {
   const environments = yield* Environments;
   const crypto = yield* Crypto.Crypto;
-  const uuid = crypto.randomUUIDv4.pipe(Effect.orDie);
+  const uuid = crypto.randomUUIDv4().pipe(Effect.orDie);
   const commandId = uuid.pipe(Effect.map(CommandId.make));
   const now = DateTime.now.pipe(Effect.map(DateTime.formatIso));
   const targets = (serverId: string | null | undefined) =>
