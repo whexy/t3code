@@ -18,12 +18,20 @@
 # then installs frozen: a filtered install that resolves on its own
 # re-resolves upstream packages too, and those drifts break the web typecheck.
 #
-# Needs the secret `ghcr_token`: a classic token of whexy's with
-# `write:packages`.
+# Needs the secret `ghcr_token`, a classic token of whexy's with
+# `write:packages`, and the CI cache's `ci_cache_access_key` and
+# `ci_cache_secret_key`.
 variables:
+  # The cache plugin is amd64-only, and every step runs on the clone's node.
+  - &amd64
+    kubernetes:
+      nodeSelector:
+        kubernetes.io/arch: amd64
   # Typecheck and the web build outgrow the LimitRange's 2Gi step default.
   - &node_resources
     kubernetes:
+      nodeSelector:
+        kubernetes.io/arch: amd64
       resources:
         requests:
           cpu: "4"
@@ -57,6 +65,8 @@ variables:
   # The step runs a Docker daemon and buildkit beside the build.
   - &image_resources
     kubernetes:
+      nodeSelector:
+        kubernetes.io/arch: amd64
       resources:
         requests:
           cpu: "2"
@@ -64,6 +74,20 @@ variables:
         limits:
           cpu: "4"
           memory: 6Gi
+  # pnpm's registry metadata, which also records that the lockfile passed the
+  # supply-chain check. The package store stays out: restoring its files takes
+  # longer than downloading them. The committed apps/mcp importer need not be
+  # current, so its package.json is hashed too.
+  - &pnpm_cache
+    key: 'pnpm-metadata-{{ arch }}-{{ hashFiles "pnpm-lock.yaml" "apps/mcp/package.json" }}'
+    restore_keys:
+      - "pnpm-metadata-{{ arch }}-"
+    paths:
+      - .pnpm-cache
+    access_key:
+      from_secret: ci_cache_access_key
+    secret_key:
+      from_secret: ci_cache_secret_key
   # A pull request's branch is the one it merges into, so only the event keeps
   # its runs from publishing.
   - &publish
@@ -75,14 +99,24 @@ when:
   branch: self-hosted
 
 # Upstream vendors `.repos/alchemy-effect` with gitlinks but no .gitmodules
-# entries, so a recursive submodule update fails; the build needs none.
+# entries, so a recursive submodule update fails; the build needs none. The
+# clone's pod binds the local-path workspace to its node, and every later step
+# follows it there, so it asks for what the node steps need.
 clone:
   - name: git
     image: woodpeckerci/plugin-git
+    backend_options: *node_resources
     settings:
       recursive: false
 
 steps:
+  - name: restore-pnpm
+    image: ghcr.io/whexy/ci-cache:0.1.0-alpha.3
+    backend_options: *amd64
+    settings:
+      <<: *pnpm_cache
+      mode: restore
+
   - name: install
     image: node:24
     backend_options: *node_resources
@@ -90,8 +124,17 @@ steps:
       # Resolving the whole workspace's lockfile outgrows Node's default heap.
       NODE_OPTIONS: --max-old-space-size=6144
     commands:
-      - corepack pnpm install --lockfile-only
-      - corepack pnpm install --frozen-lockfile --filter=@t3tools/scripts... --filter=@t3tools/web... --filter=@t3tools/mcp...
+      - corepack pnpm install --lockfile-only --cache-dir .pnpm-cache
+      - corepack pnpm install --frozen-lockfile --cache-dir .pnpm-cache --filter=@t3tools/scripts... --filter=@t3tools/web... --filter=@t3tools/mcp...
+      # The cache key hashes the committed lockfile, which the install rewrites.
+      - git restore pnpm-lock.yaml
+
+  - name: save-pnpm
+    image: ghcr.io/whexy/ci-cache:0.1.0-alpha.3
+    backend_options: *amd64
+    settings:
+      <<: *pnpm_cache
+      mode: save
 
   - name: web
     image: node:24
