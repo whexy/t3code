@@ -4,7 +4,9 @@
 # pushes, and on a manual run from the UI. Each image is pushed right after its
 # own checks, web first: a failed web check publishes nothing, while a failed
 # bridge check comes after the web image is out. Either way the image whose
-# checks failed keeps its last version serving until the patch is fixed.
+# checks failed keeps its last version serving until the patch is fixed, and a
+# push's failure is reported to T3 Code, which starts an agent run to repair
+# the branch.
 #
 # A pull request into `self-hosted` runs the same install and checks but no
 # image step, so a change is validated without publishing anything.
@@ -19,8 +21,9 @@
 # re-resolves upstream packages too, and those drifts break the web typecheck.
 #
 # Needs the secret `ghcr_token`, a classic token of whexy's with
-# `write:packages`, and the CI cache's `ci_cache_access_key` and
-# `ci_cache_secret_key`.
+# `write:packages`, the CI cache's `ci_cache_access_key` and
+# `ci_cache_secret_key`, and `t3_repair_webhook`, a T3 Code scheduled task's
+# webhook URL.
 variables:
   # The cache plugin is amd64-only, and every step runs on the clone's node.
   - &amd64
@@ -181,3 +184,14 @@ steps:
       repo: ghcr.io/whexy/t3code-mcp
       dockerfile: scripts/self-hosted/mcp.Dockerfile
       context: .sync/mcp-image
+
+  - name: report-failure
+    image: node:24
+    when:
+      - <<: *publish
+        status: failure
+    environment:
+      T3_REPAIR_WEBHOOK:
+        from_secret: t3_repair_webhook
+    commands:
+      - node scripts/self-hosted/report-failure.ts build

@@ -6,11 +6,13 @@
 # pushed back, which starts self-hosted-build.yaml. Nightlies and unreleased
 # upstream commits do not trigger builds. An unchanged stable tag ends the run
 # without pushing. A failed rebase pushes nothing, so the last image keeps
-# serving until the patch is fixed. The push is leased on the commit this run
-# started from, so a patch pushed meanwhile is never overwritten.
+# serving until the patch is fixed, and reports the failure to T3 Code, which
+# starts an agent run to repair the branch. The push is leased on the commit
+# this run started from, so a patch pushed meanwhile is never overwritten.
 #
 # Pushes as the `whexy-bot` GitHub App through the secrets `github_app_id`,
-# `github_app_installation_id`, and `github_app_private_key`.
+# `github_app_installation_id`, and `github_app_private_key`. Reports through
+# the secret `t3_repair_webhook`, a T3 Code scheduled task's webhook URL.
 when:
   event: cron
 
@@ -36,6 +38,7 @@ steps:
         from_secret: github_app_private_key
     commands:
       - release_tag="$(node scripts/self-hosted/stable-release.ts)"
+      - mkdir -p .sync && printf '%s' "$release_tag" > .sync/release-tag
       - git fetch --no-tags https://github.com/pingdotgg/t3code.git +refs/heads/main:refs/remotes/upstream/main "+refs/tags/$release_tag:refs/remotes/upstream/stable"
       - release_sha="$(git rev-parse 'refs/remotes/upstream/stable^{commit}')"
       # The merge base excludes upstream commits when moving an existing main-based fork to stable.
@@ -50,3 +53,15 @@ steps:
       - git rebase --onto "$release_sha" "$upstream_base"
       - token="$(node scripts/self-hosted/github-app-token.ts)"
       - git push --force-with-lease="self-hosted:$CI_COMMIT_SHA" "https://x-access-token:$token@github.com/${CI_REPO}.git" HEAD:self-hosted
+
+  - name: report-failure
+    image: node:24
+    when:
+      status: failure
+    environment:
+      T3_REPAIR_WEBHOOK:
+        from_secret: t3_repair_webhook
+    commands:
+      # A conflict stops the rebase before the fork's later commits, this script's among them.
+      - git rebase --abort 2>/dev/null || true
+      - node scripts/self-hosted/report-failure.ts sync
