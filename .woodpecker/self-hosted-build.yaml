@@ -127,8 +127,8 @@ steps:
       # Resolving the whole workspace's lockfile outgrows Node's default heap.
       NODE_OPTIONS: --max-old-space-size=6144
     commands:
-      - corepack pnpm install --lockfile-only --cache-dir .pnpm-cache
-      - corepack pnpm install --frozen-lockfile --cache-dir .pnpm-cache --filter=@t3tools/scripts... --filter=@t3tools/web... --filter=@t3tools/mcp...
+      - corepack pnpm install --lockfile-only --config.cache-dir=.pnpm-cache
+      - corepack pnpm install --frozen-lockfile --config.cache-dir=.pnpm-cache --filter=@t3tools/scripts... --filter=@t3tools/web... --filter=@t3tools/mcp...
       # The cache key hashes the committed lockfile, which the install rewrites.
       - git restore pnpm-lock.yaml
 
