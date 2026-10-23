@@ -81,12 +81,10 @@ function pairedServers(servers: Map<string, ExecutionEnvironmentDescriptor | nul
   );
   const registry = Registry.of({
     state: Effect.succeed({
-      secret: "secret",
       publicUrl: null,
       servers: [...servers.keys()].map(record),
     }),
     update: () => Effect.die("unused"),
-    rotateSecret: Effect.die("unused"),
   });
   const services = Layer.mergeAll(
     Layer.succeed(HttpClient.HttpClient, httpClient),

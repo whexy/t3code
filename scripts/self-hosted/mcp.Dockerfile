@@ -1,8 +1,10 @@
 # Build context: `bin.mjs`, the MCP bridge bundled by `vp pack` in apps/mcp.
 # The self-hosted build pipeline assembles it.
 #
-# Port 8787 serves MCP at /mcp/<secret> and may be published. Port 8788 is the
-# admin page, which shows that secret and can pair servers: keep it private.
+# Port 8787 serves MCP at /mcp, only behind the Cloudflare Access application
+# named by T3_MCP_ACCESS_TEAM_DOMAIN and T3_MCP_ACCESS_AUD, which the bridge
+# needs to start. Port 8788 is the admin page, which can pair servers: keep it
+# private.
 FROM node:24-alpine
 WORKDIR /app
 COPY bin.mjs ./

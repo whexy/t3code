@@ -298,20 +298,23 @@ waiting. After a failure, inspect current status before retrying.
 ## Running
 
 ```sh
-node apps/mcp/src/bin.ts --data-dir /data --host 0.0.0.0 --admin-host 0.0.0.0
+node apps/mcp/src/bin.ts --data-dir /data --host 0.0.0.0 --admin-host 0.0.0.0 \
+  --access-team-domain example.cloudflareaccess.com --access-aud <aud-tag>
 ```
 
-| Flag           | Environment         | Default       | Purpose                           |
-| -------------- | ------------------- | ------------- | --------------------------------- |
-| `--data-dir`   | `T3_MCP_DATA_DIR`   | `t3-mcp-data` | Paired servers and the MCP secret |
-| `--host`       | `T3_MCP_HOST`       | `127.0.0.1`   | Interface for the MCP endpoint    |
-| `--port`       | `T3_MCP_PORT`       | `8787`        | Port for the MCP endpoint         |
-| `--admin-host` | `T3_MCP_ADMIN_HOST` | `127.0.0.1`   | Interface for the admin page      |
-| `--admin-port` | `T3_MCP_ADMIN_PORT` | `8788`        | Port for the admin page           |
+| Flag                   | Environment                 | Default       | Purpose                                    |
+| ---------------------- | --------------------------- | ------------- | ------------------------------------------ |
+| `--data-dir`           | `T3_MCP_DATA_DIR`           | `t3-mcp-data` | Paired servers and their tokens            |
+| `--host`               | `T3_MCP_HOST`               | `127.0.0.1`   | Interface for the MCP endpoint             |
+| `--port`               | `T3_MCP_PORT`               | `8787`        | Port for the MCP endpoint                  |
+| `--admin-host`         | `T3_MCP_ADMIN_HOST`         | `127.0.0.1`   | Interface for the admin page               |
+| `--admin-port`         | `T3_MCP_ADMIN_PORT`         | `8788`        | Port for the admin page                    |
+| `--access-team-domain` | `T3_MCP_ACCESS_TEAM_DOMAIN` | required      | Cloudflare Access team domain              |
+| `--access-aud`         | `T3_MCP_ACCESS_AUD`         | required      | AUD tag of the Access application in front |
 
 The bridge keeps its state in `<data-dir>/state.json`, readable only by its
 owner. It holds a bearer token for every paired server, so back it up like a
-secret. The first start generates the MCP secret.
+secret.
 
 `vp pack` in this directory bundles the bridge into one file, `dist/bin.mjs`,
 which needs only Node. `scripts/self-hosted/mcp.Dockerfile` wraps it in an image
@@ -319,10 +322,14 @@ that keeps state in `/data` and listens on all interfaces.
 
 The two listeners have different audiences:
 
-- The MCP port is the one to publish, for example through a Cloudflare tunnel.
-  Only `/mcp/<secret>` answers there. ChatGPT connectors cannot send custom
-  headers, so the secret in the path is the bridge's credential.
-- The admin port must stay private: it shows the MCP URL and can pair servers.
+- The MCP port is the one to publish, through a Cloudflare tunnel behind a
+  Cloudflare Access application with Managed OAuth on. Only `/mcp` answers
+  there, and only to requests carrying an Access assertion for that
+  application, so a request that reaches the port without passing Access is
+  refused. MCP clients that speak OAuth, such as ChatGPT and Claude
+  connectors, register with Access and sign you in through its identity
+  provider; other clients send an Access service token.
+- The admin port must stay private: it can pair servers.
   Reach it over your tailnet or `kubectl port-forward`. It refuses form posts
   from other sites.
 
@@ -330,10 +337,9 @@ The two listeners have different audiences:
 
 Open the admin port in a browser.
 
-- **MCP endpoint** shows the URL to give ChatGPT once you enter the public URL
-  the bridge is reached at. In ChatGPT, add a custom connector (developer mode)
-  with that URL and no authentication. **Rotate secret** issues a new URL and
-  stops the old one immediately.
+- **MCP endpoint** shows the URL to give your MCP client once you enter the
+  public URL the bridge is reached at. In ChatGPT or Claude, add a custom
+  connector with that URL and OAuth, leaving the client ID and secret empty.
 - **T3 servers** lists every paired server with its status, token expiry, and
   the permissions its token holds on that server. Edit a server's id or name, disable it to hide it from the tools without
   forgetting its token, re-pair it, or remove it. Changes apply to the next
