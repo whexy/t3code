@@ -25,7 +25,7 @@ const escape = (value: string) =>
     (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]!,
   );
 
-const mcpUrl = (state: BridgeState) => `${state.publicUrl ?? ""}/mcp/${state.secret}`;
+const mcpUrl = (state: BridgeState) => `${state.publicUrl ?? ""}/mcp`;
 
 function healthLabel(health: ServerHealth | undefined, nowMs: number) {
   switch (health?.status) {
@@ -231,7 +231,7 @@ function renderPage(input: {
     state.publicUrl === null
       ? `<p class="banner warn">Set the public URL below to see the full MCP endpoint.</p>`
       : `<div class="copy"><input id="endpoint" readonly value="${escape(mcpUrl(state))}" aria-label="MCP endpoint"><button type="button" class="primary" onclick="navigator.clipboard.writeText(document.getElementById('endpoint').value).then(()=>{this.textContent='Copied';setTimeout(()=>{this.textContent='Copy'},1500)})">Copy</button></div>
-  <p class="hint">In ChatGPT, add a custom connector (developer mode) with this URL and no authentication. The path secret is the credential.</p>`;
+  <p class="hint">In ChatGPT or Claude, add a custom connector with this URL and OAuth, leaving the client ID and secret empty. The connector registers with Cloudflare Access, which signs you in.</p>`;
 
   return `<!doctype html>
 <html lang="en">
@@ -259,12 +259,7 @@ ${input.error ? `<p class="banner bad" role="alert">${escape(input.error)}</p>` 
       <label>Public URL <input name="publicUrl" type="url" value="${escape(state.publicUrl ?? "")}" placeholder="https://t3-mcp.example.com"></label>
       <button>Save</button>
     </form>
-    <p class="hint">The MCP listener is <code>${escape(input.mcpListen)}</code>. Route only <code>/mcp/</code> on your public hostname to it.</p>
-    <hr class="divider">
-    <div class="panel-foot">
-      <p class="hint">Issues a new endpoint URL. The current one stops working immediately.</p>
-      ${button("/secret", "Rotate secret", {}, { confirm: "Rotate the secret? The current MCP URL stops working immediately.", variant: "danger" })}
-    </div>
+    <p class="hint">The MCP listener is <code>${escape(input.mcpListen)}</code>. Route only <code>/mcp</code> on your public hostname to it, behind the Cloudflare Access application the bridge checks.</p>
   </div>
 </section>
 
@@ -414,22 +409,11 @@ const routes = (mcpListen: string) =>
         ).pipe(Effect.as("Saved the public URL.")),
       ),
     ),
-    HttpRouter.add(
-      "POST",
-      "/secret",
-      Registry.use((registry) => registry.rotateSecret).pipe(
-        Effect.match({
-          onSuccess: () =>
-            back({ notice: "Rotated the secret. Update the MCP URL in your MCP clients." }),
-          onFailure: (error) => back({ error: error.message }),
-        }),
-      ),
-    ),
   );
 
 /**
- * The page shows the MCP secret and can pair servers, so it never caches or
- * frames, and a form post from another site is refused.
+ * The page can pair servers, so it never caches or frames, and a form post
+ * from another site is refused.
  */
 const AdminGuard = HttpRouter.middleware()((httpEffect) =>
   Effect.gen(function* () {

@@ -7,10 +7,15 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import { FetchHttpClient, HttpBody, HttpClient, HttpClientRequest } from "effect/http";
 
+import { CloudflareAccess } from "./cloudflareAccess.ts";
 import * as Server from "./server.ts";
-import { BridgeState } from "./registry.ts";
 
-const decodeState = Schema.decodeUnknownSync(Schema.fromJsonString(BridgeState));
+const ASSERTION = "assertion-from-access";
+/** Stands in for Access: only `ASSERTION` verifies. */
+const access = Layer.succeed(
+  CloudflareAccess,
+  CloudflareAccess.of({ verify: (assertion) => Effect.succeed(assertion === ASSERTION) }),
+);
 const decodeTools = Schema.decodeUnknownSync(
   Schema.fromJsonString(
     Schema.Struct({
@@ -45,6 +50,25 @@ const decodeResponse = Schema.decodeUnknownSync(
 
 const statusOf = (url: string) =>
   HttpClient.get(url).pipe(Effect.map((response) => response.status));
+const initialize = (endpoint: string, assertion?: string) =>
+  HttpClient.execute(
+    HttpClientRequest.post(endpoint).pipe(
+      HttpClientRequest.setHeaders({
+        accept: "application/json, text/event-stream",
+        ...(assertion === undefined ? {} : { "cf-access-jwt-assertion": assertion }),
+      }),
+      HttpClientRequest.bodyJsonUnsafe({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-06-18",
+          capabilities: {},
+          clientInfo: { name: "test", version: "1" },
+        },
+      }),
+    ),
+  );
 
 describe("bridge listeners", () => {
   it.effect("keeps the admin page off the public MCP listener", () =>
@@ -59,30 +83,18 @@ describe("bridge listeners", () => {
           dataDir,
           mcp: { host: "127.0.0.1", port: mcpPort },
           admin: { host: "127.0.0.1", port: adminPort },
-        }),
+        }).pipe(Layer.provide(access)),
       );
       const mcp = `http://127.0.0.1:${mcpPort}`;
       const admin = `http://127.0.0.1:${adminPort}`;
       expect(yield* statusOf(`${admin}/`)).toBe(200);
+      expect(yield* statusOf(`${admin}/mcp`)).toBe(404);
       expect(yield* statusOf(`${mcp}/`)).toBe(404);
       expect(yield* statusOf(`${mcp}/servers/pair`)).toBe(404);
-      const { secret } = decodeState(yield* fileSystem.readFileString(`${dataDir}/state.json`));
-      const endpoint = `${mcp}/mcp/${secret}`;
-      const initialized = yield* HttpClient.execute(
-        HttpClientRequest.post(endpoint).pipe(
-          HttpClientRequest.setHeader("accept", "application/json, text/event-stream"),
-          HttpClientRequest.bodyJsonUnsafe({
-            jsonrpc: "2.0",
-            id: 1,
-            method: "initialize",
-            params: {
-              protocolVersion: "2025-06-18",
-              capabilities: {},
-              clientInfo: { name: "test", version: "1" },
-            },
-          }),
-        ),
-      );
+      const endpoint = `${mcp}/mcp`;
+      expect((yield* initialize(endpoint)).status).toBe(401);
+      expect((yield* initialize(endpoint, "forged")).status).toBe(401);
+      const initialized = yield* initialize(endpoint, ASSERTION);
       expect(initialized.status).toBe(200);
       yield* initialized.text;
       const request = (id: number, method: string, params: unknown) =>
@@ -90,6 +102,7 @@ describe("bridge listeners", () => {
           HttpClientRequest.post(endpoint).pipe(
             HttpClientRequest.setHeaders({
               accept: "application/json, text/event-stream",
+              "cf-access-jwt-assertion": ASSERTION,
               "mcp-session-id": initialized.headers["mcp-session-id"]!,
               "mcp-protocol-version": "2025-06-18",
             }),
@@ -120,9 +133,6 @@ describe("bridge listeners", () => {
       );
       expect(called.result.isError).toBe(true);
       expect(called.result.content[0]?.text).toContain("Unknown server_id");
-      // A GET on the MCP route answers 405 only for the current secret.
-      expect(yield* statusOf(`${mcp}/mcp/not-the-secret`)).toBe(404);
-      expect(yield* statusOf(`${admin}/mcp/not-the-secret`)).toBe(404);
     }).pipe(
       Effect.scoped,
       Effect.provide(Layer.mergeAll(NodeServices.layer, NetService.layer, FetchHttpClient.layer)),
@@ -142,13 +152,15 @@ it.effect("discovers and calls get_usage through the MCP HTTP protocol", () =>
         dataDir,
         mcp: { host: "127.0.0.1", port: mcpPort },
         admin: { host: "127.0.0.1", port: adminPort },
-      }),
+      }).pipe(Layer.provide(access)),
     );
-    const state = decodeState(yield* fileSystem.readFileString(`${dataDir}/state.json`));
-    const endpoint = `http://127.0.0.1:${mcpPort}/mcp/${state.secret}`;
+    const endpoint = `http://127.0.0.1:${mcpPort}/mcp`;
     const client = yield* HttpClient.HttpClient;
     const initialized = yield* client.post(endpoint, {
-      headers: { accept: "application/json, text/event-stream" },
+      headers: {
+        accept: "application/json, text/event-stream",
+        "cf-access-jwt-assertion": ASSERTION,
+      },
       body: HttpBody.jsonUnsafe({
         jsonrpc: "2.0",
         id: 1,
@@ -167,6 +179,7 @@ it.effect("discovers and calls get_usage through the MCP HTTP protocol", () =>
       const response = yield* client.post(endpoint, {
         headers: {
           accept: "application/json, text/event-stream",
+          "cf-access-jwt-assertion": ASSERTION,
           "mcp-session-id": sessionId,
           "mcp-protocol-version": "2025-06-18",
         },
@@ -206,7 +219,9 @@ it.effect("discovers and calls get_usage through the MCP HTTP protocol", () =>
       arguments: { since_day: "2026-09-31", until_day: "2026-09-30", time_zone: "UTC" },
     });
     expect(invalid.result).toMatchObject({ isError: true });
-    yield* client.del(endpoint, { headers: { "mcp-session-id": sessionId } });
+    yield* client.del(endpoint, {
+      headers: { "cf-access-jwt-assertion": ASSERTION, "mcp-session-id": sessionId },
+    });
   }).pipe(
     Effect.scoped,
     Effect.provide(Layer.mergeAll(NodeServices.layer, NetService.layer, FetchHttpClient.layer)),

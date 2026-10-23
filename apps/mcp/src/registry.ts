@@ -1,5 +1,4 @@
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -30,11 +29,6 @@ export const ServerRecord = Schema.Struct({
 export type ServerRecord = typeof ServerRecord.Type;
 
 export const BridgeState = Schema.Struct({
-  /**
-   * The MCP endpoint is `/mcp/<secret>`. ChatGPT connectors cannot send
-   * custom headers, so the URL itself is the bridge's credential.
-   */
-  secret: Schema.String,
   /** Public origin MCP clients reach the bridge at, shown with the endpoint URL. */
   publicUrl: Schema.NullOr(Schema.String),
   servers: Schema.Array(ServerRecord),
@@ -157,7 +151,6 @@ export class Registry extends Context.Service<
     readonly update: (
       change: (state: BridgeState) => Result.Result<BridgeState, string>,
     ) => Effect.Effect<BridgeState, RegistryError>;
-    readonly rotateSecret: Effect.Effect<BridgeState, RegistryError>;
   }
 >()("@t3tools/mcp/registry") {}
 
@@ -168,15 +161,7 @@ export const layer = (dataDir: string) =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const crypto = yield* Crypto.Crypto;
       const file = path.join(dataDir, "state.json");
-      const newSecret = crypto
-        .randomBytes(24)
-        .pipe(
-          Effect.map((bytes) =>
-            Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(""),
-          ),
-        );
       const write = (state: BridgeState) =>
         Effect.gen(function* () {
           yield* fileSystem.writeFileString(`${file}.tmp`, yield* encodeState(state), {
@@ -190,7 +175,7 @@ export const layer = (dataDir: string) =>
       if (yield* fileSystem.exists(file)) {
         initial = yield* decodeState(yield* fileSystem.readFileString(file));
       } else {
-        initial = { secret: yield* newSecret, publicUrl: null, servers: [] };
+        initial = { publicUrl: null, servers: [] };
         yield* write(initial);
       }
       const current = yield* Ref.make(initial);
@@ -217,12 +202,6 @@ export const layer = (dataDir: string) =>
             }),
             Semaphore.withPermit(lock),
           ),
-        rotateSecret: Effect.gen(function* () {
-          const secret = yield* newSecret.pipe(
-            Effect.mapError(() => new RegistryError({ message: "Could not generate a secret." })),
-          );
-          return yield* commit({ ...(yield* Ref.get(current)), secret });
-        }).pipe(Semaphore.withPermit(lock)),
       });
     }),
   );

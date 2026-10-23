@@ -25,7 +25,7 @@ const pairing = (environmentId: string, name: string, token = "token-1"): Pairin
   expiresAt: "2026-10-28T12:00:00.000Z",
 });
 
-const empty: BridgeState = { secret: "s".repeat(48), publicUrl: null, servers: [] };
+const empty: BridgeState = { publicUrl: null, servers: [] };
 
 const ok = (result: Result.Result<BridgeState, string>) => {
   if (Result.isFailure(result)) throw new Error(result.failure);
@@ -98,14 +98,11 @@ describe("server registry", () => {
       const fileSystem = yield* FileSystem.FileSystem;
       const dataDir = yield* fileSystem.makeTempDirectoryScoped();
       const first = yield* Registry.pipe(Effect.provide(layer(dataDir)));
-      const { secret } = yield* first.state;
       yield* first.update((state) => addServer(state, pairing("env-a", "Studio")));
       const file = yield* fileSystem.stat(`${dataDir}/state.json`);
       const restarted = yield* Registry.pipe(Effect.provide(layer(dataDir)));
-      expect(secret).toMatch(/^[0-9a-f]{48}$/);
       expect(file.mode & 0o777).toBe(0o600);
       expect(yield* restarted.state).toMatchObject({
-        secret,
         servers: [expect.objectContaining({ id: "studio" })],
       });
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
