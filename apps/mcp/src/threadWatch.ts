@@ -9,14 +9,19 @@ import * as Stream from "effect/Stream";
 
 import { BridgeError } from "./errors.ts";
 
-/** The first projection, from the subscription's snapshot and replayed events, that is `ready`. */
+/**
+ * The first projection, from the subscription's snapshot and replayed events,
+ * that is `ready`. With `withinMs`, waiting stops after that long and the
+ * latest projection comes back with `settled: false`.
+ */
 export const waitForThreadState = <E, R>(
   updates: Stream.Stream<OrchestrationV2ThreadStreamItem, E, R>,
   ready: (projection: OrchestrationV2ThreadProjection) => boolean,
+  withinMs?: number,
 ) =>
   Effect.suspend(() => {
     let current: OrchestrationV2ThreadProjection | null = null;
-    return updates.pipe(
+    const settled = updates.pipe(
       Stream.map((item) => {
         if (item.kind === "snapshot") current = item.projection;
         if (item.kind === "event")
@@ -36,7 +41,24 @@ export const waitForThreadState = <E, R>(
                 message: "The session subscription ended before the session was ready.",
               }),
             ),
+          onSome: (projection) => Effect.succeed({ projection, settled: true }),
+        }),
+      ),
+    );
+    if (withinMs === undefined) return settled;
+    return settled.pipe(
+      Effect.timeoutOption(withinMs),
+      Effect.flatMap(
+        Option.match({
           onSome: Effect.succeed,
+          onNone: () =>
+            current === null
+              ? Effect.fail(
+                  new BridgeError({
+                    message: "The session subscription sent no snapshot in time.",
+                  }),
+                )
+              : Effect.succeed({ projection: current, settled: false }),
         }),
       ),
     );

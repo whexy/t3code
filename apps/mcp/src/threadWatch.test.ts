@@ -40,7 +40,7 @@ describe("waitForThreadState", () => {
         ]),
         prepared,
       );
-      expect(result.runs.map((candidate) => candidate.status)).toEqual(["running"]);
+      expect(result.projection.runs.map((candidate) => candidate.status)).toEqual(["running"]);
     }),
   );
 
@@ -51,7 +51,7 @@ describe("waitForThreadState", () => {
         Stream.succeed({ kind: "snapshot", snapshotSequence: 3, projection: deleted }),
         (current) => current.thread.deletedAt !== null,
       );
-      expect(result.thread.deletedAt).not.toBeNull();
+      expect(result.projection.thread.deletedAt).not.toBeNull();
     }),
   );
 

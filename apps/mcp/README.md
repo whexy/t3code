@@ -35,7 +35,9 @@ It exposes these tools:
   messages, as T3 Code's UI does. See [Controlling work](#controlling-work).
 - `get_session_status`: reports state, recent agent messages and tool
   activity, files changed, queued messages, and pending questions or approvals.
-  Pass back the returned `cursor` to get only newer updates.
+  Pass back the returned `cursor` to get only newer updates, and `wait: true`
+  to hear when the agent finishes. See
+  [Following a session](#following-a-session).
 - `respond_to_session`: submits the user's answers to a pending question, or
   their explicit decision on a pending approval. See
   [Questions and approvals](#questions-and-approvals).
@@ -378,6 +380,23 @@ bridge uses it again on the next call; there is nothing to re-enable.
   user's response and submit it with `respond_to_session` or in T3 Code.
 - The bridge logs every session it creates, with its server, project, agent,
   model, and reasoning effort, and every message it sends, without the text.
+
+## Following a session
+
+MCP clients cannot be called back, so they ask. `get_session_status` with
+`wait: true` holds the call until the work underway when it began ends, or
+the agent needs an approval or an answer, and then reports. A message queued
+after the wait began does not extend it. After about 45 seconds it returns
+anyway, with `timed_out: true` and the progress so far; call it again with
+the returned `cursor` to keep waiting. ChatGPT drops a tool call after about
+a minute and reports that as an error rather than as work still running, so
+one call cannot wait for a whole turn. A client that stops asking loses
+nothing: the agent keeps working, and the next status reports what happened.
+
+Every status carries `next_step`, one sentence on what to do with it: wait
+again, ask the user, or report the answer. `create_session`,
+`send_session_message`, and `respond_to_session` return one too, pointing at
+the wait.
 
 ## Follow-up messages
 
