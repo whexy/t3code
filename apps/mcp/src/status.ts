@@ -10,8 +10,11 @@ import {
 } from "@t3tools/client-runtime/state/thread-execution";
 import { derivePendingThreadRequests } from "@t3tools/client-runtime/state/thread-requests";
 import * as DateTime from "effect/DateTime";
+import * as Result from "effect/Result";
 
 const MAX_MESSAGE_CHARS = 4_000;
+/** One read_session_message page: the rest of a typical long reply in one or two calls. */
+const READ_CHUNK_CHARS = 12_000;
 const MAX_ACTIVITY_CHARS = 240;
 const MAX_CHANGED_FILES = 20;
 
@@ -31,6 +34,10 @@ export interface SessionUpdate {
   readonly text: string;
   readonly streaming?: true;
   readonly truncated?: true;
+  /** A cut message: read the rest with read_session_message from `next_offset`. */
+  readonly item_id?: string;
+  readonly length?: number;
+  readonly next_offset?: number;
 }
 
 const iso = DateTime.formatIso;
@@ -63,29 +70,45 @@ function toolText(item: OrchestrationV2TurnItem): string | null {
   }
 }
 
-/** Messages and the timeline entries worth narrating; tool starts and reasoning are noise. */
-function itemUpdate(item: OrchestrationV2TurnItem): SessionUpdate | null {
+/** The text of a turn item that status reports as a message. */
+function messageOf(item: OrchestrationV2TurnItem) {
   switch (item.type) {
     case "user_message":
-      return {
-        at: iso(item.updatedAt),
-        type: "user_message",
-        ...cut(item.text, MAX_MESSAGE_CHARS),
-      };
+      return { type: "user_message" as const, text: item.text };
     case "assistant_message":
       return {
-        // A streaming message grows in place; its updatedAt moves it past the cursor again.
-        at: iso(item.updatedAt),
-        type: "assistant_message",
-        ...cut(item.text, MAX_MESSAGE_CHARS),
+        type: "assistant_message" as const,
+        text: item.text,
         ...(item.streaming ? { streaming: true as const } : {}),
       };
     case "system_notice":
-      return {
-        at: iso(item.updatedAt),
-        type: "system_message",
-        ...cut(item.message, MAX_MESSAGE_CHARS),
-      };
+      return { type: "system_message" as const, text: item.message };
+    default:
+      return null;
+  }
+}
+
+/** Messages and the timeline entries worth narrating; tool starts and reasoning are noise. */
+function itemUpdate(item: OrchestrationV2TurnItem): SessionUpdate | null {
+  const message = messageOf(item);
+  if (message !== null) {
+    const { text, ...rest } = message;
+    return {
+      // A streaming message grows in place; its updatedAt moves it past the cursor again.
+      at: iso(item.updatedAt),
+      ...rest,
+      ...(text.length > MAX_MESSAGE_CHARS
+        ? {
+            text: `${text.slice(0, MAX_MESSAGE_CHARS)}…`,
+            truncated: true as const,
+            item_id: item.id,
+            length: text.length,
+            next_offset: MAX_MESSAGE_CHARS,
+          }
+        : { text }),
+    };
+  }
+  switch (item.type) {
     case "approval_request":
       return {
         at: iso(item.startedAt ?? item.updatedAt),
@@ -259,4 +282,37 @@ export function summarizeSession(
     omitted_updates: fresh.length - updates.length,
     cursor: fresh.at(-1)?.at ?? options.cursor ?? iso(projection.updatedAt),
   };
+}
+
+/**
+ * One page of a message status cut short, from `offset`. Status ids come from
+ * the same bounded window, so a miss means the message has since aged out.
+ */
+export function readMessage(
+  projection: OrchestrationV2ThreadProjection,
+  itemId: string,
+  offset: number,
+) {
+  const row = projection.visibleTurnItems.find(
+    (candidate) => candidate.visibility === "local" && candidate.item.id === itemId,
+  );
+  const message = row === undefined ? null : messageOf(row.item);
+  if (message === null) {
+    return Result.fail(
+      `Message ${itemId} is not in this session's recent history. Call get_session_status for current updates.`,
+    );
+  }
+  const { text, ...rest } = message;
+  if (offset > text.length) {
+    return Result.fail(`offset ${offset} is past the message's end; its length is ${text.length}.`);
+  }
+  const end = Math.min(offset + READ_CHUNK_CHARS, text.length);
+  return Result.succeed({
+    item_id: itemId,
+    ...rest,
+    text: text.slice(offset, end),
+    offset,
+    length: text.length,
+    next_offset: end < text.length ? end : null,
+  });
 }

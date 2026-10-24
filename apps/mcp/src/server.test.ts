@@ -122,6 +122,7 @@ describe("bridge listeners", () => {
         "inspect_project",
         "list_projects",
         "list_sessions",
+        "read_session_message",
         "respond_to_session",
         "send_session_message",
       ]);

@@ -133,3 +133,57 @@ describe("get_session_status wait", () => {
     }),
   );
 });
+
+describe("read_session_message", () => {
+  const long = Array.from({ length: 3_000 }, (_, line) => `line ${line}\n`).join("");
+  const server = () =>
+    threadServer(
+      projection({
+        runs: [finishedOne],
+        items: [user, assistantMessage("reply", long, 20)],
+      }),
+    );
+  const read = (offset?: number, item_id = "reply") =>
+    callTool("read_session_message", {
+      server_id: "home",
+      session_id: threadId,
+      item_id,
+      ...(offset === undefined ? {} : { offset }),
+    });
+
+  it.effect("continues a message status cut short until next_offset is null", () =>
+    Effect.gen(function* () {
+      const status = yield* callTool("get_session_status", {
+        server_id: "home",
+        session_id: threadId,
+      });
+      const cut = status.updates.at(-1)!;
+      expect(cut).toMatchObject({
+        type: "assistant_message",
+        truncated: true,
+        item_id: "reply",
+        length: long.length,
+        next_offset: 4_000,
+      });
+      expect(status.next_step).toContain("read_session_message");
+
+      let text = cut.text.slice(0, -1);
+      let offset: number | null = cut.next_offset!;
+      while (offset !== null) {
+        const page: { readonly text: string; readonly next_offset: number | null } =
+          yield* read(offset);
+        expect(page).toMatchObject({ type: "assistant_message", offset, length: long.length });
+        text += page.text;
+        offset = page.next_offset;
+      }
+      expect(text).toBe(long);
+    }).pipe(Effect.provide(server().layer)),
+  );
+
+  it.effect("rejects a message outside the session's history and an offset past its end", () =>
+    Effect.gen(function* () {
+      expect((yield* Effect.flip(read(0, "missing"))).message).toContain("recent history");
+      expect((yield* Effect.flip(read(long.length + 1))).message).toContain("past the message");
+    }).pipe(Effect.provide(server().layer)),
+  );
+});

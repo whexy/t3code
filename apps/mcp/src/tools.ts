@@ -41,7 +41,14 @@ import { BridgeError, Environments } from "./environment.ts";
 import { InspectProjectTool, inspectProject } from "./inspect.ts";
 import { findSessions } from "./sessions.ts";
 import { GetUsageTool, getUsage } from "./usage.ts";
-import { latestCursor, summarizeSession, threadState, type SessionState } from "./status.ts";
+import {
+  latestCursor,
+  readMessage,
+  summarizeSession,
+  threadState,
+  type SessionState,
+  type SessionUpdate,
+} from "./status.ts";
 
 const DEFAULT_UPDATE_LIMIT = 10;
 const DEFAULT_SESSION_LIMIT = 10;
@@ -261,6 +268,9 @@ const SessionStatusResult = Schema.Struct({
       text: Schema.String,
       streaming: Schema.optional(Schema.Literal(true)),
       truncated: Schema.optional(Schema.Literal(true)),
+      item_id: Schema.optional(Schema.String),
+      length: Schema.optional(Schema.Int),
+      next_offset: Schema.optional(Schema.Int),
     }),
   ),
   omitted_updates: Schema.Int,
@@ -471,7 +481,7 @@ const ControlSessionTool = Tool.make("control_session", {
 
 const GetSessionStatusTool = Tool.make("get_session_status", {
   description:
-    "Report how a coding session is going: its state, what the agent recently said and did, the files its latest turn changed, and queued_messages, every message on the thread still waiting for its turn (from this bridge or T3 Code), each with state waiting (runs after the active turn) or held (held by a stop; release it with control_session resume_queue). state is queued, starting, or running while the agent works; waiting when it needs an approval or an answer (waiting_for lists them; show the user the actual question or approval, get their explicit response, then submit it with respond_to_session); and completed, interrupted, failed, or idle once its turn is over. To learn when the agent finishes, pass wait: true: the call returns as soon as the work underway when it began ends or the agent needs the user, and otherwise after about 45 seconds with timed_out true and the progress so far; call again with wait: true and the returned cursor to keep waiting. If you stop waiting, the session keeps working and you can check back later. Pass the cursor from the previous call to receive only newer updates. next_step says what to do with the result.",
+    "Report how a coding session is going: its state, what the agent recently said and did, the files its latest turn changed, and queued_messages, every message on the thread still waiting for its turn (from this bridge or T3 Code), each with state waiting (runs after the active turn) or held (held by a stop; release it with control_session resume_queue). state is queued, starting, or running while the agent works; waiting when it needs an approval or an answer (waiting_for lists them; show the user the actual question or approval, get their explicit response, then submit it with respond_to_session); and completed, interrupted, failed, or idle once its turn is over. To learn when the agent finishes, pass wait: true: the call returns as soon as the work underway when it began ends or the agent needs the user, and otherwise after about 45 seconds with timed_out true and the progress so far; call again with wait: true and the returned cursor to keep waiting. If you stop waiting, the session keeps working and you can check back later. Pass the cursor from the previous call to receive only newer updates. A message update marked truncated was cut short: read the rest with read_session_message from its next_offset. next_step says what to do with the result.",
   parameters: Schema.Struct({
     server_id: ServerIdInput,
     session_id: SessionIdInput,
@@ -494,6 +504,38 @@ const GetSessionStatusTool = Tool.make("get_session_status", {
   failure: BridgeError,
 })
   .annotate(Tool.Title, "Check a coding session")
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true)
+  .annotate(Tool.OpenWorld, false);
+
+const ReadSessionMessageTool = Tool.make("read_session_message", {
+  description:
+    "Read the rest of a message get_session_status cut short (an update marked truncated). Pass its item_id and next_offset as offset, then keep passing the returned next_offset until it is null. Offsets count UTF-16 code units. A message still streaming can grow; streaming true means more may follow. Only messages in the session's recent history can be read.",
+  parameters: Schema.Struct({
+    server_id: ServerIdInput,
+    session_id: SessionIdInput,
+    item_id: TextInput("item_id of a truncated update from get_session_status."),
+    offset: optionalInput(
+      Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).annotate({
+        description: "Where to start: next_offset from the update or the previous page. Default 0.",
+      }),
+    ),
+  }),
+  success: Schema.Struct({
+    server_id: Schema.String,
+    session_id: Schema.String,
+    item_id: Schema.String,
+    type: Schema.Literals(["user_message", "assistant_message", "system_message"]),
+    text: Schema.String,
+    offset: Schema.Int,
+    length: Schema.Int,
+    next_offset: Schema.NullOr(Schema.Int),
+    streaming: Schema.optional(Schema.Literal(true)),
+  }),
+  failure: BridgeError,
+})
+  .annotate(Tool.Title, "Read a long session message")
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true)
@@ -550,6 +592,7 @@ export const BridgeToolkit = Toolkit.make(
   SendSessionMessageTool,
   ControlSessionTool,
   GetSessionStatusTool,
+  ReadSessionMessageTool,
   RespondToSessionTool,
 );
 
@@ -619,17 +662,8 @@ const elapsed = (startedAt: string, nowMs: number) => {
   return seconds < 90 ? `${seconds} s` : `${Math.round(seconds / 60)} min`;
 };
 
-/**
- * One sentence on what to do with a status. Clients follow a result more
- * readily than a tool description read at connection; without it they guess
- * how long to sleep between checks, or when to stop.
- */
-function nextStep(
-  status: { readonly state: SessionState; readonly turn: { readonly started_at: string } | null },
-  nowMs: number,
-) {
-  const startedAt = status.turn?.started_at;
-  switch (status.state) {
+function stateStep(state: SessionState, startedAt: string | undefined, nowMs: number) {
+  switch (state) {
     case "queued":
     case "starting":
     case "running":
@@ -645,6 +679,25 @@ function nextStep(
     case "idle":
       return "The session is idle. send_session_message starts a new turn.";
   }
+}
+
+/**
+ * One sentence on what to do with a status. Clients follow a result more
+ * readily than a tool description read at connection; without it they guess
+ * how long to sleep between checks, or when to stop.
+ */
+function nextStep(
+  status: {
+    readonly state: SessionState;
+    readonly turn: { readonly started_at: string } | null;
+    readonly updates: ReadonlyArray<SessionUpdate>;
+  },
+  nowMs: number,
+) {
+  const step = stateStep(status.state, status.turn?.started_at, nowMs);
+  return status.updates.some((update) => update.next_offset !== undefined)
+    ? `${step} Updates marked truncated continue with read_session_message from their next_offset.`
+    : step;
 }
 
 /** next_step for a result that starts or resumes the agent's work. */
@@ -1250,6 +1303,19 @@ const make = Effect.gen(function* () {
           ...summary,
           ...(input.wait === true ? { timed_out: !settled } : {}),
           next_step: nextStep(summary, DateTime.toEpochMillis(yield* DateTime.now)),
+        };
+      }),
+
+    read_session_message: (input) =>
+      Effect.gen(function* () {
+        const environment = yield* environments.get(input.server_id);
+        const projection = yield* environment.thread(ThreadId.make(input.session_id));
+        const page = readMessage(projection, input.item_id, input.offset ?? 0);
+        if (Result.isFailure(page)) return yield* new BridgeError({ message: page.failure });
+        return {
+          server_id: environment.id,
+          session_id: projection.thread.id,
+          ...page.success,
         };
       }),
   });

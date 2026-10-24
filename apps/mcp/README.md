@@ -38,6 +38,8 @@ It exposes these tools:
   Pass back the returned `cursor` to get only newer updates, and `wait: true`
   to hear when the agent finishes. See
   [Following a session](#following-a-session).
+- `read_session_message`: reads the rest of a message that
+  `get_session_status` cut short.
 - `respond_to_session`: submits the user's answers to a pending question, or
   their explicit decision on a pending approval. See
   [Questions and approvals](#questions-and-approvals).
@@ -397,6 +399,14 @@ Every status carries `next_step`, one sentence on what to do with it: wait
 again, ask the user, or report the answer. `create_session`,
 `send_session_message`, and `respond_to_session` return one too, pointing at
 the wait.
+
+Status cuts each message at 4,000 characters, so one call stays small. A cut
+message is marked `truncated` and carries `item_id`, its full `length`, and
+`next_offset`. Pass `item_id` and `next_offset` as `offset` to
+`read_session_message`, which returns up to 12,000 characters and the next
+`next_offset`, `null` at the end. Offsets count UTF-16 code units. Only
+messages in the session's recent history, roughly its last ten turns, can be
+read.
 
 ## Follow-up messages
 
