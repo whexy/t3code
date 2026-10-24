@@ -285,20 +285,29 @@ const makeEnvironment = Effect.fn("makeEnvironment")(function* (entry: ServerRec
       client[ORCHESTRATION_V2_WS_METHODS.launchThread](input),
     ).pipe(Effect.map((result) => result.projection));
 
-  /** Snapshot + replay through the clients' projection reducer, with no polling. */
+  /**
+   * Snapshot + replay through the clients' projection reducer, with no polling.
+   * The snapshot is the same bounded window `thread` reads, so repeated waits
+   * on a long session do not ship its whole history.
+   */
   const waitForThread = (
     threadId: ThreadId,
     ready: (projection: OrchestrationV2ThreadProjection) => boolean,
+    withinMs?: number,
   ) =>
     rpc(
       "watch thread",
       `T3 server "${entry.id}" could not watch the session.`,
       (client) =>
         waitForThreadState(
-          client[ORCHESTRATION_V2_WS_METHODS.subscribeThread]({ threadId }),
+          client[ORCHESTRATION_V2_WS_METHODS.subscribeThread]({
+            threadId,
+            acceptBoundedSnapshot: true,
+          }),
           ready,
+          withinMs,
         ),
-      WORKTREE_SETUP_TIMEOUT_MS,
+      withinMs === undefined ? WORKTREE_SETUP_TIMEOUT_MS : withinMs + REQUEST_TIMEOUT_MS,
     );
 
   return {

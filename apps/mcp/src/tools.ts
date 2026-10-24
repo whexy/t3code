@@ -10,6 +10,7 @@ import {
   SourceControlProviderKind,
   ThreadId,
   TrimmedNonEmptyString,
+  type OrchestrationV2Run,
   type OrchestrationV2ThreadLaunchWorkspaceStrategy,
   type OrchestrationV2ThreadProjection,
 } from "@t3tools/contracts";
@@ -40,10 +41,16 @@ import { BridgeError, Environments } from "./environment.ts";
 import { InspectProjectTool, inspectProject } from "./inspect.ts";
 import { findSessions } from "./sessions.ts";
 import { GetUsageTool, getUsage } from "./usage.ts";
-import { latestCursor, summarizeSession, threadState } from "./status.ts";
+import { latestCursor, summarizeSession, threadState, type SessionState } from "./status.ts";
 
 const DEFAULT_UPDATE_LIMIT = 10;
 const DEFAULT_SESSION_LIMIT = 10;
+/**
+ * How long get_session_status waits. ChatGPT drops a tool call after about
+ * 60 s and reports it as an error, not as work still running, so a wait must
+ * return before that with a status the client can act on.
+ */
+const WAIT_MS = 45_000;
 /** Tokens last 30 days; a week's notice lets the chat remind the user to re-pair. */
 const TOKEN_WARNING_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -157,6 +164,7 @@ const CreateSessionResult = Schema.Struct({
   state: Schema.Literal("queued"),
   branch: Schema.NullOr(Schema.String),
   worktree_path: Schema.NullOr(Schema.String),
+  next_step: Schema.String,
 });
 
 const SendSessionMessageResult = Schema.Struct({
@@ -167,6 +175,7 @@ const SendSessionMessageResult = Schema.Struct({
   delivery: Schema.Literals(["new_turn", "during_turn", "steered", "queued"]),
   message_id: Schema.String,
   cursor: Schema.String,
+  next_step: Schema.String,
 });
 
 /** The thread's queue: waiting runs after the active turn; held waits for resume_queue. */
@@ -256,6 +265,8 @@ const SessionStatusResult = Schema.Struct({
   ),
   omitted_updates: Schema.Int,
   cursor: Schema.String,
+  timed_out: Schema.optional(Schema.Boolean),
+  next_step: Schema.String,
 });
 
 const ListProjectsTool = Tool.make("list_projects", {
@@ -386,7 +397,7 @@ const CheckoutInput = Schema.Union([
 
 const CreateSessionTool = Tool.make("create_session", {
   description:
-    "Start a coding agent on a project. T3 Code creates a new session (thread) and runs the agent in the selected checkout with the project's configured permission mode; the agent keeps working after this returns. Write task as a complete, self-contained instruction for the coding agent. Omit agent and model to use the project's default; otherwise pass values from list_projects (spoken names such as \"Claude\" or \"opus\" also match). Omit reasoning_effort to keep the project's or model's default; to choose one, pass a reasoning_efforts value that list_projects reports for the same agent and model. Values the selected model does not support are rejected before anything starts. Omit checkout for the existing default: use the project checkout untouched, even if project settings prefer worktrees. checkout selects local (optionally switch/create branch), worktree (new isolated worktree from required base_branch), or existing_worktree (reuse a checked-out branch). Local switching affects other sessions sharing that checkout and T3 rejects Git conflicts. Worktree preparation uses T3 setup, path allocation, submodule settings, and conflict handling; it can take minutes. A timeout can leave preparation running: inspect list_sessions before retrying. Follow progress with get_session_status, and continue the same session with send_session_message.",
+    "Start a coding agent on a project. T3 Code creates a new session (thread) and runs the agent in the selected checkout with the project's configured permission mode; the agent keeps working after this returns. Write task as a complete, self-contained instruction for the coding agent. Omit agent and model to use the project's default; otherwise pass values from list_projects (spoken names such as \"Claude\" or \"opus\" also match). Omit reasoning_effort to keep the project's or model's default; to choose one, pass a reasoning_efforts value that list_projects reports for the same agent and model. Values the selected model does not support are rejected before anything starts. Omit checkout for the existing default: use the project checkout untouched, even if project settings prefer worktrees. checkout selects local (optionally switch/create branch), worktree (new isolated worktree from required base_branch), or existing_worktree (reuse a checked-out branch). Local switching affects other sessions sharing that checkout and T3 rejects Git conflicts. Worktree preparation uses T3 setup, path allocation, submodule settings, and conflict handling; it can take minutes. A timeout can leave preparation running: inspect list_sessions before retrying. Follow progress with get_session_status and wait: true, and continue the same session with send_session_message.",
   parameters: Schema.Struct({
     server_id: ServerIdInput,
     project_id: TextInput("project_id from list_projects or create_project."),
@@ -411,7 +422,7 @@ const CreateSessionTool = Tool.make("create_session", {
 
 const SendSessionMessageTool = Tool.make("send_session_message", {
   description:
-    "Send a message to an existing session, preserving its history, agent, and model. mode steer is T3's Send now: steer the active turn using the provider's mid-turn behavior (delivery steered), which may incorporate input in place or interrupt and restart the turn with it; the server rejects it while the turn is still starting or when the provider cannot steer. mode queue is T3's Queue: T3 holds the message and runs it as the next turn once the active turn ends (delivery queued); it never enters the current turn. Queued messages wait on the server, survive bridge restarts, appear in T3 Code, and are listed in get_session_status queued_messages along with those queued there. Either mode starts a new turn when idle, completed, interrupted, or failed (delivery new_turn). While waiting for approval or an answer, queue waits for the turn to end; steer refuses. Omit mode (or pass null) for T3's default send: steer the active turn when the provider can (delivery during_turn), otherwise queue it (delivery queued), refusing while waiting. Dispatch is asynchronous: delivery describes routing, not provider completion; follow progress with get_session_status and the returned cursor.",
+    "Send a message to an existing session, preserving its history, agent, and model. mode steer is T3's Send now: steer the active turn using the provider's mid-turn behavior (delivery steered), which may incorporate input in place or interrupt and restart the turn with it; the server rejects it while the turn is still starting or when the provider cannot steer. mode queue is T3's Queue: T3 holds the message and runs it as the next turn once the active turn ends (delivery queued); it never enters the current turn. Queued messages wait on the server, survive bridge restarts, appear in T3 Code, and are listed in get_session_status queued_messages along with those queued there. Either mode starts a new turn when idle, completed, interrupted, or failed (delivery new_turn). While waiting for approval or an answer, queue waits for the turn to end; steer refuses. Omit mode (or pass null) for T3's default send: steer the active turn when the provider can (delivery during_turn), otherwise queue it (delivery queued), refusing while waiting. Dispatch is asynchronous: delivery describes routing, not provider completion; follow progress with get_session_status, wait: true, and the returned cursor.",
   parameters: Schema.Struct({
     server_id: ServerIdInput,
     session_id: SessionIdInput,
@@ -460,12 +471,18 @@ const ControlSessionTool = Tool.make("control_session", {
 
 const GetSessionStatusTool = Tool.make("get_session_status", {
   description:
-    "Report queued_messages, every message on the thread still waiting for its turn (from this bridge or T3 Code), each with state waiting (runs after the active turn) or held (held by a stop; release it with control_session resume_queue), and how a coding session is going: its state, what the agent recently said and did, and the files its latest turn changed. state is queued, starting, running, waiting (the agent needs an approval or an answer: waiting_for lists them; show the user the actual question or approval, get their explicit response, then submit it with respond_to_session), completed, interrupted, failed, or idle. Pass the cursor from the previous call to receive only newer updates.",
+    "Report how a coding session is going: its state, what the agent recently said and did, the files its latest turn changed, and queued_messages, every message on the thread still waiting for its turn (from this bridge or T3 Code), each with state waiting (runs after the active turn) or held (held by a stop; release it with control_session resume_queue). state is queued, starting, or running while the agent works; waiting when it needs an approval or an answer (waiting_for lists them; show the user the actual question or approval, get their explicit response, then submit it with respond_to_session); and completed, interrupted, failed, or idle once its turn is over. To learn when the agent finishes, pass wait: true: the call returns as soon as the work underway when it began ends or the agent needs the user, and otherwise after about 45 seconds with timed_out true and the progress so far; call again with wait: true and the returned cursor to keep waiting. If you stop waiting, the session keeps working and you can check back later. Pass the cursor from the previous call to receive only newer updates. next_step says what to do with the result.",
   parameters: Schema.Struct({
     server_id: ServerIdInput,
     session_id: SessionIdInput,
     cursor: optionalInput(
       Schema.String.annotate({ description: "cursor from the previous get_session_status call." }),
+    ),
+    wait: optionalInput(
+      Schema.Boolean.annotate({
+        description:
+          "Wait up to about 45 seconds for the agent to finish its turn or need the user before reporting. Default false reports immediately.",
+      }),
     ),
     limit: optionalInput(
       Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 50 })).annotate({
@@ -488,6 +505,7 @@ const RequestResponseResult = Schema.Struct({
   request_id: Schema.String,
   accepted: Schema.Literal(true),
   cursor: Schema.String,
+  next_step: Schema.String,
 });
 
 const RespondToSessionTool = Tool.make("respond_to_session", {
@@ -571,6 +589,67 @@ const queuedMessages = (projection: OrchestrationV2ThreadProjection): typeof Que
     message_id: run.userMessageId,
     state: run.queueHeld === true ? "held" : "waiting",
   }));
+
+/** Runs doing work, or due to start it without anyone acting; a held queue waits for resume_queue. */
+const WORKING_RUN_STATUSES = new Set(["queued", "preparing", "starting", "running"]);
+const isWorking = (run: OrchestrationV2Run) =>
+  WORKING_RUN_STATUSES.has(run.status) && run.queueHeld !== true;
+const WORKING_STATES = new Set<SessionState>(["queued", "starting", "running"]);
+
+/**
+ * What get_session_status waits for: the work underway when the wait began
+ * has ended, or the agent needs the user. Watching those runs, not only the
+ * state, ends the wait with the turn even when a message queued later starts
+ * right after it.
+ */
+function turnEnded() {
+  let watched: ReadonlySet<string> | undefined;
+  return (projection: OrchestrationV2ThreadProjection) => {
+    const started = (watched ??= new Set(projection.runs.filter(isWorking).map((run) => run.id)));
+    if (!WORKING_STATES.has(threadState(projection))) return true;
+    return (
+      started.size > 0 && !projection.runs.some((run) => started.has(run.id) && isWorking(run))
+    );
+  };
+}
+
+/** How long the latest turn has run, for a client to narrate. */
+const elapsed = (startedAt: string, nowMs: number) => {
+  const seconds = Math.max(0, Math.round((nowMs - Date.parse(startedAt)) / 1000));
+  return seconds < 90 ? `${seconds} s` : `${Math.round(seconds / 60)} min`;
+};
+
+/**
+ * One sentence on what to do with a status. Clients follow a result more
+ * readily than a tool description read at connection; without it they guess
+ * how long to sleep between checks, or when to stop.
+ */
+function nextStep(
+  status: { readonly state: SessionState; readonly turn: { readonly started_at: string } | null },
+  nowMs: number,
+) {
+  const startedAt = status.turn?.started_at;
+  switch (status.state) {
+    case "queued":
+    case "starting":
+    case "running":
+      return `The agent is still working${startedAt === undefined ? "" : ` (${elapsed(startedAt, nowMs)} so far)`}. To hear when it finishes, call get_session_status again with wait: true and this cursor. If you stop waiting, it keeps working and you can check back later.`;
+    case "waiting":
+      return "The agent needs the user: show them each request in waiting_for, get their explicit response, and submit it with respond_to_session.";
+    case "completed":
+      return "The agent finished its turn. Its answer is the latest assistant_message; tell the user.";
+    case "interrupted":
+      return "The turn was stopped. send_session_message continues the session.";
+    case "failed":
+      return "The turn failed; error says why. Tell the user; send_session_message can try again.";
+    case "idle":
+      return "The session is idle. send_session_message starts a new turn.";
+  }
+}
+
+/** next_step for a result that starts or resumes the agent's work. */
+const WAIT_STEP =
+  "To hear when the agent finishes, call get_session_status with wait: true, passing back each returned cursor.";
 
 const make = Effect.gen(function* () {
   const environments = yield* Environments;
@@ -852,12 +931,12 @@ const make = Effect.gen(function* () {
         // leaves preparation once the checkout and its setup are done or failed.
         const prepared =
           checkout?.mode === "worktree" && runId !== undefined
-            ? yield* environment.waitForThread(
+            ? (yield* environment.waitForThread(
                 threadId,
                 (projection) =>
                   projection.thread.deletedAt !== null ||
                   projection.runs.some((run) => run.id === runId && run.status !== "preparing"),
-              )
+              )).projection
             : launched;
         if (prepared.thread.deletedAt !== null) {
           return yield* new BridgeError({
@@ -893,6 +972,7 @@ const make = Effect.gen(function* () {
           branch: prepared.thread.branch ?? branch,
           worktree_path: prepared.thread.worktreePath,
           state: "queued" as const,
+          next_step: WAIT_STEP,
         };
       }),
 
@@ -957,6 +1037,7 @@ const make = Effect.gen(function* () {
           message_id: messageId,
           // Taken before the send, so the next status includes the message and all that follows.
           cursor: latestCursor(projection),
+          next_step: WAIT_STEP,
         };
       }),
 
@@ -1138,14 +1219,23 @@ const make = Effect.gen(function* () {
           request_id: input.request_id,
           accepted: true as const,
           cursor: latestCursor(projection),
+          next_step: WAIT_STEP,
         };
       }),
 
     get_session_status: (input) =>
       Effect.gen(function* () {
         const environment = yield* environments.get(input.server_id);
-        const projection = yield* environment.thread(ThreadId.make(input.session_id));
+        const threadId = ThreadId.make(input.session_id);
+        const { projection, settled } =
+          input.wait === true
+            ? yield* environment.waitForThread(threadId, turnEnded(), WAIT_MS)
+            : { projection: yield* environment.thread(threadId), settled: true };
         const thread = projection.thread;
+        const summary = summarizeSession(projection, {
+          cursor: input.cursor ?? undefined,
+          limit: input.limit ?? DEFAULT_UPDATE_LIMIT,
+        });
         return {
           server_id: environment.id,
           session_id: thread.id,
@@ -1157,10 +1247,9 @@ const make = Effect.gen(function* () {
           queued_messages: queuedMessages(projection),
           branch: thread.branch,
           worktree_path: thread.worktreePath,
-          ...summarizeSession(projection, {
-            cursor: input.cursor ?? undefined,
-            limit: input.limit ?? DEFAULT_UPDATE_LIMIT,
-          }),
+          ...summary,
+          ...(input.wait === true ? { timed_out: !settled } : {}),
+          next_step: nextStep(summary, DateTime.toEpochMillis(yield* DateTime.now)),
         };
       }),
   });
