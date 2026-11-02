@@ -15,7 +15,7 @@
 
 let
   sources = lib.importJSON ./sources.json;
-  # nix/update-sources.sh carries the same system-to-name table.
+  # nix/update-sources.sh pins every system listed here.
   platforms = {
     x86_64-linux = {
       name = "linux-x64";
@@ -248,7 +248,12 @@ stdenv.mkDerivation (finalAttrs: {
   versionCheckProgramArg = "--version";
 
   passthru = {
-    inherit node pnpm resourceMonitor;
+    inherit
+      node
+      pnpm
+      resourceMonitor
+      platforms
+      ;
     # Every system's: what pnpm fetches depends only on the platforms it is
     # told to take, so nix/update-sources.sh pins them all from one machine.
     pnpmDepsFor = lib.mapAttrs (
