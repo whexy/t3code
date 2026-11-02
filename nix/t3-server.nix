@@ -106,9 +106,10 @@ let
         );
   };
 
+  # Versioned by its own crate, so a nightly that leaves it alone reuses the cached build.
   resourceMonitor = rustPlatform.buildRustPackage {
     pname = "t3-resource-monitor";
-    inherit (sources) version;
+    inherit ((lib.importTOML ../native/resource-monitor/Cargo.toml).package) version;
     src = fs.toSource {
       root = root + "/native/resource-monitor";
       fileset = root + "/native/resource-monitor";
