@@ -40,6 +40,10 @@ const describePolicy = (
   return `${lines.join("\n")}\n`;
 };
 
+// whexy/t3code fork: the per-user policy file replaces the machine's, so name the file that applies.
+const describePathOverride = (path: string) =>
+  `${ManagedPolicy.pathOverrideVariable} names ${path} in place of this machine's policy.`;
+
 /** Whether the server running from this T3 home loaded the installed policy, which waits for a restart. */
 export const describeRunningServer = Effect.fn("cli.policy.describeRunningServer")(function* (
   statePath: string,
@@ -81,7 +85,13 @@ const showCommand = Command.make("show", projectLocationFlags).pipe(
         ),
       );
       const installed = yield* ManagedPolicy.loadedPolicy(policy);
-      yield* Console.log(describePolicy(policy, installed));
+      const override = yield* ManagedPolicy.pathOverride;
+      yield* Console.log(
+        Option.isSome(override) && policy.document === undefined
+          ? `No policy file at ${override.value}. Every setting belongs to the user.\n`
+          : describePolicy(policy, installed),
+      );
+      if (Option.isSome(override)) yield* Console.log(describePathOverride(override.value));
       const config = yield* resolveCliAuthConfig(flags, yield* GlobalFlag.LogLevel);
       yield* Console.log(yield* describeRunningServer(config.serverRuntimeStatePath, installed));
     }),
@@ -103,6 +113,8 @@ const checkCommand = Command.make("check", {
       }
       const policy = yield* ManagedPolicy.load(file);
       yield* Console.log(describePolicy(policy, yield* ManagedPolicy.loadedPolicy(policy)));
+      const override = yield* ManagedPolicy.pathOverride;
+      if (Option.isSome(override)) yield* Console.log(describePathOverride(override.value));
     }),
   ),
 );
