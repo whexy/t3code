@@ -1,0 +1,215 @@
+# Builds the `t3` server archive for the hosts whexy/dotfiles installs it on
+# (x86_64-linux and aarch64-darwin) and publishes both as a GitHub release.
+# Runs on every push to `self-hosted-nightly`, which includes the rebases onto
+# each new upstream nightly that .woodpecker/self-hosted-sync.yaml pushes. A
+# pull request into the branch builds and checks the archives but publishes
+# nothing. Woodpecker has no macOS agents, so this one lives on GitHub Actions.
+#
+# The release tag is `v<upstream version>-self-hosted.<run number>`; the
+# archives keep upstream's names and the version inside them is upstream's, so
+# only the tag tells two builds of one nightly apart. `hashes.json` beside them
+# carries the Nix SRI hash of each archive for fetchurl. A published release is
+# never rebuilt in place, because rebuilt archives would not match its hashes.
+name: Self-hosted server
+
+on:
+  push:
+    branches: [self-hosted-nightly]
+  pull_request:
+    branches: [self-hosted-nightly]
+  workflow_dispatch:
+
+concurrency:
+  group: self-hosted-server-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    name: Resolve version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      # The sync rebases the fork's commits onto an upstream nightly tag, so the
+      # newest first-parent ancestor that upstream tagged nightly is the base.
+      - id: version
+        name: Resolve the upstream nightly this commit builds on
+        run: |
+          set -euo pipefail
+          git init -q .
+          git fetch -q --no-tags --depth=50 "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git" "$GITHUB_SHA"
+          git ls-remote https://github.com/pingdotgg/t3code.git 'refs/tags/v*-nightly.*' |
+            sed -nE 's#^([0-9a-f]+)\trefs/tags/(v[^^]+)(\^\{\})?$#\1 \2#p' > "$RUNNER_TEMP/nightly-tags"
+          tag=""
+          for commit in $(git rev-list --first-parent FETCH_HEAD); do
+            tag="$(awk -v commit="$commit" '$1 == commit { print $2; exit }' "$RUNNER_TEMP/nightly-tags")"
+            [[ -n "$tag" ]] && break
+          done
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-nightly\.[0-9]{8}\.[0-9]+$ ]]; then
+            echo "No upstream nightly tag within 50 first-parent commits of $GITHUB_SHA." >&2
+            exit 1
+          fi
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}-self-hosted.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+          echo "Builds upstream ${tag} as ${tag}-self-hosted.${GITHUB_RUN_NUMBER}."
+
+  build:
+    name: Build ${{ matrix.key }}
+    needs: resolve
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - key: linux-x64
+            runner: ubuntu-24.04
+            platform: linux
+            arch: x64
+            rust_target: x86_64-unknown-linux-gnu
+          - key: darwin-arm64
+            runner: macos-15
+            platform: mac
+            arch: arm64
+            rust_target: aarch64-apple-darwin
+    env:
+      VERSION: ${{ needs.resolve.outputs.version }}
+      # Matches upstream's nightly builds, which the policy override must not depend on.
+      T3CODE_TELEMETRY_CHANNEL: nightly
+    steps:
+      # checkout's credential cleanup trips over the orphaned gitlinks in .repos.
+      - name: Checkout
+        run: |
+          set -euo pipefail
+          git init -q .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git fetch -q --no-tags --depth=1 origin "$GITHUB_SHA"
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git -c checkout.workers=0 checkout -q --detach FETCH_HEAD
+
+      - name: Setup dependencies
+        uses: ./.github/actions/setup-ci-deps
+        with:
+          install-args: --filter=t3... --filter=@t3tools/scripts...
+
+      - name: Test the policy override
+        if: matrix.platform == 'linux'
+        run: vp test run apps/server/src/policy/ManagedPolicyPathOverride.test.ts
+
+      - name: Cache resource monitor
+        id: resource_monitor_cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: native/resource-monitor/target/${{ matrix.rust_target }}/release/t3-resource-monitor
+          key: resource-monitor-${{ matrix.rust_target }}-${{ hashFiles('native/resource-monitor/Cargo.lock', 'native/resource-monitor/Cargo.toml', 'native/resource-monitor/src/**') }}
+
+      - name: Build resource monitor
+        if: steps.resource_monitor_cache.outputs.cache-hit != 'true'
+        run: cargo build --locked --release --manifest-path native/resource-monitor/Cargo.toml --target "${{ matrix.rust_target }}"
+
+      - name: Align package versions to the release version
+        run: node scripts/update-release-package-versions.ts "$VERSION"
+
+      - name: Build server and web client
+        run: |
+          vp run --filter t3 build
+          node scripts/apply-web-brand-assets.ts nightly apps/server/dist/client
+
+      - name: Build CLI single-executable
+        run: node apps/server/scripts/cli.ts build-exe --verbose
+
+      # The Linux archive ships libatomic.so.1 and points t3's RUNPATH at it.
+      - name: Install patchelf
+        if: matrix.platform == 'linux'
+        run: command -v patchelf || { sudo apt-get update && sudo apt-get install -y patchelf; }
+
+      # Without T3CODE_CLI_MAC_SIGN_IDENTITY the script signs ad hoc, which is
+      # all a binary needs when it arrives without a quarantine attribute.
+      - name: Build CLI archive
+        run: |
+          set -euo pipefail
+          monitor="$RUNNER_TEMP/cli-resource-monitor/${{ matrix.key }}"
+          mkdir -p "$monitor"
+          cp "native/resource-monitor/target/${{ matrix.rust_target }}/release/t3-resource-monitor" "$monitor/"
+          node scripts/build-cli-archive.ts \
+            --platform "${{ matrix.platform }}" \
+            --arch "${{ matrix.arch }}" \
+            --version "$VERSION" \
+            --resource-monitor-dir "$RUNNER_TEMP/cli-resource-monitor" \
+            --output-dir release-cli
+
+      - name: Smoke-test CLI archive
+        run: node scripts/smoke-cli-archive.ts --archive release-cli/* --expect-version "$VERSION"
+
+      - name: Check the archive honors the policy override
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/policy-check"
+          mkdir -p "$dir"
+          tar -xzf release-cli/*.tar.gz -C "$dir"
+          printf '{"schemaVersion":1,"organization":"Self-hosted CI"}' > "$dir/policy.json"
+          output="$(T3CODE_DEV_MANAGED_POLICY_PATH="$dir/policy.json" "$dir"/t3-*/t3 policy show --base-dir "$dir/home")"
+          echo "$output"
+          grep -qF "Managed by Self-hosted CI ($dir/policy.json" <<< "$output"
+
+      - name: Upload CLI archive
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: cli-${{ matrix.key }}
+          path: release-cli/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish release
+    needs: [resolve, build]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.resolve.outputs.version }}
+      TAG: ${{ needs.resolve.outputs.tag }}
+    steps:
+      - name: Download CLI archives
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: cli-*
+          path: release-cli
+          merge-multiple: true
+
+      - name: Publish release
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "$TAG is already published; its archives stay as they are."
+            exit 0
+          fi
+          cd release-cli
+          sha256sum t3-*.tar.gz > SHA256SUMS
+          hashes="{}"
+          for archive in t3-*.tar.gz; do
+            key="${archive#t3-"$VERSION"-}"
+            sri="sha256-$(openssl dgst -sha256 -binary "$archive" | base64 -w0)"
+            hashes="$(jq --arg key "${key%.tar.gz}" --arg sri "$sri" '. + {($key): $sri}' <<< "$hashes")"
+          done
+          jq -n --arg version "$VERSION" --arg tag "$TAG" --argjson hashes "$hashes" \
+            '{version: $version, tag: $tag, hashes: $hashes}' > hashes.json
+          cat hashes.json
+          {
+            echo "Upstream nightly v$VERSION with the self-hosted patches, built from $GITHUB_SHA."
+            echo
+            echo '```json'
+            cat hashes.json
+            echo '```'
+          } > "$RUNNER_TEMP/notes.md"
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md" --latest \
+            t3-*.tar.gz SHA256SUMS hashes.json
