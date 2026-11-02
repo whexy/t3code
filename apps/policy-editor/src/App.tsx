@@ -12,6 +12,7 @@ import {
   type LucideIcon,
   MessagesSquareIcon,
   PanelsTopLeftIcon,
+  RefreshCwIcon,
   SaveIcon,
   ShieldCheckIcon,
   ShieldIcon,
@@ -55,6 +56,7 @@ import {
   writeInPlace,
 } from "./policy/files.ts";
 import { isRecord, jsonEqual, setPath } from "./policy/json.ts";
+import { loadRemotePolicy, type RemoteLoad, saveRemotePolicy, sha12 } from "./policy/remote.ts";
 import { type Problem, type ProblemTarget, validatePolicy } from "./policy/validate.ts";
 import { JsonEditor, ProblemList } from "./ui/controls.tsx";
 import { limitAnchor, LimitsSection } from "./ui/LimitsSection.tsx";
@@ -90,6 +92,32 @@ const FRESH: Editing = {
   name: "policy.json",
   handle: undefined,
 };
+
+/** The fleet policy on the server: the version this edit started from, null before the first save. */
+interface Remote {
+  readonly etag: string | null;
+  readonly savedAt: Date | undefined;
+}
+
+function editingFrom(loaded: RemoteLoad): Editing {
+  if (loaded.status !== "saved") return FRESH;
+  const parsed = parsePolicyText(loaded.text);
+  // The server only stores JSON objects, so this holds unless the file was edited by hand.
+  if (!parsed.ok) return FRESH;
+  return {
+    document: parsed.document,
+    opened: { text: loaded.text, document: parsed.document },
+    name: "policy.json",
+    handle: undefined,
+  };
+}
+
+const remoteFrom = (loaded: RemoteLoad): Remote | undefined =>
+  loaded.status === "saved"
+    ? { etag: loaded.etag, savedAt: loaded.savedAt }
+    : loaded.status === "empty"
+      ? { etag: null, savedAt: undefined }
+      : undefined;
 
 const sectionAnchor = (id: string) => `section:${id}`;
 
@@ -130,8 +158,9 @@ function summaryLine(serverRefuses: boolean, errors: number, warnings: number): 
 const scrollTo = (id: string) =>
   document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
 
-export function App() {
-  const [editing, setEditing] = useState<Editing>(FRESH);
+export function App({ initial }: { readonly initial: RemoteLoad }) {
+  const [editing, setEditing] = useState<Editing>(() => editingFrom(initial));
+  const [remote, setRemote] = useState(() => remoteFrom(initial));
   const [notice, setNotice] = useState<{ tone: "error" | "info"; text: string } | undefined>();
   const [pasteOpen, setPasteOpen] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -166,9 +195,11 @@ export function App() {
     });
     setNotice({
       tone: "info",
-      text: file.handle
-        ? `Opened ${file.name}. Save writes back to it.`
-        : `Opened ${file.name}. Save downloads a copy.`,
+      text: remote
+        ? `Opened ${file.name}. Save publishes it as the fleet policy.`
+        : file.handle
+          ? `Opened ${file.name}. Save writes back to it.`
+          : `Opened ${file.name}. Save downloads a copy.`,
     });
   };
 
@@ -178,10 +209,48 @@ export function App() {
     if (file !== undefined) load(file);
   };
 
+  const reload = async () => {
+    if (dirty && !window.confirm("Discard the changes to the current policy?")) return;
+    const loaded = await loadRemotePolicy();
+    if (loaded.status === "unavailable") {
+      return setNotice({ tone: "error", text: "Could not reach the policy server." });
+    }
+    setEditing(editingFrom(loaded));
+    setRemote(remoteFrom(loaded));
+    setNotice({
+      tone: "info",
+      text:
+        loaded.status === "saved"
+          ? `Loaded the fleet policy (${sha12(loaded.etag)}).`
+          : "No fleet policy has been saved yet.",
+    });
+  };
+
+  const publish = async (etag: string | null) => {
+    const result = await saveRemotePolicy(text, etag);
+    switch (result.status) {
+      case "saved":
+        setEditing((current) => ({ ...current, opened: { text, document: current.document } }));
+        setRemote({ etag: result.etag, savedAt: result.savedAt });
+        return setNotice({
+          tone: "info",
+          text: `Saved the fleet policy (${sha12(result.etag)}). Each server applies it the next time it starts.`,
+        });
+      case "conflict":
+        return setNotice({
+          tone: "error",
+          text: "The fleet policy changed elsewhere since you loaded it, so this save was refused. Reload to get the current version.",
+        });
+      case "error":
+        return setNotice({ tone: "error", text: `Could not save: ${result.message}` });
+    }
+  };
+
   const save = async () => {
     if (!verdict.valid && !window.confirm("t3 policy check refuses this policy. Save it anyway?"))
       return;
     try {
+      if (remote !== undefined) return await publish(remote.etag);
       if (editing.handle !== undefined && (await writeInPlace(editing.handle, text))) {
         setEditing((current) => ({ ...current, opened: { text, document: current.document } }));
         return setNotice({ tone: "info", text: `Saved ${editing.name}.` });
@@ -328,11 +397,20 @@ export function App() {
           <div className="mx-auto flex max-w-4xl flex-wrap items-center gap-2 px-4 py-2.5 sm:px-6">
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
-                <span className="truncate text-sm font-medium">{editing.name}</span>
+                <span className="truncate text-sm font-medium">
+                  {remote ? "Fleet policy" : editing.name}
+                </span>
                 {dirty ? (
                   <Badge variant="warning" size="sm">
                     Unsaved
                   </Badge>
+                ) : null}
+                {remote ? (
+                  <span className="truncate text-xs text-muted-foreground">
+                    {remote.etag === null
+                      ? "not saved yet"
+                      : `${sha12(remote.etag)} · saved ${remote.savedAt?.toLocaleString() ?? ""}`}
+                  </span>
                 ) : null}
               </div>
               <button
@@ -357,6 +435,12 @@ export function App() {
                 <FilePlusIcon />
                 New
               </Button>
+              {remote ? (
+                <Button size="sm" variant="ghost" onClick={() => void reload()}>
+                  <RefreshCwIcon />
+                  Reload
+                </Button>
+              ) : null}
               <Button size="sm" variant="ghost" onClick={() => void open()}>
                 <FolderOpenIcon />
                 Open
@@ -371,7 +455,7 @@ export function App() {
               </Button>
               <Button size="sm" onClick={() => void save()}>
                 <SaveIcon />
-                {editing.handle ? "Save" : "Save as…"}
+                {remote || editing.handle ? "Save" : "Save as…"}
               </Button>
             </div>
           </div>
