@@ -1,0 +1,18 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "Preserve",
+    "moduleResolution": "Bundler",
+    "erasableSyntaxOnly": false,
+    "verbatimModuleSyntax": false,
+    "jsx": "react-jsx",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": ["node", "vite/client"],
+    "paths": {
+      // The web app's UI primitives import `cn` from here; its real module pulls in the whole app.
+      "~/lib/utils": ["./src/shims/cn.ts"],
+      "~/*": ["../web/src/*"]
+    }
+  },
+  "include": ["src", "serve.ts", "vite.config.ts"]
+}
