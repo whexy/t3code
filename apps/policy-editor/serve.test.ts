@@ -9,13 +9,14 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { createPolicyEditorServer, POLICY_PATH } from "./serve.ts";
 
-async function startServer(input: { policyDir?: string } = {}) {
+async function startServer(input: { setup?: (policyDir: string) => Promise<void> } = {}) {
   const directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-policy-editor-"));
   const webRoot = NodePath.join(directory, "dist");
-  const policyDir = input.policyDir ?? NodePath.join(directory, "policy");
+  const policyDir = NodePath.join(directory, "policy");
   await NodeFSP.mkdir(webRoot);
-  if (input.policyDir === undefined) await NodeFSP.mkdir(policyDir);
+  await NodeFSP.mkdir(policyDir);
   await NodeFSP.writeFile(NodePath.join(webRoot, "index.html"), "<editor>");
+  await input.setup?.(policyDir);
 
   const server = createPolicyEditorServer({ webRoot, policyDir });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -45,6 +46,7 @@ describe("/policy.json", () => {
     const missing = await fetch(policyUrl);
     expect(missing.status).toBe(404);
     expect(await missing.json()).toEqual({ error: "No policy has been saved yet." });
+    expect((await put(policyUrl, policy("any"), { "If-Match": "*" })).status).toBe(412);
 
     const created = await put(policyUrl, policy("v1"), { "If-None-Match": "*" });
     expect(created.status).toBe(200);
@@ -66,10 +68,11 @@ describe("/policy.json", () => {
       (await put(policyUrl, policy("v3"), { "If-Match": `W/${updated.headers.get("ETag")}` }))
         .status,
     ).toBe(200);
+    expect((await put(policyUrl, policy("v4"), { "If-Match": "*" })).status).toBe(200);
 
     const current = await fetch(policyUrl);
-    expect(await current.text()).toBe(policy("v3"));
-    expect(current.headers.get("ETag")).toBe(etagOf(policy("v3")));
+    expect(await current.text()).toBe(policy("v4"));
+    expect(current.headers.get("ETag")).toBe(etagOf(policy("v4")));
     expect(current.headers.get("Cache-Control")).toBe("no-cache");
   });
 
@@ -83,6 +86,28 @@ describe("/policy.json", () => {
     const read = (name: string) => NodeFSP.readFile(NodePath.join(server.policyDir, name), "utf8");
     expect(await read("policy.json")).toBe(policy("v2"));
     expect(await NodeFSP.readdir(server.policyDir)).toEqual(["policy.json"]);
+  });
+
+  it("cleans up after a failed write, and the next write succeeds", async () => {
+    await using server = await startServer({
+      setup: (policyDir) => NodeFSP.writeFile(NodePath.join(policyDir, "policy.json.1.tmp"), "{"),
+    });
+    const v1 = (await put(server.policyUrl, policy("v1"), { "If-None-Match": "*" })).headers.get(
+      "ETag",
+    )!;
+    expect(await NodeFSP.readdir(server.policyDir)).toEqual(["policy.json"]);
+
+    // A dangling link where the temporary file goes makes opening it fail.
+    await NodeFSP.symlink(
+      NodePath.join(server.policyDir, "missing", "policy.json"),
+      NodePath.join(server.policyDir, `policy.json.${process.pid}.tmp`),
+    );
+    expect((await put(server.policyUrl, policy("v2"), { "If-Match": v1 })).status).toBe(500);
+    expect(await NodeFSP.readdir(server.policyDir)).toEqual(["policy.json"]);
+    expect(await (await fetch(server.policyUrl)).text()).toBe(policy("v1"));
+
+    expect((await put(server.policyUrl, policy("v2"), { "If-Match": v1 })).status).toBe(200);
+    expect(await (await fetch(server.policyUrl)).text()).toBe(policy("v2"));
   });
 
   it("lets exactly one of two concurrent saves from the same version win", async () => {
@@ -129,19 +154,29 @@ describe("/policy.json", () => {
 });
 
 describe("/healthz", () => {
-  it("reports whether POLICY_DIR is writable", async () => {
+  it("reports whether POLICY_DIR is a writable directory", async () => {
     await using writable = await startServer();
     expect((await fetch(`${writable.origin}/healthz`)).status).toBe(200);
 
-    await using missing = await startServer({
-      policyDir: NodePath.join(
-        NodeOS.tmpdir(),
-        `t3-policy-missing-${NodeCrypto.randomUUID()}`,
-        "x",
-      ),
-    });
-    const response = await fetch(`${missing.origin}/healthz`);
-    expect(response.status).toBe(503);
-    expect(((await response.json()) as { error: string }).error).toMatch(/POLICY_DIR/);
+    for (const setup of [
+      (policyDir: string) => NodeFSP.rm(policyDir, { recursive: true }),
+      async (policyDir: string) => {
+        await NodeFSP.rm(policyDir, { recursive: true });
+        await NodeFSP.writeFile(policyDir, "");
+      },
+    ]) {
+      await using broken = await startServer({ setup });
+      const response = await fetch(`${broken.origin}/healthz`);
+      expect(response.status).toBe(503);
+      expect(((await response.json()) as { error: string }).error).toMatch(/POLICY_DIR/);
+    }
+  });
+});
+
+describe("static files", () => {
+  it("serves the editor and answers 404 for paths it cannot decode", async () => {
+    await using server = await startServer();
+    expect(await (await fetch(`${server.origin}/`)).text()).toBe("<editor>");
+    expect((await fetch(`${server.origin}/%E0%A4%A`)).status).toBe(404);
   });
 });

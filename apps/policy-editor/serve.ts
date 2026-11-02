@@ -61,9 +61,10 @@ function fail(
 
 async function handleHealth(response: NodeHttp.ServerResponse, policyDir: string) {
   try {
+    if (!(await NodeFSP.stat(policyDir)).isDirectory()) throw new Error(`${policyDir} is a file`);
     await NodeFSP.access(policyDir, NodeFS.constants.W_OK);
   } catch (error) {
-    fail(response, 503, `POLICY_DIR is not writable: ${(error as Error).message}`);
+    fail(response, 503, `POLICY_DIR is not a writable directory: ${(error as Error).message}`);
     return;
   }
   response.writeHead(200, { "Content-Type": "text/plain" }).end("ok\n");
@@ -94,7 +95,7 @@ async function handlePolicy(
     return;
   }
 
-  // A compressing proxy weakens the ETag; it still hashes exactly one stored version.
+  // Accept the weak form a compressing proxy hands the browser: it still hashes one stored version.
   const ifMatch = request.headers["if-match"]?.replace(/^W\//, "") ?? null;
   const createOnly = request.headers["if-none-match"] === "*";
   if (ifMatch === null && !createOnly) {
@@ -105,9 +106,15 @@ async function handlePolicy(
     );
     return;
   }
-  const raw = await readBody(request);
+  const raw =
+    Number(request.headers["content-length"] ?? 0) > MAX_POLICY_BYTES
+      ? null
+      : await readBody(request);
   if (raw === null) {
-    fail(response, 413, `A policy is at most ${MAX_POLICY_BYTES / 1024} KiB.`);
+    // Closing stops the client sending the rest of a body nobody will read.
+    fail(response, 413, `A policy is at most ${MAX_POLICY_BYTES / 1024} KiB.`, {
+      Connection: "close",
+    });
     return;
   }
   const problem = checkPolicyShape(raw);
@@ -178,7 +185,7 @@ type WriteResult =
 
 interface PolicyStore {
   readonly read: () => Promise<{ raw: string; etag: string; savedAt: Date } | null>;
-  /** `expectedEtag` null means the policy must not exist yet. */
+  /** `expectedEtag` null means the policy must not exist yet, and `*` that it must. */
   readonly write: (raw: string, expectedEtag: string | null) => Promise<WriteResult>;
 }
 
@@ -186,8 +193,18 @@ const sha256Of = (raw: string) => NodeCrypto.createHash("sha256").update(raw).di
 
 function makePolicyStore(directory: string): PolicyStore {
   const currentPath = NodePath.join(directory, "policy.json");
-  // Serializes read-compare-write so two saves can never both match one ETag.
-  let queue: Promise<unknown> = Promise.resolve();
+  const temporaryPath = `${currentPath}.${process.pid}.tmp`;
+  // Serializes read-compare-write so two saves can never both match one ETag. The first task
+  // removes temporary files a crashed process left behind.
+  let queue: Promise<unknown> = NodeFSP.readdir(directory)
+    .then((names) =>
+      Promise.all(
+        names
+          .filter((name) => /^policy\.json\..+\.tmp$/.test(name))
+          .map((name) => NodeFSP.rm(NodePath.join(directory, name), { force: true })),
+      ),
+    )
+    .catch((error: unknown) => console.error(error));
   const exclusive = <A>(task: () => Promise<A>): Promise<A> => {
     const run = queue.then(task, task);
     queue = run.catch(() => undefined);
@@ -210,19 +227,34 @@ function makePolicyStore(directory: string): PolicyStore {
   const write = (raw: string, expectedEtag: string | null) =>
     exclusive(async (): Promise<WriteResult> => {
       const current = await read();
-      if ((current?.etag ?? null) !== expectedEtag) {
-        return { status: "conflict", current: current?.etag ?? null };
-      }
+      const matches =
+        expectedEtag === null
+          ? current === null
+          : expectedEtag === "*"
+            ? current !== null
+            : current?.etag === expectedEtag;
+      if (!matches) return { status: "conflict", current: current?.etag ?? null };
       // Renaming over policy.json is the commit point; hosts never see a partial file.
-      const temporaryPath = `${currentPath}.${process.pid}.tmp`;
-      const file = await NodeFSP.open(temporaryPath, "w");
       try {
-        await file.writeFile(raw);
-        await file.sync();
-      } finally {
-        await file.close();
+        const file = await NodeFSP.open(temporaryPath, "w");
+        try {
+          await file.writeFile(raw);
+          await file.sync();
+        } finally {
+          await file.close();
+        }
+        await NodeFSP.rename(temporaryPath, currentPath);
+      } catch (error) {
+        await NodeFSP.rm(temporaryPath, { force: true });
+        throw error;
       }
-      await NodeFSP.rename(temporaryPath, currentPath);
+      // The rename is durable only once the directory entry is.
+      const directoryHandle = await NodeFSP.open(directory, "r");
+      try {
+        await directoryHandle.sync();
+      } finally {
+        await directoryHandle.close();
+      }
       const sha256 = sha256Of(raw);
       const savedAt = (await NodeFSP.stat(currentPath)).mtime;
       console.log(`policy saved sha=${sha256.slice(0, 12)} size=${Buffer.byteLength(raw)}`);
@@ -242,12 +274,13 @@ async function serveStatic(
     response.writeHead(405, { Allow: "GET, HEAD" }).end();
     return;
   }
-  const path = NodePath.resolve(
-    root,
-    `.${pathname === "/" ? "/index.html" : decodeURIComponent(pathname)}`,
-  );
+  let path: string;
   let body: Buffer;
   try {
+    path = NodePath.resolve(
+      root,
+      `.${pathname === "/" ? "/index.html" : decodeURIComponent(pathname)}`,
+    );
     if (!path.startsWith(`${root}${NodePath.sep}`)) throw new Error("outside the web root");
     body = await NodeFSP.readFile(path);
   } catch {
