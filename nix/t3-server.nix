@@ -1,15 +1,14 @@
 {
   lib,
   stdenv,
-  nodejs_26,
-  pnpm_12,
+  fetchurl,
   fetchPnpmDeps,
   pnpmConfigHook,
+  nodejs-slim,
   rustPlatform,
-  makeWrapper,
+  autoPatchelfHook,
   jq,
-  python3,
-  pkg-config,
+  writableTmpDirAsHomeHook,
   versionCheckHook,
 }:
 
@@ -17,6 +16,52 @@ let
   sources = lib.importJSON ./sources.json;
   root = ../.;
   fs = lib.fileset;
+  rootPackage = lib.importJSON ../package.json;
+  nodeVersion = rootPackage.engines.node;
+  pnpmVersion = lib.removePrefix "pnpm@" rootPackage.packageManager;
+
+  # The Node release upstream builds with. Its pristine binary becomes the
+  # executable's runtime; a patched copy runs the build.
+  nodeDist = fetchurl {
+    url = "https://nodejs.org/dist/v${nodeVersion}/node-v${nodeVersion}-linux-x64.tar.xz";
+    hash = sources.nodeHash;
+  };
+  # autoPatchelf sets the interpreter before the rpath, which leaves Node's
+  # release binary (and an executable built from it) crashing at startup;
+  # setting the rpath first does not.
+  patchNodeBinary = file: ''
+    patchelf --set-rpath ${
+      lib.makeLibraryPath [
+        stdenv.cc.libc
+        stdenv.cc.cc.lib
+      ]
+    } ${file}
+    patchelf --set-interpreter "$(cat $NIX_CC/nix-support/dynamic-linker)" ${file}
+  '';
+  node = stdenv.mkDerivation {
+    pname = "node-bin";
+    version = nodeVersion;
+    src = nodeDist;
+    dontStrip = true;
+    installPhase = ''
+      cp -R . $out
+      ${patchNodeBinary "$out/bin/node"}
+    '';
+  };
+
+  pnpm = stdenv.mkDerivation {
+    pname = "pnpm";
+    version = pnpmVersion;
+    src = fetchurl {
+      url = "https://registry.npmjs.org/@pnpm/exe.linux-x64/-/exe.linux-x64-${pnpmVersion}.tgz";
+      hash = sources.pnpmHash;
+    };
+    nativeBuildInputs = [ autoPatchelfHook ];
+    buildInputs = [ stdenv.cc.cc.lib ];
+    installPhase = "install -Dm755 pnpm $out/bin/pnpm";
+    # fetchPnpmDeps runs its store fixup on this.
+    passthru = { inherit nodejs-slim; };
+  };
 
   # Every workspace project's manifest, so pnpm sees the workspace the lockfile
   # describes; only the projects the server build reads come in whole.
@@ -51,7 +96,6 @@ let
           (root + "/assets")
           (root + "/infra/task-cache/src")
           (root + "/scripts/lib")
-          (root + "/scripts/apply-web-brand-assets.ts")
           (root + "/nix/prune-node-modules.ts")
           (root + "/apps/server")
           (root + "/apps/web")
@@ -89,20 +133,39 @@ stdenv.mkDerivation (finalAttrs: {
       src
       pnpmWorkspaces
       ;
-    pnpm = pnpm_12;
+    inherit pnpm;
     fetcherVersion = 5;
     hash = sources.pnpmDepsHash;
+    # The fetcher takes every platform's packages; this build needs Linux x64's,
+    # including the musl builds some addons pick at runtime.
+    prePnpmInstall = ''
+      export pnpm_config_force_ignores_platform=false
+      yq -i -y '.supportedArchitectures = {os: ["linux"], cpu: ["x64"], libc: ["glibc", "musl"]}' pnpm-workspace.yaml
+    '';
   };
 
   nativeBuildInputs = [
-    nodejs_26
-    pnpm_12
+    node
+    pnpm
     pnpmConfigHook
-    makeWrapper
     jq
-    python3
-    pkg-config
+    autoPatchelfHook
+    writableTmpDirAsHomeHook
   ];
+
+  # The libraries the Node runtime and the native addons link.
+  buildInputs = [ stdenv.cc.cc.lib ];
+
+  # Addons ship musl builds beside the glibc ones and load them only on musl.
+  autoPatchelfIgnoreMissingDeps = [ "libc.musl-*.so.1" ];
+  # The executable is patched in installPhase; only the addons go through here.
+  dontAutoPatchelf = true;
+  postFixup = ''
+    autoPatchelf "$out/libexec/t3code/node_modules"
+  '';
+
+  # Stripping drops the payload a single executable carries.
+  dontStrip = true;
 
   env = {
     # Matches upstream's nightly builds.
@@ -119,27 +182,47 @@ stdenv.mkDerivation (finalAttrs: {
     done
   '';
 
+  # What release-desktop.yml runs for the CLI archive, minus scripts the
+  # server build does not need. tsdown takes the executable's Node from its
+  # download cache, seeded here with the pristine release binary.
   buildPhase = ''
     runHook preBuild
+
     # node-pty's install script picks its prebuilt binary for this platform.
     pnpm --filter=t3 rebuild node-pty
-    # apps/server/scripts/cli.ts build, without the development icons and the
-    # scripts package it imports.
     node_modules/.bin/vp run --filter @t3tools/web build
-    (cd apps/server && ../../node_modules/.bin/vp pack)
-    cp -R apps/web/dist apps/server/dist/client
+
+    export XDG_CACHE_HOME="$TMPDIR/cache"
+    nodeCache="$XDG_CACHE_HOME/tsdown/node/v${nodeVersion}/linux-x64"
+    mkdir -p "$nodeCache"
+    tar -xJf ${nodeDist} -O node-v${nodeVersion}-linux-x64/bin/node > "$nodeCache/node"
+    chmod +x "$nodeCache/node"
+    (cd apps/server && T3CODE_PACK_EXE=1 T3CODE_PACK_EXE_TARGET=linux-x64 ../../node_modules/.bin/vp pack)
+
     runHook postBuild
   '';
 
+  # The layout of upstream's t3-<version>-linux-x64.tar.gz.
   installPhase = ''
     runHook preInstall
-    pnpm --filter=t3 --prod --offline --config.inject-workspace-packages=true deploy "$out/lib/t3"
-    node nix/prune-node-modules.ts "$out/lib/t3"
-    rm -rf "$out/lib/t3/dist" "$out/lib/t3"/{pnpm-lock.yaml,pnpm-workspace.yaml,README.md}
-    cp -R apps/server/dist "$out/lib/t3/dist"
-    find "$out/lib/t3/dist" -name '*.map' -delete
-    install -Dm755 ${resourceMonitor}/bin/t3-resource-monitor "$out/lib/t3/dist/resource-monitor/t3-resource-monitor"
-    makeWrapper ${lib.getExe nodejs_26} "$out/bin/t3" --add-flags "$out/lib/t3/dist/bin.mjs"
+
+    dir="$out/libexec/t3code"
+    install -Dm755 apps/server/dist-exe/t3-linux-x64 "$dir/t3"
+    cp -R apps/web/dist "$dir/client"
+    find "$dir/client" -name '*.map' -delete
+    install -Dm755 ${resourceMonitor}/bin/t3-resource-monitor "$dir/resource-monitor/linux-x64/t3-resource-monitor"
+
+    pnpm --filter=t3 --prod --offline --config.inject-workspace-packages=true deploy "$TMPDIR/deploy"
+    node nix/prune-node-modules.ts "$TMPDIR/deploy"
+    for prebuild in "$TMPDIR"/deploy/node_modules/.pnpm/node-pty@*/node_modules/node-pty/prebuilds/*; do
+      [[ "''${prebuild##*/}" == linux-x64 ]] || rm -rf "$prebuild"
+    done
+    mv "$TMPDIR/deploy/node_modules" "$dir/node_modules"
+
+    mkdir -p "$out/bin"
+    ln -s ../libexec/t3code/t3 "$out/bin/t3"
+    ${patchNodeBinary "$dir/t3"}
+
     runHook postInstall
   '';
 
@@ -147,16 +230,13 @@ stdenv.mkDerivation (finalAttrs: {
   doInstallCheck = true;
   versionCheckProgramArg = "--version";
 
-  passthru = { inherit resourceMonitor; };
+  passthru = { inherit node pnpm resourceMonitor; };
 
   meta = {
     description = "T3 Code server, built from the whexy/t3code self-hosted fork";
     homepage = "https://github.com/whexy/t3code";
     license = lib.licenses.mit;
     mainProgram = "t3";
-    platforms = [
-      "x86_64-linux"
-      "aarch64-darwin"
-    ];
+    platforms = [ "x86_64-linux" ];
   };
 })
