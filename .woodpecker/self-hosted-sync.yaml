@@ -46,7 +46,7 @@ steps:
       - upstream_base="$(git merge-base HEAD refs/remotes/upstream/main)"
       - git config user.name "whexy-bot[bot]"
       - git config user.email "315421218+whexy-bot[bot]@users.noreply.github.com"
-      # Woodpecker expands ${...} itself when it reads this file; $$ leaves it to the shell.
+      # Woodpecker substitutes variables in this whole file, comments included; $$ defers one to the shell.
       - |
         if [ "$upstream_base" != "$release_sha" ]; then
           GIT_SEQUENCE_EDITOR="sed -i -E '/^pick [0-9a-f]+ chore\(nix\): pin sources /s/^pick/drop/'" \
