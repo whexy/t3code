@@ -99,7 +99,9 @@ jobs:
 
       - name: Test the policy override
         if: matrix.platform == 'linux'
-        run: vp test run apps/server/src/policy/ManagedPolicyPathOverride.test.ts
+        # From the repo root, vitest also loads app configs this install leaves out.
+        working-directory: apps/server
+        run: vp test run src/policy/ManagedPolicyPathOverride.test.ts
 
       - name: Cache resource monitor
         id: resource_monitor_cache
