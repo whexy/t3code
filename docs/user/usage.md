@@ -72,3 +72,11 @@ Open **Settings → Providers → Usage providers → Add HTTP source** with a G
 ```
 
 `kind` is `session`, `weekly`, `monthly`, or `other`. Setting `providerInstanceId` binds the quota windows to that instance's thread details card.
+
+## Query usage through MCP
+
+With the [T3 Code MCP bridge](../../apps/mcp/README.md#usage-analytics), `get_usage` returns structured token totals, cache savings, estimated API-equivalent costs, and provider/model or daily/hourly breakdowns.
+
+- **Periods**: Inclusive calendar dates with your timezone, or an exact hourly period of up to 24 hours.
+- **Servers**: Select one server or merge all paired servers; shared histories count once. Check the returned source coverage when history is incomplete. Project and individual agent attribution are not available.
+- **Pairing**: Each server's pairing link must include **View diagnostics and usage**; re-pair a server whose bridge token was created without it.
