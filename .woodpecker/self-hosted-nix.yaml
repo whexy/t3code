@@ -1,0 +1,80 @@
+# Builds the flake's x86_64-linux `t3-server` on every push to
+# `self-hosted-nightly`, including the nightly rebases self-hosted-sync.yaml
+# pushes, and checks the result. nix-ci's post-build hook uploads, signed,
+# every path the step builds to the CI cache: the package, where hosts on the
+# tailnet substitute it (https://ci-cache.at-basking.ts.net/nix), and its
+# fixed-output inputs (the pnpm dependencies, the crates, Node and pnpm), so a
+# run only builds what changed. Pull requests into the branch build and check
+# the same way without uploading, since their builds are intermediate.
+#
+# Needs the org secrets `ci_cache_access_key`, `ci_cache_secret_key` and
+# `nix_cache_signing_key`, and `t3_repair_webhook`, a T3 Code scheduled
+# task's webhook URL.
+variables:
+  - &publish
+    event: [push, manual]
+    branch: self-hosted-nightly
+
+when:
+  event: [push, manual, pull_request]
+  branch: self-hosted-nightly
+
+# Submodules stay out for the reason in self-hosted-build.yaml.
+clone:
+  - name: git
+    image: woodpeckerci/plugin-git
+    backend_options:
+      kubernetes:
+        nodeSelector:
+          kubernetes.io/arch: amd64
+    settings:
+      recursive: false
+
+steps:
+  - name: package
+    image: ghcr.io/whexy/nix-ci:0.1.0-alpha.4
+    environment:
+      AWS_ACCESS_KEY_ID:
+        from_secret: ci_cache_access_key
+      AWS_SECRET_ACCESS_KEY:
+        from_secret: ci_cache_secret_key
+      NIX_CACHE_SIGNING_KEY:
+        from_secret: nix_cache_signing_key
+    commands:
+      # The hook uploads only while all its variables are set.
+      - if [ "$CI_PIPELINE_EVENT" = pull_request ]; then unset NIX_CACHE_SIGNING_KEY; fi
+      - nix build -L --out-link result .#t3-server
+      - version="$(nix eval --raw .#t3-server.version)"
+      - ./result/bin/t3 --version | grep -Fx "t3 v$version"
+      - mkdir -p .smoke
+      - printf '{"schemaVersion":1,"organization":"Self-hosted CI"}' > .smoke/policy.json
+      - T3CODE_DEV_MANAGED_POLICY_PATH="$PWD/.smoke/policy.json" ./result/bin/t3 policy check .smoke/policy.json | tee .smoke/check
+      - grep -qF "names $PWD/.smoke/policy.json in place of this machine's policy." .smoke/check
+      - HOME="$PWD/.smoke" T3CODE_DEV_MANAGED_POLICY_PATH="$PWD/.smoke/policy.json" ./result/bin/t3 policy show --base-dir .smoke/home | tee .smoke/show
+      - grep -qF "Managed by Self-hosted CI ($PWD/.smoke/policy.json" .smoke/show
+    backend_options:
+      kubernetes:
+        nodeSelector:
+          kubernetes.io/arch: amd64
+        resources:
+          requests:
+            cpu: "4"
+            memory: 8Gi
+          limits:
+            cpu: "8"
+            memory: 12Gi
+
+  - name: report-failure
+    image: node:24
+    when:
+      - <<: *publish
+        status: failure
+    environment:
+      T3_REPAIR_WEBHOOK:
+        from_secret: t3_repair_webhook
+    backend_options:
+      kubernetes:
+        nodeSelector:
+          kubernetes.io/arch: amd64
+    commands:
+      - node scripts/self-hosted/report-failure.ts build
