@@ -46,11 +46,12 @@ steps:
       - upstream_base="$(git merge-base HEAD refs/remotes/upstream/main)"
       - git config user.name "whexy-bot[bot]"
       - git config user.email "315421218+whexy-bot[bot]@users.noreply.github.com"
+      # Woodpecker expands ${...} itself when it reads this file; $$ leaves it to the shell.
       - |
         if [ "$upstream_base" != "$release_sha" ]; then
           GIT_SEQUENCE_EDITOR="sed -i -E '/^pick [0-9a-f]+ chore\(nix\): pin sources /s/^pick/drop/'" \
             git rebase -i --onto "$release_sha" "$upstream_base"
-        elif grep -qF "\"version\": \"${release_tag#v}\"" nix/sources.json; then
+        elif grep -qF "\"version\": \"$${release_tag#v}\"" nix/sources.json; then
           echo "self-hosted-nightly already follows and pins nightly $release_tag."
           touch .sync/done
         fi
@@ -71,7 +72,7 @@ steps:
     commands:
       - if [ -e .sync/done ]; then exit 0; fi
       - release_tag="$(cat .sync/release-tag)"
-      - nix shell --inputs-from . nixpkgs#jq --command nix/update-sources.sh "$release_tag"
+      - nix shell --inputs-from . nixpkgs#jq nixpkgs#gnused --command nix/update-sources.sh "$release_tag"
       - git add nix/sources.json
       - if git diff --cached --quiet; then exit 0; fi
       - |
