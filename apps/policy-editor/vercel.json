@@ -1,7 +1,0 @@
-{
-  "$schema": "https://openapi.vercel.sh/vercel.json",
-  "framework": null,
-  "installCommand": "npm install -g vite-plus@1.4.0 && vp install --ignore-scripts --filter '@t3tools/policy-editor...'",
-  "buildCommand": "vp build",
-  "outputDirectory": "dist"
-}

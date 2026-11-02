@@ -1,27 +1,34 @@
 # T3 Code policy editor
 
-A static web page for writing the [managed policy](../../docs/user/managed-policy.md) an
-administrator deploys to machines running T3 Code. It shows each setting a policy can manage the
-way T3 Code's Settings page does, and checks the policy as you edit with the server's own code, so
-what it accepts `t3 policy check` accepts.
+A web page for writing the [managed policy](../../docs/user/managed-policy.md) an administrator
+deploys to machines running T3 Code. It shows each setting a policy can manage the way T3 Code's
+Settings page does, and checks the policy as you edit with the server's own code, so what it
+accepts `t3 policy check` accepts.
 
-It has no server. Policies stay in the browser: open or drop a file, paste JSON, or start a new
-one, then save back to the same file (in Chromium browsers) or download it.
+Policies stay in the browser: open or drop a file, paste JSON, or start a new one, then save back
+to the same file (in Chromium browsers) or download it. The page needs no backend.
 
 ## Run it
 
+After `vp i` at the repository root:
+
 ```sh
-vp run --filter @t3tools/policy-editor dev
+cd apps/policy-editor
+vp dev        # http://localhost:5790
+vp test run   # parity tests against `t3 policy check`
+vp build      # the site, in dist/
 ```
 
-`vp run --filter @t3tools/policy-editor build` writes the site to `apps/policy-editor/dist`, which
-any static host can serve from any path.
+The editor is not a workspace package, so the self-hosted branch carries upstream's lockfile
+unchanged. Its `node_modules` is a committed link to the web app's, and it imports the few
+packages only the server depends on by path.
 
-## Deploy to Vercel
+## Deployment
 
-Import the repository as a new Vercel project and set its **Root Directory** to
-`apps/policy-editor`. `vercel.json` there sets the install and build commands and the output
-directory, so leave the other build settings at their defaults.
+`.woodpecker/self-hosted-policy-editor.yaml` publishes `ghcr.io/whexy/t3code-policy-editor` on
+every push to `self-hosted-nightly`, with the same `1.1.<pipeline>` version as the web image, so
+each nightly brings that nightly's policy rules. The image serves `dist/` with `serve.ts` on port
+8080 and answers `GET /healthz`. `./build-image.sh` builds it locally.
 
 ## How it checks a policy
 

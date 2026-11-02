@@ -41,34 +41,12 @@ function redirectModules(): Plugin {
 }
 
 export default defineConfig({
-  // Relative asset URLs, so the build works from any path on any static host.
+  root: here,
+  // Relative asset URLs, so the build works from any path.
   base: "./",
   plugins: [redirectModules(), tailwindcss(), react()],
-  resolve: {
-    alias: { "~": NodePath.join(repo, "apps/web/src") },
-    // Borrowed web and server files resolve packages from their own folders, which a filtered
-    // install (such as Vercel's) leaves empty; resolve them from this app instead.
-    dedupe: [
-      "react",
-      "react-dom",
-      "@base-ui/react",
-      "class-variance-authority",
-      "lucide-react",
-      "tailwind-merge",
-      "effect",
-      "@t3tools/contracts",
-      "@t3tools/provider-acp-registry",
-      "@t3tools/provider-core",
-      "@t3tools/provider-cursor",
-      "@t3tools/provider-fx",
-      "@t3tools/provider-grok",
-      "@t3tools/provider-muse",
-      "@t3tools/provider-opencode",
-      "@t3tools/provider-pi",
-      "@t3tools/source-control-definitions",
-    ],
-  },
+  resolve: { alias: { "~": NodePath.join(repo, "apps/web/src") } },
   server: { port: 5790, strictPort: false },
   // One page whose validation needs Effect and the settings schemas; splitting it gains nothing.
-  build: { outDir: "dist", sourcemap: true, chunkSizeWarningLimit: 1200 },
+  build: { outDir: "dist", emptyOutDir: true, sourcemap: true, chunkSizeWarningLimit: 1200 },
 });

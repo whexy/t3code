@@ -4,13 +4,13 @@ import {
   CodexSettings,
   ProviderDriverKind,
 } from "@t3tools/contracts";
-import { acpRegistryClient } from "@t3tools/provider-acp-registry/client";
-import { cursorClient } from "@t3tools/provider-cursor/client";
-import { fxClient } from "@t3tools/provider-fx/client";
-import { grokClient } from "@t3tools/provider-grok/client";
-import { museClient } from "@t3tools/provider-muse/client";
-import { openCodeClient } from "@t3tools/provider-opencode/client";
-import { piClient } from "@t3tools/provider-pi/client";
+import { acpRegistryClient } from "../../../../packages/provider-acp-registry/src/client.ts";
+import { cursorClient } from "../../../../packages/provider-cursor/src/client.ts";
+import { fxClient } from "../../../../packages/provider-fx/src/client.ts";
+import { grokClient } from "../../../../packages/provider-grok/src/client.ts";
+import { museClient } from "../../../../packages/provider-muse/src/client.ts";
+import { openCodeClient } from "../../../../packages/provider-opencode/src/client.ts";
+import { piClient } from "../../../../packages/provider-pi/src/client.ts";
 
 export interface KnownDriver {
   readonly id: ProviderDriverKind;
