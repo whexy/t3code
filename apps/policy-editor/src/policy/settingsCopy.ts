@@ -52,18 +52,16 @@ export const SETTINGS_COPY: ReadonlyArray<SettingCopy> = [
     path: "favorites",
     section: "/settings/providers",
     group: "Models",
-    title: "Models",
-    description:
-      "Model preferences and custom models are saved on the selected environment and shared across connected devices.",
+    title: "Favorite models",
+    description: "Models starred in the model picker, shared across connected devices.",
     control: "json",
   },
   {
     path: "providerModelPreferences",
     section: "/settings/providers",
     group: "Models",
-    title: "Models",
-    description:
-      "Model preferences and custom models are saved on the selected environment and shared across connected devices.",
+    title: "Model list per provider",
+    description: "Which of each provider's models are hidden, and their order in the model picker.",
     control: "json",
   },
   {
@@ -397,9 +395,9 @@ export const SETTINGS_COPY: ReadonlyArray<SettingCopy> = [
     path: "sourceControlWritingStyle.customInstructions",
     section: "/settings/source-control",
     group: "Writing & review",
-    title: "Source control writing style",
+    title: "Custom writing instructions",
     description:
-      "Use your instructions for change descriptions and change requests in every project.",
+      "Your instructions for change descriptions and change requests in every project, used when the writing style is set to custom.",
     control: "textarea",
   },
   {
@@ -778,7 +776,7 @@ export const SETTINGS_COPY: ReadonlyArray<SettingCopy> = [
     group: "OpenTelemetry export",
     title: "Traces endpoint",
     description:
-      "Send traces, metrics, and logs to an OTLP HTTP receiver. Restart the server to apply. Environment variables override these settings.",
+      "OTLP HTTP receiver for traces. Restart the server to apply. Environment variables override these settings.",
     control: "text",
   },
   {
@@ -786,8 +784,7 @@ export const SETTINGS_COPY: ReadonlyArray<SettingCopy> = [
     section: "/settings/diagnostics",
     group: "OpenTelemetry export",
     title: "Metrics endpoint",
-    description:
-      "Send traces, metrics, and logs to an OTLP HTTP receiver. Restart the server to apply. Environment variables override these settings.",
+    description: "OTLP HTTP receiver for metrics.",
     control: "text",
   },
   {
@@ -795,8 +792,7 @@ export const SETTINGS_COPY: ReadonlyArray<SettingCopy> = [
     section: "/settings/diagnostics",
     group: "OpenTelemetry export",
     title: "Logs endpoint",
-    description:
-      "Send traces, metrics, and logs to an OTLP HTTP receiver. Restart the server to apply. Environment variables override these settings.",
+    description: "OTLP HTTP receiver for logs.",
     control: "text",
   },
   {
