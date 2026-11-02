@@ -188,7 +188,7 @@ stdenv.mkDerivation (finalAttrs: {
   };
 
   # Node's macOS release reads its OpenSSL config from here at startup.
-  __impureHostDeps = [ "/System/Library/OpenSSL" ];
+  __impureHostDeps = lib.optionals isDarwin [ "/System/Library/OpenSSL" ];
 
   # What scripts/update-release-package-versions.ts does for a release, for the
   # manifests in this build; the version names the build channel too.
