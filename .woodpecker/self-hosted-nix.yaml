@@ -4,8 +4,8 @@
 # every path the step builds to the CI cache: the package, where hosts on the
 # tailnet substitute it (https://ci-cache.at-basking.ts.net/nix), and its
 # fixed-output inputs (the pnpm dependencies, the crates, Node and pnpm), so a
-# run only builds what changed. Pull requests into the branch build the same
-# way.
+# run only builds what changed. Pull requests into the branch build and check
+# the same way without uploading, since their builds are intermediate.
 #
 # Needs the org secrets `ci_cache_access_key`, `ci_cache_secret_key` and
 # `nix_cache_signing_key`, and `t3_repair_webhook`, a T3 Code scheduled
@@ -41,6 +41,8 @@ steps:
       NIX_CACHE_SIGNING_KEY:
         from_secret: nix_cache_signing_key
     commands:
+      # The hook uploads only while all its variables are set.
+      - if [ "$CI_PIPELINE_EVENT" = pull_request ]; then unset NIX_CACHE_SIGNING_KEY; fi
       - nix build -L --out-link result .#t3-server
       - version="$(nix eval --raw .#t3-server.version)"
       - ./result/bin/t3 --version | grep -Fx "t3 v$version"
