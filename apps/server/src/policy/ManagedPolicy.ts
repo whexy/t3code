@@ -25,7 +25,6 @@ import {
   readManagedPolicyFile,
 } from "@t3tools/shared/managedPolicyFile";
 
-import { telemetryChannel } from "../config.ts";
 import * as ManagedLimits from "./managedLimits.ts";
 import * as ManagedProviders from "./managedProviders.ts";
 import * as ManagedSettings from "./managedSettings.ts";
@@ -172,17 +171,20 @@ export const load = Effect.fn("ManagedPolicy.load")(function* (path: string) {
   return yield* fromDocument(path, yield* readManagedPolicyFile(path));
 });
 
+/**
+ * whexy/t3code fork: a policy file that replaces the machine policy in every build, so each user
+ * on a host can run their server under a policy of their own. Unset or empty means upstream's.
+ */
+export const pathOverrideVariable = "T3CODE_DEV_MANAGED_POLICY_PATH";
+export const pathOverride = Config.option(Config.String(pathOverrideVariable)).pipe(
+  Effect.map(Option.filter((path) => path.trim() !== "")),
+  Effect.orElseSucceed(() => Option.none<string>()),
+);
+
 const make = Effect.gen(function* () {
-  // Source builds may read a policy from elsewhere so it can be tried without root. Release
-  // builds never do: any override a user can set is a way around the policy.
-  const devPath =
-    telemetryChannel === "dev"
-      ? yield* Config.option(Config.String("T3CODE_DEV_MANAGED_POLICY_PATH")).pipe(
-          Effect.orElseSucceed(() => Option.none<string>()),
-        )
-      : Option.none<string>();
+  const overridePath = yield* pathOverride;
   const platform = yield* HostProcess.Platform;
-  const policy = yield* Option.match(devPath, {
+  const policy = yield* Option.match(overridePath, {
     onSome: load,
     onNone: () =>
       readManagedPolicy(
