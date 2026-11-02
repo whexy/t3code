@@ -1,0 +1,97 @@
+# Keeps self-hosted-nightly on top of the newest upstream nightly release.
+# n8n dispatches `nightly-release` (optional client_payload.tag) when upstream
+# publishes one; workflow_dispatch does the same by hand. The fork's commits are
+# rebased onto the release, nix/sources.json is pinned to it in one
+# `chore(nix): pin sources` commit on top, and the branch is pushed as the
+# whexy-bot App, whose push starts build.yml. scripts/self-hosted/rebase.sh is
+# the state machine; its summary line names the state it ended in.
+#
+# A failure pushes nothing, so the last build keeps serving, and is reported
+# to T3 Code, which starts an agent run to repair the branch.
+name: rebase
+
+on:
+  repository_dispatch:
+    types: [nightly-release]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Upstream nightly tag; empty takes the newest
+        required: false
+        type: string
+
+# A newer pending run replaces an older one, which is safe: every run resolves
+# the newest release and re-reads the branch head when it starts.
+concurrency:
+  group: rebase
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  rebase:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: self-hosted-nightly
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - uses: cachix/install-nix-action@v31
+
+      - uses: actions/create-github-app-token@v2
+        id: token
+        with:
+          app-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+
+      # The rebase rewrites the checkout, so the state machine runs from a copy.
+      - id: rebase
+        timeout-minutes: 45
+        env:
+          TAG: ${{ github.event.client_payload.tag || inputs.tag }}
+          GITHUB_TOKEN: ${{ github.token }}
+          TOKEN: ${{ steps.token.outputs.token }}
+        run: |
+          git config user.name "whexy-bot[bot]"
+          git config user.email "315421218+whexy-bot[bot]@users.noreply.github.com"
+          mkdir -p "$RUNNER_TEMP/scripts"
+          cp scripts/self-hosted/rebase.sh scripts/self-hosted/nightly-release.ts "$RUNNER_TEMP/scripts/"
+          STATE_DIR="$RUNNER_TEMP/rebase" PUSH_URL="https://x-access-token:$TOKEN@github.com/$GITHUB_REPOSITORY.git" \
+            bash "$RUNNER_TEMP/scripts/rebase.sh"
+
+      # A stopped rebase lacks the fork's later commits, so the report script
+      # comes from the head the run started from.
+      - name: Report the failure
+        if: failure() || cancelled()
+        env:
+          T3_REPAIR_WEBHOOK: ${{ secrets.T3_REPAIR_WEBHOOK }}
+          T3_ALERT_WEBHOOK: ${{ secrets.T3_ALERT_WEBHOOK }}
+          REBASE_OUTCOME: ${{ steps.rebase.outcome }}
+          TOKEN_OUTCOME: ${{ steps.token.outcome }}
+        run: |
+          git rebase --abort 2> /dev/null || true
+          state="$RUNNER_TEMP/rebase"
+          start="$(cat "$state/start" 2> /dev/null || echo "$GITHUB_SHA")"
+          tag="$(cat "$state/tag" 2> /dev/null || true)"
+          if [[ -f "$state/failed" ]]; then
+            stage="$(cat "$state/failed")"
+          elif [[ "$REBASE_OUTCOME" == failure || "$REBASE_OUTCOME" == cancelled ]]; then
+            stage=cancelled
+          elif [[ "$TOKEN_OUTCOME" == failure ]]; then
+            stage=push
+          else
+            stage=resolve
+          fi
+          echo "state=FAILED($stage) tag=$tag start=$start result=$(cat "$state/result" 2> /dev/null || true)" |
+            tee -a "$GITHUB_STEP_SUMMARY"
+          git show "$start:scripts/self-hosted/report-failure.ts" > "$RUNNER_TEMP/report-failure.ts" ||
+            cp scripts/self-hosted/report-failure.ts "$RUNNER_TEMP/report-failure.ts"
+          T3_FAILURE_STAGE="$stage" T3_FAILURE_COMMIT="$start" T3_FAILURE_RELEASE_TAG="$tag" \
+            node "$RUNNER_TEMP/report-failure.ts" sync
