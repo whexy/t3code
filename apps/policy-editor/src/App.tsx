@@ -268,7 +268,8 @@ export function App() {
 
   return (
     <div
-      className="relative flex min-h-dvh bg-background text-foreground"
+      // The web stylesheet locks body and #root scrolling, so the editor scrolls its own panes.
+      className="relative flex h-dvh overflow-hidden bg-background text-foreground"
       onDragOver={(event) => {
         if (![...event.dataTransfer.types].includes("Files")) return;
         event.preventDefault();
@@ -300,7 +301,7 @@ export function App() {
         }}
       />
 
-      <aside className="sticky top-0 hidden h-dvh w-56 shrink-0 overflow-y-auto border-r border-border/60 bg-sidebar px-2 py-4 md:block">
+      <aside className="hidden h-full w-56 shrink-0 overflow-y-auto border-r border-border/60 bg-sidebar px-2 py-4 md:block">
         <div className="px-2 pb-4 text-sm font-semibold">Policy editor</div>
         <nav className="flex flex-col gap-0.5">
           {nav.map((item) => (
@@ -322,7 +323,7 @@ export function App() {
         </nav>
       </aside>
 
-      <main className="min-w-0 flex-1">
+      <main className="h-full min-w-0 flex-1 overflow-y-auto scrollbar-gutter-both">
         <header className="sticky top-0 z-40 border-b border-border/60 bg-background/90 backdrop-blur">
           <div className="mx-auto flex max-w-4xl flex-wrap items-center gap-2 px-4 py-2.5 sm:px-6">
             <div className="min-w-0 flex-1">
