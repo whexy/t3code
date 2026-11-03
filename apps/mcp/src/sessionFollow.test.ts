@@ -11,6 +11,7 @@ import {
   assistantMessage,
   at,
   callTool,
+  command,
   completed,
   projection,
   run,
@@ -182,8 +183,81 @@ describe("read_session_message", () => {
 
   it.effect("rejects a message outside the session's history and an offset past its end", () =>
     Effect.gen(function* () {
-      expect((yield* Effect.flip(read(0, "missing"))).message).toContain("recent history");
+      expect((yield* Effect.flip(read(0, "missing"))).message).toContain("not in this stretch");
       expect((yield* Effect.flip(read(long.length + 1))).message).toContain("past the message");
     }).pipe(Effect.provide(server().layer)),
+  );
+});
+
+describe("read_session_history", () => {
+  const long = "x".repeat(5_000);
+  const older = [
+    userMessage("old-ask", "Why is CI flaky?", 1),
+    assistantMessage("old-reply", long, 2),
+  ];
+  const rows = (
+    items: ReadonlyArray<ReturnType<typeof userMessage> | ReturnType<typeof assistantMessage>>,
+  ) =>
+    items.map((item, position) => ({
+      position,
+      visibility: "local" as const,
+      sourceThreadId: threadId,
+      sourceItemId: item.id,
+      item,
+    }));
+  const pages: Array<string> = [];
+  const server = () =>
+    threadServer(completed, undefined, {
+      boundedThread: () =>
+        Effect.succeed({
+          projection: projection({
+            runs: [finishedOne],
+            items: [user, command("cmd", "vp test", 5), reply],
+          }),
+          historyCursor: "page-2",
+        }),
+      historyPage: (_threadId, cursor) =>
+        Effect.sync(() => {
+          pages.push(cursor);
+          return { items: rows(older), historyCursor: null };
+        }),
+    });
+
+  it.effect(
+    "pages back from the recent messages to the session's start, without tool activity",
+    () =>
+      Effect.gen(function* () {
+        const newest = yield* callTool("read_session_history", {
+          server_id: "home",
+          session_id: threadId,
+        });
+        expect(newest).toMatchObject({ history_cursor: null, older_cursor: "page-2" });
+        expect(newest.messages.map((message) => message.text)).toEqual([
+          "Fix the flaky test",
+          "Fixed the retry loop",
+        ]);
+
+        const oldest = yield* callTool("read_session_history", {
+          server_id: "home",
+          session_id: threadId,
+          before: newest.older_cursor!,
+        });
+        expect(oldest).toMatchObject({ history_cursor: "page-2", older_cursor: null });
+        expect(oldest.messages[1]).toMatchObject({
+          item_id: "old-reply",
+          truncated: true,
+          next_offset: 4_000,
+        });
+
+        const rest = yield* callTool("read_session_message", {
+          server_id: "home",
+          session_id: threadId,
+          item_id: "old-reply",
+          offset: 4_000,
+          history_cursor: "page-2",
+        });
+        expect(rest).toMatchObject({ text: "x".repeat(1_000), next_offset: null });
+        expect(pages).toEqual(["page-2", "page-2"]);
+      }).pipe(Effect.provide(server().layer)),
   );
 });

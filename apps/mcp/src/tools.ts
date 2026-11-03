@@ -8,8 +8,10 @@ import {
   RuntimeRequestId,
   SourceControlCloneProtocol,
   SourceControlProviderKind,
+  THREAD_SEARCH_QUERY_MAX_LENGTH,
   ThreadId,
   TrimmedNonEmptyString,
+  type OrchestrationV2Command,
   type OrchestrationV2Run,
   type OrchestrationV2ThreadLaunchWorkspaceStrategy,
   type OrchestrationV2ThreadProjection,
@@ -21,11 +23,13 @@ import {
 } from "@t3tools/client-runtime/operations/projects";
 import { inferProjectTitleFromPath } from "@t3tools/client-runtime/state/projects";
 import { derivePendingThreadRequests } from "@t3tools/client-runtime/state/thread-requests";
+import { modelSelectionCommandType } from "@t3tools/shared/model";
 import { derivePendingBackgroundWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Tool from "effect/ai/Tool";
@@ -39,9 +43,10 @@ import {
 } from "./agents.ts";
 import { BridgeError, Environments } from "./environment.ts";
 import { InspectProjectTool, inspectProject } from "./inspect.ts";
-import { findSessions } from "./sessions.ts";
+import { findSessions, sessionMarks } from "./sessions.ts";
 import { GetUsageTool, getUsage } from "./usage.ts";
 import {
+  historyMessages,
   latestCursor,
   readMessage,
   summarizeSession,
@@ -81,6 +86,14 @@ const SessionState = Schema.Literals([
   "failed",
   "idle",
 ]);
+
+/** How the session is filed in T3 Code's sidebar; update_session changes these. */
+const SessionMarks = {
+  settled: Schema.Boolean,
+  pinned: Schema.Boolean,
+  snoozed_until: Schema.NullOr(Schema.String),
+  archived: Schema.Boolean,
+};
 
 /** The latest turn's timing, or null before the first turn starts. */
 const TurnTimes = Schema.NullOr(
@@ -138,6 +151,7 @@ const ListSessionsResult = Schema.Struct({
       server_id: Schema.String,
       name: Schema.String,
       error: Schema.optional(Schema.String),
+      search_error: Schema.optional(Schema.String),
     }),
   ),
   sessions: Schema.Array(
@@ -151,9 +165,19 @@ const ListSessionsResult = Schema.Struct({
       model: Schema.String,
       reasoning_effort: Schema.NullOr(Schema.String),
       state: SessionState,
+      ...SessionMarks,
       created_at: Schema.String,
       updated_at: Schema.String,
       turn: TurnTimes,
+      match: Schema.optional(
+        Schema.Union([
+          Schema.Struct({ in: Schema.Literal("title") }),
+          Schema.Struct({
+            in: Schema.Literals(["user_message", "assistant_message"]),
+            snippet: Schema.String,
+          }),
+        ]),
+      ),
     }),
   ),
   more_sessions: Schema.Int,
@@ -185,9 +209,14 @@ const SendSessionMessageResult = Schema.Struct({
   next_step: Schema.String,
 });
 
-/** The thread's queue: waiting runs after the active turn; held waits for resume_queue. */
+/** The thread's queue in send order: waiting runs after the active turn; held waits for resume_queue. */
 const QueuedMessages = Schema.Array(
-  Schema.Struct({ message_id: Schema.String, state: Schema.Literals(["waiting", "held"]) }),
+  Schema.Struct({
+    message_id: Schema.String,
+    state: Schema.Literals(["waiting", "held"]),
+    text: Schema.String,
+    truncated: Schema.optional(Schema.Literal(true)),
+  }),
 );
 
 const ControlSessionResult = Schema.Struct({
@@ -199,11 +228,25 @@ const ControlSessionResult = Schema.Struct({
     "queue_resumed",
     "nothing_held",
     "dropped",
+    "edited",
+    "moved",
+    "sent_now",
   ]),
   dropped_message_ids: Schema.Array(Schema.String),
   state: SessionState,
   queued_messages: QueuedMessages,
   cursor: Schema.String,
+});
+
+const SessionUpdateSchema = Schema.Struct({
+  at: Schema.String,
+  type: Schema.Literals(["user_message", "assistant_message", "system_message", "activity"]),
+  text: Schema.String,
+  streaming: Schema.optional(Schema.Literal(true)),
+  truncated: Schema.optional(Schema.Literal(true)),
+  item_id: Schema.optional(Schema.String),
+  length: Schema.optional(Schema.Int),
+  next_offset: Schema.optional(Schema.Int),
 });
 
 const SessionStatusResult = Schema.Struct({
@@ -216,6 +259,7 @@ const SessionStatusResult = Schema.Struct({
   model: Schema.String,
   reasoning_effort: Schema.NullOr(Schema.String),
   state: SessionState,
+  ...SessionMarks,
   error: Schema.optional(Schema.String),
   branch: Schema.NullOr(Schema.String),
   worktree_path: Schema.NullOr(Schema.String),
@@ -261,18 +305,7 @@ const SessionStatusResult = Schema.Struct({
       ),
     }),
   ),
-  updates: Schema.Array(
-    Schema.Struct({
-      at: Schema.String,
-      type: Schema.Literals(["user_message", "assistant_message", "system_message", "activity"]),
-      text: Schema.String,
-      streaming: Schema.optional(Schema.Literal(true)),
-      truncated: Schema.optional(Schema.Literal(true)),
-      item_id: Schema.optional(Schema.String),
-      length: Schema.optional(Schema.Int),
-      next_offset: Schema.optional(Schema.Int),
-    }),
-  ),
+  updates: Schema.Array(SessionUpdateSchema),
   omitted_updates: Schema.Int,
   cursor: Schema.String,
   timed_out: Schema.optional(Schema.Boolean),
@@ -296,12 +329,19 @@ const ListProjectsTool = Tool.make("list_projects", {
 
 const ListSessionsTool = Tool.make("list_sessions", {
   description:
-    "Find existing coding sessions (threads) on the configured T3 servers, most recently active first, including ones started in T3 Code itself. Use it to check on earlier work or to get the session_id for send_session_message and get_session_status. Filter by server_id, project_id, or words from the title. Archived sessions are not listed. An unreachable server is reported with an error while the others still list.",
+    "Find existing coding sessions (threads) on the configured T3 servers, most recently active first, including ones started in T3 Code itself. Use it to check on earlier work or to get the session_id for send_session_message and get_session_status. Filter by server_id, project_id, or query: a session matches when every word of query is in its title, or when the server's message search finds query in what the user or agent wrote; match says which, with a snippet for message matches. Message search covers each session's recent messages, not necessarily all of them. Each session reports settled, pinned, snoozed_until, and archived as filed in T3 Code's sidebar. Archived sessions are listed only with archived: true, which matches query against titles only. An unreachable server is reported with an error while the others still list; search_error means only titles were matched there.",
   parameters: Schema.Struct({
     server_id: optionalInput(TextInput("Only list sessions on this server_id.")),
     project_id: optionalInput(TextInput("Only list sessions in this project_id.")),
     query: optionalInput(
-      Schema.String.annotate({ description: "Words that must all appear in the title." }),
+      Schema.String.annotate({
+        description: "Words to find in titles, or text to find in the sessions' messages.",
+      }),
+    ),
+    archived: optionalInput(
+      Schema.Boolean.annotate({
+        description: "List archived sessions instead of active ones. Default false.",
+      }),
     ),
     limit: optionalInput(
       Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 50 })).annotate({
@@ -407,10 +447,16 @@ const CheckoutInput = Schema.Union([
 
 const CreateSessionTool = Tool.make("create_session", {
   description:
-    "Start a coding agent on a project. T3 Code creates a new session (thread) and runs the agent in the selected checkout with the project's configured permission mode; the agent keeps working after this returns. Write task as a complete, self-contained instruction for the coding agent. Omit agent and model to use the project's default; otherwise pass values from list_projects (spoken names such as \"Claude\" or \"opus\" also match). Omit reasoning_effort to keep the project's or model's default; to choose one, pass a reasoning_efforts value that list_projects reports for the same agent and model. Values the selected model does not support are rejected before anything starts. Omit checkout for the existing default: use the project checkout untouched, even if project settings prefer worktrees. checkout selects local (optionally switch/create branch), worktree (new isolated worktree from required base_branch), or existing_worktree (reuse a checked-out branch). Local switching affects other sessions sharing that checkout and T3 rejects Git conflicts. Worktree preparation uses T3 setup, path allocation, submodule settings, and conflict handling; it can take minutes. A timeout can leave preparation running: inspect list_sessions before retrying. Follow progress with get_session_status and wait: true, and continue the same session with send_session_message.",
+    "Start a coding agent on a project, or with scratch: true in the server's scratch folder when the work belongs to no project (questions, one-off scripts). Pass exactly one of project_id and scratch. T3 Code creates a new session (thread) and runs the agent in the selected checkout with the project's configured permission mode; the agent keeps working after this returns. Write task as a complete, self-contained instruction for the coding agent. Omit agent and model to use the project's default; otherwise pass values from list_projects (spoken names such as \"Claude\" or \"opus\" also match). Omit reasoning_effort to keep the project's or model's default; to choose one, pass a reasoning_efforts value that list_projects reports for the same agent and model. Values the selected model does not support are rejected before anything starts. Omit checkout for the existing default: use the project checkout untouched, even if project settings prefer worktrees. checkout selects local (optionally switch/create branch), worktree (new isolated worktree from required base_branch), or existing_worktree (reuse a checked-out branch). Local switching affects other sessions sharing that checkout and T3 rejects Git conflicts. Worktree preparation uses T3 setup, path allocation, submodule settings, and conflict handling; it can take minutes. A timeout can leave preparation running: inspect list_sessions before retrying. Follow progress with get_session_status and wait: true, and continue the same session with send_session_message.",
   parameters: Schema.Struct({
     server_id: ServerIdInput,
-    project_id: TextInput("project_id from list_projects or create_project."),
+    project_id: optionalInput(TextInput("project_id from list_projects or create_project.")),
+    scratch: optionalInput(
+      Schema.Boolean.annotate({
+        description:
+          "true runs the session in the server's scratch folder instead of a project; omit project_id and checkout.",
+      }),
+    ),
     checkout: optionalInput(CheckoutInput),
     task: TextInput("The instruction for the coding agent, sent as the session's first message."),
     agent: optionalInput(TextInput("Agent id or name, e.g. codex or Claude.")),
@@ -455,19 +501,36 @@ const SendSessionMessageTool = Tool.make("send_session_message", {
 
 const ControlSessionTool = Tool.make("control_session", {
   description:
-    "Control a session's work and queue as T3 Code's UI does. action stop is T3's Stop for a starting or running session, including one waiting for approval or input: it interrupts the active run through the same command as the UI and keeps the thread and history, so send_session_message can resume later. Provider-specific cancellation governs tool calls and subprocesses. Like the UI's Stop, it holds queued messages rather than starting them next. result stop_requested confirms command acceptance, not that the provider has stopped; already_inactive means no work was running. action resume_queue releases held queued messages so they run in order once the session is idle (result queue_resumed), or reports nothing_held. action drop_queued deletes queued messages: every queued message on the thread when message_ids is omitted, otherwise exactly those listed. message_ids must all be queued messages from queued_messages; any other id (unknown, already started, or already dropped) fails the whole call and nothing is dropped. Dropping requires the user's explicit request. The result lists dropped_message_ids, the observed state, the updated queued_messages with each one waiting (runs after the active turn) or held (waits for resume_queue), and a cursor for get_session_status.",
+    "Control a session's work and queue as T3 Code's UI does. Queue actions name messages by message_id from queued_messages, which lists them in send order with their text. action edit_queued replaces the text of the one message in message_ids with text. action move_queued moves the one message in message_ids before before_message_id, or to the end of the queue when before_message_id is omitted. action send_queued_now sends the one message in message_ids into the running turn as steering, like Send now, instead of waiting; it needs a running turn. These fail without changes once the message has started. action stop is T3's Stop for a starting or running session, including one waiting for approval or input: it interrupts the active run through the same command as the UI and keeps the thread and history, so send_session_message can resume later. Provider-specific cancellation governs tool calls and subprocesses. Like the UI's Stop, it holds queued messages rather than starting them next. result stop_requested confirms command acceptance, not that the provider has stopped; already_inactive means no work was running. action resume_queue releases held queued messages so they run in order once the session is idle (result queue_resumed), or reports nothing_held. action drop_queued deletes queued messages: every queued message on the thread when message_ids is omitted, otherwise exactly those listed. message_ids must all be queued messages from queued_messages; any other id (unknown, already started, or already dropped) fails the whole call and nothing is dropped. Dropping requires the user's explicit request. The result lists dropped_message_ids, the observed state, the updated queued_messages with each one waiting (runs after the active turn) or held (waits for resume_queue), and a cursor for get_session_status.",
   parameters: Schema.Struct({
     server_id: ServerIdInput,
     session_id: SessionIdInput,
-    action: Schema.Literals(["stop", "resume_queue", "drop_queued"]).annotate({
+    action: Schema.Literals([
+      "stop",
+      "resume_queue",
+      "drop_queued",
+      "edit_queued",
+      "move_queued",
+      "send_queued_now",
+    ]).annotate({
       description:
-        "stop interrupts the active run and holds the queue; resume_queue releases a held queue; drop_queued deletes queued messages.",
+        "stop interrupts the active run and holds the queue; resume_queue releases a held queue; drop_queued deletes queued messages; edit_queued, move_queued, and send_queued_now change one queued message.",
     }),
     message_ids: optionalInput(
       Schema.Array(TextInput("message_id from queued_messages.")).annotate({
         description:
-          "Only for drop_queued: the queued messages to delete. Omit to delete every queued message.",
+          "For drop_queued: the queued messages to delete, or omit to delete every queued message. For edit_queued, move_queued, and send_queued_now: exactly one message.",
       }),
+    ),
+    text: optionalInput(
+      Schema.String.check(Schema.isMaxLength(100_000)).annotate({
+        description: "Only for edit_queued: the message's new text.",
+      }),
+    ),
+    before_message_id: optionalInput(
+      TextInput(
+        "Only for move_queued: the queued message to move in front of. Omit to move to the end.",
+      ),
     ),
   }),
   success: ControlSessionResult,
@@ -511,11 +574,18 @@ const GetSessionStatusTool = Tool.make("get_session_status", {
 
 const ReadSessionMessageTool = Tool.make("read_session_message", {
   description:
-    "Read the rest of a message get_session_status cut short (an update marked truncated). Pass its item_id and next_offset as offset, then keep passing the returned next_offset until it is null. Offsets count UTF-16 code units. A message still streaming can grow; streaming true means more may follow. Only messages in the session's recent history can be read.",
+    "Read the rest of a message get_session_status or read_session_history cut short (an update marked truncated). Pass its item_id and next_offset as offset, then keep passing the returned next_offset until it is null. For a message from a read_session_history page, also pass that page's history_cursor. Offsets count UTF-16 code units. A message still streaming can grow; streaming true means more may follow.",
   parameters: Schema.Struct({
     server_id: ServerIdInput,
     session_id: SessionIdInput,
-    item_id: TextInput("item_id of a truncated update from get_session_status."),
+    item_id: TextInput(
+      "item_id of a truncated update from get_session_status or read_session_history.",
+    ),
+    history_cursor: optionalInput(
+      TextInput(
+        "history_cursor of the read_session_history page the message came from, when that page had one.",
+      ),
+    ),
     offset: optionalInput(
       Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).annotate({
         description: "Where to start: next_offset from the update or the previous page. Default 0.",
@@ -537,6 +607,79 @@ const ReadSessionMessageTool = Tool.make("read_session_message", {
 })
   .annotate(Tool.Title, "Read a long session message")
   .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true)
+  .annotate(Tool.OpenWorld, false);
+
+const ReadSessionHistoryTool = Tool.make("read_session_history", {
+  description:
+    "Read a session's conversation, the user's and the agent's messages without tool activity, one page at a time from the newest backwards. The first call, without before, returns the recent messages. Each page lists messages oldest first; pass its older_cursor as before to read the page that precedes it, until older_cursor is null at the start of the session. Messages over 4,000 characters are marked truncated; read the rest with read_session_message, passing this page's history_cursor. Use it to recall what was asked or decided earlier; get_session_status is for following current work.",
+  parameters: Schema.Struct({
+    server_id: ServerIdInput,
+    session_id: SessionIdInput,
+    before: optionalInput(
+      TextInput("older_cursor from the previous read_session_history page. Omit for the newest."),
+    ),
+  }),
+  success: Schema.Struct({
+    server_id: Schema.String,
+    session_id: Schema.String,
+    history_cursor: Schema.NullOr(Schema.String),
+    messages: Schema.Array(SessionUpdateSchema),
+    older_cursor: Schema.NullOr(Schema.String),
+  }),
+  failure: BridgeError,
+})
+  .annotate(Tool.Title, "Read a session's history")
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true)
+  .annotate(Tool.OpenWorld, false);
+
+const UpdateSessionTool = Tool.make("update_session", {
+  description:
+    "Change how a session is filed in T3 Code, or which agent and model continue it. Pass only what should change; omitted fields stay. title renames it. pinned keeps it at the top of the sidebar. settled true files it away as done, false brings it back. snooze_until hides it until that time; snoozed false wakes it now. Pinned, settled, and snoozed exclude each other: settling unpins and wakes a session, pinning unsettles and wakes it, so pass at most one of pinned: true, settled: true, and snooze_until. archived true archives it (list_sessions with archived: true finds it again) and false restores it. agent, model, and reasoning_effort switch the model its next turns use, with values from list_projects; the conversation stays. Do these at the user's request, not on your own. Returns the session's title, marks, and agent as the server stored them, and changed, the fields applied in order; if a later change fails, the error names those already applied.",
+  parameters: Schema.Struct({
+    server_id: ServerIdInput,
+    session_id: SessionIdInput,
+    title: optionalInput(TextInput("The session's new title.")),
+    pinned: optionalInput(Schema.Boolean.annotate({ description: "Pin (true) or unpin (false)." })),
+    settled: optionalInput(
+      Schema.Boolean.annotate({
+        description: "Settle as done (true) or make active again (false).",
+      }),
+    ),
+    snooze_until: optionalInput(
+      TextInput(
+        "ISO 8601 time with Z or an offset, in the future, until which the session is snoozed.",
+      ),
+    ),
+    snoozed: optionalInput(
+      Schema.Literal(false).annotate({ description: "false wakes a snoozed session now." }),
+    ),
+    archived: optionalInput(
+      Schema.Boolean.annotate({ description: "Archive (true) or unarchive (false)." }),
+    ),
+    agent: optionalInput(TextInput("Agent id or name to continue with, e.g. codex or Claude.")),
+    model: optionalInput(TextInput("Model id or name to continue with.")),
+    reasoning_effort: optionalInput(
+      TextInput("A reasoning_efforts value list_projects reports for the resulting model."),
+    ),
+  }),
+  success: Schema.Struct({
+    server_id: Schema.String,
+    session_id: Schema.String,
+    title: Schema.String,
+    agent: Schema.String,
+    model: Schema.String,
+    reasoning_effort: Schema.NullOr(Schema.String),
+    ...SessionMarks,
+    changed: Schema.Array(Schema.String),
+  }),
+  failure: BridgeError,
+})
+  .annotate(Tool.Title, "Update a coding session")
+  .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true)
   .annotate(Tool.OpenWorld, false);
@@ -593,6 +736,8 @@ export const BridgeToolkit = Toolkit.make(
   ControlSessionTool,
   GetSessionStatusTool,
   ReadSessionMessageTool,
+  ReadSessionHistoryTool,
+  UpdateSessionTool,
   RespondToSessionTool,
 );
 
@@ -622,16 +767,55 @@ function interruptibleRunId(projection: OrchestrationV2ThreadProjection) {
   return backgroundWork.length > 0 ? latestRun?.id : undefined;
 }
 
-/** Messages waiting on the thread's queue, whether held after a Stop or due after the active run. */
-const queuedRuns = (projection: OrchestrationV2ThreadProjection) =>
-  projection.runs.filter((run) => run.status === "queued");
+/**
+ * Messages waiting on the thread's queue, whether held after a Stop or due
+ * after the active run, in the order the server sends them: delegated
+ * completions first, then queue position, as the server's queue orders them.
+ */
+const queuedRuns = (projection: OrchestrationV2ThreadProjection) => {
+  const completions = new Set(
+    projection.messages
+      .filter((message) => message.delegatedCompletion !== undefined)
+      .map((message) => message.id),
+  );
+  return projection.runs
+    .filter((run) => run.status === "queued")
+    .toSorted(
+      (left, right) =>
+        Number(completions.has(right.userMessageId)) -
+          Number(completions.has(left.userMessageId)) ||
+        (left.queuePosition ?? left.ordinal) - (right.queuePosition ?? right.ordinal) ||
+        left.ordinal - right.ordinal,
+    );
+};
+
+const QUEUED_TEXT_CHARS = 500;
 
 /** What get_session_status and control_session report as queued_messages. */
 const queuedMessages = (projection: OrchestrationV2ThreadProjection): typeof QueuedMessages.Type =>
-  queuedRuns(projection).map((run) => ({
-    message_id: run.userMessageId,
-    state: run.queueHeld === true ? "held" : "waiting",
-  }));
+  queuedRuns(projection).map((run) => {
+    const text = projection.messages.find((message) => message.id === run.userMessageId)?.text;
+    return {
+      message_id: run.userMessageId,
+      state: run.queueHeld === true ? "held" : "waiting",
+      text: text === undefined ? "" : text.slice(0, QUEUED_TEXT_CHARS),
+      ...(text !== undefined && text.length > QUEUED_TEXT_CHARS
+        ? { truncated: true as const }
+        : {}),
+    };
+  });
+
+const isoOrNull = (value: DateTime.Utc | null | undefined) =>
+  value == null ? null : DateTime.formatIso(value);
+
+/** A projection's sidebar marks, as list_sessions reports them from the shell. */
+const marksOf = (thread: OrchestrationV2ThreadProjection["thread"]) =>
+  sessionMarks({
+    archivedAt: isoOrNull(thread.archivedAt),
+    settledOverride: thread.settledOverride,
+    pinnedAt: isoOrNull(thread.pinnedAt),
+    snoozedUntil: isoOrNull(thread.snoozedUntil),
+  });
 
 /** Runs doing work, or due to start it without anyone acting; a held queue waits for resume_queue. */
 const WORKING_RUN_STATUSES = new Set(["queued", "preparing", "starting", "running"]);
@@ -781,21 +965,54 @@ const make = Effect.gen(function* () {
     }),
 
     list_sessions: Effect.fn("BridgeToolkit.list_sessions")(function* (input) {
-      const shells = yield* Effect.forEach(
+      const archived = input.archived === true;
+      const query = (input.query ?? "").trim().slice(0, THREAD_SEARCH_QUERY_MAX_LENGTH);
+      // The server's message search covers active sessions only and needs two characters.
+      const searching = !archived && query.length >= 2;
+      const listings = yield* Effect.forEach(
         yield* targets(input.server_id),
         (environment) =>
-          Effect.result(environment.shell).pipe(Effect.map((shell) => ({ environment, shell }))),
+          Effect.all(
+            [
+              Effect.result(archived ? environment.archivedShell : environment.shell),
+              searching
+                ? Effect.result(
+                    environment.searchThreads({
+                      query,
+                      limit: 50,
+                      ...(input.project_id == null
+                        ? {}
+                        : { projectIds: [ProjectId.make(input.project_id)] }),
+                    }),
+                  ).pipe(Effect.asSome)
+                : Effect.succeedNone,
+            ],
+            { concurrency: 2 },
+          ).pipe(Effect.map(([shell, search]) => ({ environment, shell, search }))),
         { concurrency: "unbounded" },
       );
       return {
-        servers: shells.map(({ environment, shell }) => ({
+        servers: listings.map(({ environment, shell, search }) => ({
           server_id: environment.id,
           name: environment.name,
           ...(Result.isFailure(shell) ? { error: shell.failure.message } : {}),
+          ...(Option.isSome(search) && Result.isFailure(search.value)
+            ? { search_error: search.value.failure.message }
+            : {}),
         })),
         ...findSessions(
-          shells.flatMap(({ environment, shell }) =>
-            Result.isSuccess(shell) ? [{ serverId: environment.id, shell: shell.success }] : [],
+          listings.flatMap(({ environment, shell, search }) =>
+            Result.isSuccess(shell)
+              ? [
+                  {
+                    serverId: environment.id,
+                    shell: shell.success,
+                    ...(Option.isSome(search) && Result.isSuccess(search.value)
+                      ? { search: search.value.success }
+                      : {}),
+                  },
+                ]
+              : [],
           ),
           {
             projectId: input.project_id ?? undefined,
@@ -857,14 +1074,31 @@ const make = Effect.gen(function* () {
     }),
 
     create_session: Effect.fn("BridgeToolkit.create_session")(function* (input) {
+      const scratch = input.scratch === true;
+      if (scratch === (input.project_id != null)) {
+        return yield* new BridgeError({
+          message: "Pass exactly one of project_id or scratch: true.",
+        });
+      }
+      if (scratch && input.checkout != null) {
+        return yield* new BridgeError({
+          message: "A scratch session runs in the server's scratch folder; omit checkout.",
+        });
+      }
       const environment = yield* environments.get(input.server_id);
+      // The scratch project must exist before the shell is read, so the shell lists it.
+      const projectId = scratch
+        ? (yield* environment.ensureScratchProject).projectId
+        : input.project_id!;
       const [shell, config] = yield* Effect.all([environment.shell, environment.serverConfig], {
         concurrency: 2,
       });
-      const project = shell.projects.find((candidate) => candidate.id === input.project_id);
+      const project = shell.projects.find((candidate) => candidate.id === projectId);
       if (project === undefined) {
         return yield* new BridgeError({
-          message: `Project ${input.project_id} was not found on server "${environment.id}". Call list_projects for current ids.`,
+          message: scratch
+            ? `T3 server "${environment.id}" prepared its scratch project ${projectId}, but it is no longer available. Try again.`
+            : `Project ${projectId} was not found on server "${environment.id}". Call list_projects for current ids.`,
         });
       }
       const settings = resolveProjectSettings(config.settings, project.id, project).settings;
@@ -1088,8 +1322,22 @@ const make = Effect.gen(function* () {
     control_session: Effect.fn("BridgeToolkit.control_session")(function* (input) {
       const environment = yield* environments.get(input.server_id);
       const threadId = ThreadId.make(input.session_id);
-      if (input.message_ids != null && input.action !== "drop_queued") {
-        return yield* new BridgeError({ message: "message_ids applies only to drop_queued." });
+      const queueAction =
+        input.action === "edit_queued" ||
+        input.action === "move_queued" ||
+        input.action === "send_queued_now";
+      if (input.message_ids != null && input.action !== "drop_queued" && !queueAction) {
+        return yield* new BridgeError({
+          message: "message_ids applies only to drop_queued and the queued-message actions.",
+        });
+      }
+      if (input.text != null && input.action !== "edit_queued") {
+        return yield* new BridgeError({ message: "text applies only to edit_queued." });
+      }
+      if (input.before_message_id != null && input.action !== "move_queued") {
+        return yield* new BridgeError({
+          message: "before_message_id applies only to move_queued.",
+        });
       }
       let projection = yield* environment.thread(threadId);
       let result: typeof ControlSessionResult.Type.result;
@@ -1128,6 +1376,60 @@ const make = Effect.gen(function* () {
             threadId,
           });
           result = "queue_resumed";
+        }
+      } else if (queueAction) {
+        const queued = queuedRuns(projection);
+        const queuedRun = (id: string) => {
+          const run = queued.find((candidate) => candidate.userMessageId === id);
+          return run === undefined
+            ? Effect.fail(
+                new BridgeError({
+                  code: "not_queued",
+                  message: `Not queued on this session: ${id}. It is unknown, already started, or dropped. Nothing changed; call get_session_status for current queued_messages.`,
+                }),
+              )
+            : Effect.succeed(run);
+        };
+        if (input.message_ids?.length !== 1) {
+          return yield* new BridgeError({
+            message: `${input.action} takes exactly one message in message_ids.`,
+          });
+        }
+        const run = yield* queuedRun(input.message_ids[0]!);
+        const common = { commandId: yield* commandId, threadId, runId: run.id };
+        if (input.action === "edit_queued") {
+          if (input.text == null || input.text.trim().length === 0) {
+            return yield* new BridgeError({ message: "edit_queued needs the new text." });
+          }
+          yield* environment.dispatch({ ...common, type: "queued-run.edit", text: input.text });
+          result = "edited";
+        } else if (input.action === "move_queued") {
+          const before =
+            input.before_message_id == null ? null : yield* queuedRun(input.before_message_id);
+          yield* environment.dispatch({
+            ...common,
+            type: "queued-run.reorder",
+            beforeRunId: before?.id ?? null,
+          });
+          result = "moved";
+        } else {
+          const target = projection.runs.findLast((candidate) => candidate.status === "running");
+          if (target === undefined) {
+            return yield* new BridgeError({
+              code: "message_not_applicable",
+              state: threadState(projection),
+              message:
+                "No turn is running to send it into. It runs on its own once its turn comes, or resume_queue releases a held queue.",
+            });
+          }
+          yield* environment.dispatch({
+            type: "queued-message.promote-to-steer",
+            commandId: common.commandId,
+            threadId,
+            queuedRunId: run.id,
+            targetRunId: target.id,
+          });
+          result = "sent_now";
         }
       } else {
         const queued = queuedRuns(projection);
@@ -1281,6 +1583,7 @@ const make = Effect.gen(function* () {
         agent: thread.modelSelection.instanceId,
         model: thread.modelSelection.model,
         reasoning_effort: selectedReasoningEffort(thread.modelSelection),
+        ...marksOf(thread),
         queued_messages: queuedMessages(projection),
         branch: thread.branch,
         worktree_path: thread.worktreePath,
@@ -1292,13 +1595,195 @@ const make = Effect.gen(function* () {
 
     read_session_message: Effect.fn("BridgeToolkit.read_session_message")(function* (input) {
       const environment = yield* environments.get(input.server_id);
-      const projection = yield* environment.thread(ThreadId.make(input.session_id));
-      const page = readMessage(projection, input.item_id, input.offset ?? 0);
+      const threadId = ThreadId.make(input.session_id);
+      const rows =
+        input.history_cursor == null
+          ? (yield* environment.thread(threadId)).visibleTurnItems
+          : (yield* environment.historyPage(threadId, input.history_cursor)).items;
+      const page = readMessage(rows, input.item_id, input.offset ?? 0);
       if (Result.isFailure(page)) return yield* new BridgeError({ message: page.failure });
+      return { server_id: environment.id, session_id: threadId, ...page.success };
+    }),
+
+    read_session_history: Effect.fn("BridgeToolkit.read_session_history")(function* (input) {
+      const environment = yield* environments.get(input.server_id);
+      const threadId = ThreadId.make(input.session_id);
+      const page =
+        input.before == null
+          ? yield* environment.boundedThread(threadId).pipe(
+              Effect.map((snapshot) => ({
+                items: snapshot.projection.visibleTurnItems,
+                historyCursor: snapshot.historyCursor,
+              })),
+            )
+          : yield* environment.historyPage(threadId, input.before);
       return {
         server_id: environment.id,
-        session_id: projection.thread.id,
-        ...page.success,
+        session_id: threadId,
+        history_cursor: input.before ?? null,
+        messages: historyMessages(page.items),
+        older_cursor: page.historyCursor,
+      };
+    }),
+
+    update_session: Effect.fn("BridgeToolkit.update_session")(function* (input) {
+      const environment = yield* environments.get(input.server_id);
+      const projection = yield* environment.thread(ThreadId.make(input.session_id));
+      const thread = projection.thread;
+      if (input.snooze_until != null && input.snoozed === false) {
+        return yield* new BridgeError({
+          message: "Pass snooze_until or snoozed: false, not both.",
+        });
+      }
+      if (
+        [input.pinned === true, input.settled === true, input.snooze_until != null].filter(Boolean)
+          .length > 1
+      ) {
+        return yield* new BridgeError({
+          message:
+            "Pinned, settled, and snoozed exclude each other in T3 Code: settling unpins and wakes a session, and pinning unsettles and wakes it. Pass only one of pinned: true, settled: true, and snooze_until.",
+        });
+      }
+      let snoozeUntil: string | undefined;
+      if (input.snooze_until != null) {
+        const until = DateTime.make(input.snooze_until);
+        if (
+          Option.isNone(until) ||
+          DateTime.toEpochMillis(until.value) <= DateTime.toEpochMillis(yield* DateTime.now)
+        ) {
+          return yield* new BridgeError({
+            message: "snooze_until must be a future ISO 8601 time with Z or an offset.",
+          });
+        }
+        snoozeUntil = DateTime.formatIso(until.value);
+      }
+      let modelSelection = thread.modelSelection;
+      const switching =
+        input.agent != null || input.model != null || input.reasoning_effort != null;
+      if (switching) {
+        const config = yield* environment.serverConfig;
+        const selection =
+          input.agent == null && input.model == null
+            ? Result.succeed(thread.modelSelection)
+            : resolveModelSelection({
+                providers: config.providers,
+                projectDefault: thread.modelSelection,
+                agent: input.agent ?? undefined,
+                model: input.model ?? undefined,
+              });
+        if (Result.isFailure(selection)) {
+          return yield* new BridgeError({ message: selection.failure });
+        }
+        const withEffort =
+          input.reasoning_effort == null
+            ? selection
+            : applyReasoningEffort({
+                providers: config.providers,
+                selection: selection.success,
+                reasoningEffort: input.reasoning_effort,
+              });
+        if (Result.isFailure(withEffort)) {
+          return yield* new BridgeError({ message: withEffort.failure });
+        }
+        modelSelection = withEffort.success;
+      }
+      // Each change is its own command, in this order, so a failure leaves the earlier ones applied.
+      const changes: Array<{
+        readonly field: string;
+        readonly command: (common: {
+          readonly commandId: CommandId;
+          readonly threadId: ThreadId;
+        }) => OrchestrationV2Command;
+      }> = [];
+      if (switching) {
+        changes.push({
+          field: "model",
+          command: (common) => ({
+            ...common,
+            type: modelSelectionCommandType(thread.providerInstanceId, modelSelection),
+            modelSelection,
+          }),
+        });
+      }
+      if (input.title != null) {
+        const newTitle = input.title;
+        changes.push({
+          field: "title",
+          command: (common) => ({ ...common, type: "thread.metadata.update", title: newTitle }),
+        });
+      }
+      if (input.pinned != null) {
+        const pinned = input.pinned;
+        changes.push({
+          field: "pinned",
+          command: (common) => ({ ...common, type: pinned ? "thread.pin" : "thread.unpin" }),
+        });
+      }
+      if (snoozeUntil !== undefined) {
+        const until = snoozeUntil;
+        changes.push({
+          field: "snoozed",
+          command: (common) => ({ ...common, type: "thread.snooze", snoozedUntil: until }),
+        });
+      } else if (input.snoozed === false) {
+        changes.push({
+          field: "snoozed",
+          command: (common) => ({ ...common, type: "thread.unsnooze", reason: "user" }),
+        });
+      }
+      if (input.settled != null) {
+        const settled = input.settled;
+        changes.push({
+          field: "settled",
+          command: (common) =>
+            settled
+              ? { ...common, type: "thread.settle" }
+              : { ...common, type: "thread.unsettle", reason: "user" },
+        });
+      }
+      if (input.archived != null) {
+        const archived = input.archived;
+        changes.push({
+          field: "archived",
+          command: (common) => ({
+            ...common,
+            type: archived ? "thread.archive" : "thread.unarchive",
+          }),
+        });
+      }
+      if (changes.length === 0) {
+        return yield* new BridgeError({ message: "Pass at least one change." });
+      }
+      const changed: Array<string> = [];
+      for (const change of changes) {
+        yield* environment
+          .dispatch(change.command({ commandId: yield* commandId, threadId: thread.id }))
+          .pipe(
+            Effect.mapError(
+              (error) =>
+                new BridgeError({
+                  message: `${error.message} ${change.field} was not changed${changed.length > 0 ? `; already applied: ${changed.join(", ")}` : ""}.`,
+                }),
+            ),
+          );
+        changed.push(change.field);
+      }
+      yield* Effect.logInfo("updated session", {
+        server: environment.id,
+        session: thread.id,
+        changed,
+      });
+      // The server resolves how marks interact, so report what it stored.
+      const updated = (yield* environment.thread(thread.id)).thread;
+      return {
+        server_id: environment.id,
+        session_id: thread.id,
+        title: updated.title,
+        agent: updated.modelSelection.instanceId,
+        model: updated.modelSelection.model,
+        reasoning_effort: selectedReasoningEffort(updated.modelSelection),
+        ...marksOf(updated),
+        changed,
       };
     }),
   });

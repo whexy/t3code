@@ -1,4 +1,5 @@
 import type {
+  OrchestrationV2ProjectedTurnItem,
   OrchestrationV2ThreadProjection,
   OrchestrationV2TurnItem,
   RunId,
@@ -88,26 +89,31 @@ function messageOf(item: OrchestrationV2TurnItem) {
   }
 }
 
+/** A message as an update, cut to MAX_MESSAGE_CHARS with what read_session_message needs for the rest. */
+function messageUpdate(item: OrchestrationV2TurnItem): SessionUpdate | null {
+  const message = messageOf(item);
+  if (message === null) return null;
+  const { text, ...rest } = message;
+  return {
+    // A streaming message grows in place; its updatedAt moves it past the cursor again.
+    at: iso(item.updatedAt),
+    ...rest,
+    ...(text.length > MAX_MESSAGE_CHARS
+      ? {
+          text: `${text.slice(0, MAX_MESSAGE_CHARS)}…`,
+          truncated: true as const,
+          item_id: item.id,
+          length: text.length,
+          next_offset: MAX_MESSAGE_CHARS,
+        }
+      : { text }),
+  };
+}
+
 /** Messages and the timeline entries worth narrating; tool starts and reasoning are noise. */
 function itemUpdate(item: OrchestrationV2TurnItem): SessionUpdate | null {
-  const message = messageOf(item);
-  if (message !== null) {
-    const { text, ...rest } = message;
-    return {
-      // A streaming message grows in place; its updatedAt moves it past the cursor again.
-      at: iso(item.updatedAt),
-      ...rest,
-      ...(text.length > MAX_MESSAGE_CHARS
-        ? {
-            text: `${text.slice(0, MAX_MESSAGE_CHARS)}…`,
-            truncated: true as const,
-            item_id: item.id,
-            length: text.length,
-            next_offset: MAX_MESSAGE_CHARS,
-          }
-        : { text }),
-    };
-  }
+  const message = messageUpdate(item);
+  if (message !== null) return message;
   switch (item.type) {
     case "approval_request":
       return {
@@ -147,16 +153,23 @@ function itemUpdate(item: OrchestrationV2TurnItem): SessionUpdate | null {
   }
 }
 
-function collectUpdates(projection: OrchestrationV2ThreadProjection) {
-  return projection.visibleTurnItems
+function collectUpdates(
+  rows: ReadonlyArray<OrchestrationV2ProjectedTurnItem>,
+  update: (item: OrchestrationV2TurnItem) => SessionUpdate | null = itemUpdate,
+) {
+  return rows
     .flatMap((row) => {
       // Rows a fork inherits belong to the session it came from.
       if (row.visibility !== "local") return [];
-      const update = itemUpdate(row.item);
-      return update === null ? [] : [update];
+      const result = update(row.item);
+      return result === null ? [] : [result];
     })
     .toSorted((left, right) => Date.parse(left.at) - Date.parse(right.at));
 }
+
+/** The user's and the agent's messages in a stretch of history, oldest first. */
+export const historyMessages = (rows: ReadonlyArray<OrchestrationV2ProjectedTurnItem>) =>
+  collectUpdates(rows, messageUpdate);
 
 /** What the sidebar reads to place a thread. Shells carry it; full projections derive it. */
 export interface StateSignals {
@@ -234,7 +247,7 @@ export const turnTimes = (
 
 /** A cursor past everything the projection holds now, so the next status reports only what follows. */
 export const latestCursor = (projection: OrchestrationV2ThreadProjection) =>
-  collectUpdates(projection).at(-1)?.at ?? iso(projection.updatedAt);
+  collectUpdates(projection.visibleTurnItems).at(-1)?.at ?? iso(projection.updatedAt);
 
 function changedFiles(projection: OrchestrationV2ThreadProjection, runId: RunId | undefined) {
   // The root run's checkpoint; subagent checkpoints nest under it and do not count.
@@ -267,7 +280,7 @@ export function summarizeSession(
   const state = threadState(projection);
   const error = state === "failed" ? (runtime?.lastError ?? undefined) : undefined;
   const since = options.cursor === undefined ? Number.NaN : Date.parse(options.cursor);
-  const fresh = collectUpdates(projection).filter(
+  const fresh = collectUpdates(projection.visibleTurnItems).filter(
     (update) => Number.isNaN(since) || Date.parse(update.at) > since,
   );
   const updates = fresh.slice(-options.limit);
@@ -285,21 +298,21 @@ export function summarizeSession(
 }
 
 /**
- * One page of a message status cut short, from `offset`. Status ids come from
- * the same bounded window, so a miss means the message has since aged out.
+ * One page of a message cut short, from `offset`, found among `rows`: the
+ * recent window for status ids, or the history page the message came from.
  */
 export function readMessage(
-  projection: OrchestrationV2ThreadProjection,
+  rows: ReadonlyArray<OrchestrationV2ProjectedTurnItem>,
   itemId: string,
   offset: number,
 ) {
-  const row = projection.visibleTurnItems.find(
+  const row = rows.find(
     (candidate) => candidate.visibility === "local" && candidate.item.id === itemId,
   );
   const message = row === undefined ? null : messageOf(row.item);
   if (message === null) {
     return Result.fail(
-      `Message ${itemId} is not in this session's recent history. Call get_session_status for current updates.`,
+      `Message ${itemId} is not in this stretch of the session. Pass the history_cursor of the read_session_history page it came from, or call get_session_status for current updates.`,
     );
   }
   const { text, ...rest } = message;
