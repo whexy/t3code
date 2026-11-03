@@ -1,12 +1,13 @@
 import { NEW_POLICY, type OpenedText, readPolicyText, serializePolicy } from "./document.ts";
 import type { PolicyFileHandle } from "./files.ts";
 import { jsonEqual, setPath } from "./json.ts";
-import { type RemoteLoad, type RemoteSave, sha12 } from "./remote.ts";
+import { type Opened, type PolicySummary, type RemoteSave, sha12 } from "./remote.ts";
 
 export interface Editing {
   readonly document: unknown;
   /** The text as opened or last saved; saving it unchanged writes these bytes back. */
   readonly opened: OpenedText | undefined;
+  /** The file name Download and file saves use. */
   readonly name: string;
   readonly handle: PolicyFileHandle | undefined;
 }
@@ -18,20 +19,28 @@ export const FRESH: Editing = {
   handle: undefined,
 };
 
+/** The stored policy Save writes to. */
+export interface Target {
+  readonly name: string;
+  /** The saved version this edit replaces; null until the policy is first saved. */
+  readonly etag: string | null;
+  readonly savedAt: Date | undefined;
+  /** The saved version is not a policy the editor can open, so Save must ask first. */
+  readonly unreadable: boolean;
+}
+
 /** Where Save goes. */
 export type Fleet =
   /** No policy server, as under `vp dev`: Save writes files. */
   | { readonly mode: "files" }
   | { readonly mode: "loading" }
-  /** The fleet policy did not load, so Save cannot know what it would replace. */
+  /** The policies did not load, so Save cannot know what it would replace. */
   | { readonly mode: "failed" }
   | {
       readonly mode: "ready";
-      /** The saved version this edit replaces; null before the first save. */
-      readonly etag: string | null;
-      readonly savedAt: Date | undefined;
-      /** The saved version is not a policy the editor can open, so Save must ask first. */
-      readonly unreadable: boolean;
+      readonly policies: ReadonlyArray<PolicySummary>;
+      /** None while nothing is stored yet; Save then asks for a name. */
+      readonly target: Target | undefined;
     };
 
 export interface Notice {
@@ -59,13 +68,17 @@ export type SessionAction =
   | { readonly type: "replace"; readonly editing: Editing; readonly notice: Notice | undefined }
   | { readonly type: "notice"; readonly notice: Notice | undefined }
   | { readonly type: "begin" }
-  | { readonly type: "loaded"; readonly load: RemoteLoad }
+  | ({ readonly type: "opened"; readonly notice?: Notice } & Opened)
+  /** A new policy that exists only here until Save creates it. */
+  | { readonly type: "draft"; readonly name: string }
   | {
       readonly type: "saved";
       /** What the save sent, which edits made while it was in flight are not part of. */
       readonly submitted: OpenedText;
       readonly notice: Notice;
-      readonly fleet?: { readonly etag: string; readonly savedAt: Date };
+      readonly target?: { readonly name: string; readonly etag: string; readonly savedAt: Date };
+      /** The list after the save, when it could be fetched. */
+      readonly policies?: ReadonlyArray<PolicySummary>;
       readonly file?: { readonly name: string; readonly handle: PolicyFileHandle | undefined };
     }
   /** A load or save ended without changing what is being edited; no notice keeps the current one. */
@@ -79,16 +92,27 @@ export function isDirty(editing: Editing, text = textOf(editing)): boolean {
     : text !== editing.opened.text;
 }
 
-export function afterRemoteSave(submitted: OpenedText, result: RemoteSave): SessionAction {
+/** Messages come from servers and parsers, with or without a final period. */
+const sentence = (message: string) => `${message.replace(/[.\s]+$/, "")}.`;
+
+/** `etag` null means the save created `name`, as New, Fork and a first save do. */
+export function afterRemoteSave(
+  submitted: OpenedText,
+  name: string,
+  etag: string | null,
+  result: RemoteSave,
+  policies?: ReadonlyArray<PolicySummary>,
+): SessionAction {
   switch (result.status) {
     case "saved":
       return {
         type: "saved",
         submitted,
-        fleet: { etag: result.etag, savedAt: result.savedAt },
+        target: { name, etag: result.etag, savedAt: result.savedAt },
+        ...(policies === undefined ? {} : { policies }),
         notice: {
           tone: "info",
-          text: `Saved the fleet policy (${sha12(result.etag)}). Each server applies it the next time it starts.`,
+          text: `Saved ${name} (${sha12(result.etag)}). Each server applies it the next time it starts.`,
         },
       };
     case "conflict":
@@ -96,32 +120,33 @@ export function afterRemoteSave(submitted: OpenedText, result: RemoteSave): Sess
         type: "settled",
         notice: {
           tone: "error",
-          text: "The fleet policy changed elsewhere since you loaded it, so this save was refused. Reload to get the current version.",
+          text:
+            etag === null
+              ? `A policy named ${name} already exists, so nothing was saved. Pick another name, or open ${name} from the list.`
+              : `${name} changed elsewhere since you loaded it, so this save was refused and your edits are still here. Download them if you need them, then Reload to get the current version.`,
         },
       };
     case "error":
       return {
         type: "settled",
-        notice: { tone: "error", text: `Could not save: ${result.message}` },
+        notice: { tone: "error", text: `Could not save ${name}: ${sentence(result.message)}` },
       };
   }
 }
 
-/** Messages come from servers and parsers, with or without a final period. */
-const sentence = (message: string) => `${message.replace(/[.\s]+$/, "")}.`;
-
-function loaded(state: Session, load: RemoteLoad): Session {
-  switch (load.status) {
+function opened(state: Session, action: Extract<SessionAction, { type: "opened" }>): Session {
+  const { list, name, load } = action;
+  switch (list.status) {
     case "absent":
       return { ...state, fleet: { mode: "files" } };
     case "failed":
-      // A failed reload leaves the version being edited, and its ETag, as they were.
+      // A failed reload leaves the policy being edited, and its ETag, as they were.
       return state.fleet.mode === "ready"
         ? {
             ...state,
             notice: {
               tone: "error",
-              text: `Could not reload the fleet policy: ${sentence(load.message)}`,
+              text: `Could not reload the policies: ${sentence(list.message)}`,
             },
           }
         : {
@@ -129,45 +154,70 @@ function loaded(state: Session, load: RemoteLoad): Session {
             fleet: { mode: "failed" },
             notice: {
               tone: "error",
-              text: `Could not load the fleet policy: ${sentence(load.message)} Retry before saving.`,
+              text: `Could not load the policies: ${sentence(list.message)} Retry before saving.`,
             },
           };
-    case "empty":
-      return {
-        ...state,
-        editing: FRESH,
-        fleet: { mode: "ready", etag: null, savedAt: undefined, unreadable: false },
-        notice: {
-          tone: "info",
-          text: "No fleet policy has been saved yet. Save publishes this one.",
-        },
-      };
-    case "saved": {
-      const read = readPolicyText(load.text);
-      if (!read.ok) {
-        return {
-          ...state,
-          editing: FRESH,
-          fleet: { mode: "ready", etag: load.etag, savedAt: load.savedAt, unreadable: true },
-          notice: {
-            tone: "error",
-            text: `The saved fleet policy (${sha12(load.etag)}) cannot be opened: ${sentence(read.message)} This is a new policy; Save asks before replacing the saved one.`,
-          },
-        };
-      }
-      return {
-        ...state,
-        editing: {
-          document: read.document,
-          opened: { text: load.text, document: read.document },
-          name: "policy.json",
-          handle: undefined,
-        },
-        fleet: { mode: "ready", etag: load.etag, savedAt: load.savedAt, unreadable: false },
-        notice: { tone: "info", text: `Loaded the fleet policy (${sha12(load.etag)}).` },
-      };
-    }
+    case "listed":
+      break;
   }
+  const { policies } = list;
+  const empty = (notice: Notice | undefined): Session => ({
+    ...state,
+    editing: FRESH,
+    fleet: { mode: "ready", policies, target: undefined },
+    notice: action.notice ?? notice,
+  });
+  if (name === undefined || load === undefined) {
+    return empty({
+      tone: "info",
+      text: "No policy is stored yet. Save names and publishes this one.",
+    });
+  }
+  switch (load.status) {
+    case "missing":
+      return empty({ tone: "error", text: `There is no policy named ${name}.` });
+    case "failed":
+      return state.fleet.mode === "ready"
+        ? {
+            ...state,
+            fleet: { ...state.fleet, policies },
+            notice: { tone: "error", text: `Could not load ${name}: ${sentence(load.message)}` },
+          }
+        : {
+            ...state,
+            fleet: { mode: "failed" },
+            notice: {
+              tone: "error",
+              text: `Could not load ${name}: ${sentence(load.message)} Retry before saving.`,
+            },
+          };
+    case "saved":
+      break;
+  }
+  const target = { name, etag: load.etag, savedAt: load.savedAt };
+  const read = readPolicyText(load.text);
+  if (!read.ok) {
+    return {
+      ...state,
+      editing: { ...FRESH, name: `${name}.json` },
+      fleet: { mode: "ready", policies, target: { ...target, unreadable: true } },
+      notice: {
+        tone: "error",
+        text: `The saved ${name} (${sha12(load.etag)}) cannot be opened: ${sentence(read.message)} This is a new policy; Save asks before replacing the saved one.`,
+      },
+    };
+  }
+  return {
+    ...state,
+    editing: {
+      document: read.document,
+      opened: { text: load.text, document: read.document },
+      name: `${name}.json`,
+      handle: undefined,
+    },
+    fleet: { mode: "ready", policies, target: { ...target, unreadable: false } },
+    notice: action.notice,
+  };
 }
 
 export function sessionReducer(state: Session, action: SessionAction): Session {
@@ -188,20 +238,56 @@ export function sessionReducer(state: Session, action: SessionAction): Session {
       return { ...state, notice: action.notice };
     case "begin":
       return { ...state, busy: true };
-    case "loaded":
-      return { ...loaded(state, action.load), busy: false };
-    case "saved":
+    case "opened":
+      return { ...opened(state, action), busy: false };
+    case "draft":
+      if (state.fleet.mode !== "ready") return state;
+      return {
+        ...state,
+        editing: { ...FRESH, name: `${action.name}.json` },
+        fleet: {
+          ...state.fleet,
+          target: { name: action.name, etag: null, savedAt: undefined, unreadable: false },
+        },
+        notice: { tone: "info", text: `Save creates ${action.name}.` },
+      };
+    case "saved": {
+      const { target, policies } = action;
       return {
         ...state,
         busy: false,
-        editing: { ...state.editing, ...action.file, opened: action.submitted },
+        editing: {
+          ...state.editing,
+          ...action.file,
+          ...(target === undefined ? {} : { name: `${target.name}.json` }),
+          opened: action.submitted,
+        },
         fleet:
-          action.fleet === undefined
+          target === undefined || state.fleet.mode !== "ready"
             ? state.fleet
-            : { mode: "ready", ...action.fleet, unreadable: false },
+            : {
+                mode: "ready",
+                target: { ...target, unreadable: false },
+                policies:
+                  policies ??
+                  state.fleet.policies.map((policy) =>
+                    policy.name === target.name
+                      ? { ...policy, etag: target.etag, modifiedAt: target.savedAt }
+                      : policy,
+                  ),
+              },
         notice: action.notice,
       };
+    }
     case "settled":
       return { ...state, busy: false, notice: action.notice ?? state.notice };
   }
+}
+
+/** The names the picker offers: the stored ones, plus a draft not saved yet. */
+export function pickerNames(fleet: Fleet): ReadonlyArray<string> {
+  if (fleet.mode !== "ready") return [];
+  const names = fleet.policies.map((policy) => policy.name);
+  const target = fleet.target?.name;
+  return target === undefined || names.includes(target) ? names : [...names, target].toSorted();
 }
