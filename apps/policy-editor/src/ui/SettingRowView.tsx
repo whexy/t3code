@@ -49,7 +49,7 @@ function KeyHeader({
 }) {
   return (
     <div className="flex flex-wrap items-center justify-between gap-2">
-      <code className="min-w-0 break-all text-xs text-foreground">{policyKey}</code>
+      <code className="min-w-0 break-all text-xs text-ink">{policyKey}</code>
       <div className="flex items-center gap-1.5">
         {children}
         <Button
@@ -77,7 +77,7 @@ function EntryEditor({
   return (
     <div
       id={settingAnchor(item.key)}
-      className="scroll-mt-20 space-y-2 rounded-lg border border-border/60 p-2.5"
+      className="scroll-mt-20 space-y-2 rounded-xl border border-black/5 p-3"
     >
       <KeyHeader policyKey={item.key} onRemove={() => setSetting(item.key, undefined)}>
         <StateToggle
@@ -195,7 +195,7 @@ export function SettingRowView({
       description={row.description}
       status={
         <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-          <code className="text-[11px] text-muted-foreground/80">{row.path}</code>
+          <code className="font-mono text-xs text-ink-muted">{row.path}</code>
           <span>Built-in default: {describeValue(control, row.builtIn)}</span>
         </span>
       }
@@ -219,7 +219,7 @@ export function SettingRowView({
       <ProblemList problems={problems} />
       {row.hasEntries ? (
         <div className="mt-3 space-y-2">
-          <p className="text-xs text-muted-foreground">
+          <p className="text-xs text-ink-muted">
             Entries a policy manages one at a time, as <code>{row.path}.&lt;key&gt;</code>. A
             default cannot add an entry, so lock new ones.
           </p>
@@ -238,7 +238,7 @@ export function SettingRowView({
             <div
               key={item.key}
               id={settingAnchor(item.key)}
-              className="scroll-mt-20 space-y-2 rounded-lg border border-destructive/32 p-2.5"
+              className="scroll-mt-20 space-y-2 rounded-xl border border-black/10 p-3"
             >
               <KeyHeader policyKey={item.key} onRemove={() => setSetting(item.key, undefined)} />
               <JsonEditor label={`${item.key} as written`} value={item.entry} readOnly />
