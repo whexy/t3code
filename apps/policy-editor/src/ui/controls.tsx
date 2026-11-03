@@ -186,7 +186,7 @@ export function ValueControl({
         </NumberField>
       );
       const unit = control.unit ? (
-        <span className="text-xs text-muted-foreground">{control.unit}</span>
+        <span className="text-xs text-ink-muted">{control.unit}</span>
       ) : null;
       if (!control.nullable) {
         return (
@@ -198,7 +198,7 @@ export function ValueControl({
       }
       return (
         <>
-          {value === null ? <span className="text-xs text-muted-foreground">Off</span> : field}
+          {value === null ? <span className="text-xs text-ink-muted">Off</span> : field}
           {value === null ? null : unit}
           <Switch
             aria-label={`${label} on`}
@@ -284,7 +284,7 @@ export function JsonEditor({
         }}
       />
       {draft.error === "" ? null : (
-        <p className="text-xs text-destructive-foreground">Not valid JSON: {draft.error}</p>
+        <p className="text-xs text-ink">Not valid JSON: {draft.error}</p>
       )}
     </div>
   );
@@ -297,18 +297,14 @@ export function ProblemList({ problems }: { readonly problems: ReadonlyArray<Pro
       {problems.map((problem) => (
         <li
           key={`${JSON.stringify(problem.target)}${problem.message}`}
-          className={
-            problem.severity === "error"
-              ? "text-xs text-destructive-foreground"
-              : "text-xs text-warning-foreground"
-          }
+          className={problem.severity === "error" ? "text-xs text-ink" : "text-xs text-ink-subtle"}
         >
           <span className="font-medium">
             {problem.severity === "error" ? "Refused: " : "Warning: "}
           </span>
           {problem.message}
           {problem.detail ? (
-            <span className="mt-0.5 block font-mono text-[11px] opacity-80">{problem.detail}</span>
+            <span className="mt-0.5 block font-mono text-xs text-ink-muted">{problem.detail}</span>
           ) : null}
         </li>
       ))}
