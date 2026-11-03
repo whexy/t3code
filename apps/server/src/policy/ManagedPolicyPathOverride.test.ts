@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -35,7 +36,10 @@ const runCli = (args: ReadonlyArray<string>, env: Record<string, string>) =>
   Effect.gen(function* () {
     yield* Command.runWith(cli, { version: "0.0.0" })(args);
     return (yield* TestConsole.logLines).filter((line): line is string => typeof line === "string");
-  }).pipe(withEnv(env), Effect.provide(Layer.mergeAll(NetService.layer, TestConsole.layer)));
+  }).pipe(
+    withEnv(env),
+    Effect.provide(Layer.mergeAll(NodeCrypto.layer, NetService.layer, TestConsole.layer)),
+  );
 
 const policyDir = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
