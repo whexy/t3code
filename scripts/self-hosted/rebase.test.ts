@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - drives the real rebase.sh against temporary git repos.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
