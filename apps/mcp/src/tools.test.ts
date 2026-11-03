@@ -1,13 +1,16 @@
 import { describe, expect, it } from "@effect/vitest";
 import {
+  type OrchestrationV2Command,
   type OrchestrationV2ThreadLaunchInput,
   type OrchestrationV2ThreadProjection,
   type VcsListRefsResult,
   OrchestrationV2ShellSnapshot,
+  ProjectId,
   ProviderApprovalDecision,
   ServerConfig,
   ServerProvider,
 } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -97,6 +100,7 @@ const shell = Schema.decodeSync(OrchestrationV2ShellSnapshot)({
 });
 
 type CreateSessionInput = typeof BridgeToolkit.tools.create_session.parametersSchema.Type;
+type UpdateSessionInput = typeof BridgeToolkit.tools.update_session.parametersSchema.Encoded;
 
 /**
  * A server that launches threads. Root and existing checkouts start at once;
@@ -158,7 +162,7 @@ function launchingServer(
       ...selection,
     }).pipe(Effect.provide(bridgeLayer(environment)));
   const listProjects = callTool("list_projects", {}).pipe(Effect.provide(bridgeLayer(environment)));
-  return { launches, create, listProjects };
+  return { launches, create, listProjects, layer: bridgeLayer(environment) };
 }
 
 /** The worktree the server prepares for the launched thread, after one preparing frame. */
@@ -649,6 +653,155 @@ const effortConfig = {
     }),
   ],
 };
+
+describe("scratch sessions", () => {
+  const scratch = (input: Partial<CreateSessionInput>) =>
+    callTool("create_session", { server_id: "home", task: "Explain this regex", ...input });
+
+  it.effect("launches in the server's scratch project, at its root", () => {
+    const server = launchingServer({
+      ensureScratchProject: Effect.succeed({ projectId: ProjectId.make("project-1") }),
+    });
+    return Effect.gen(function* () {
+      expect(yield* scratch({ scratch: true })).toMatchObject({ project_id: "project-1" });
+      expect(server.launches).toMatchObject([
+        { projectId: "project-1", workspaceStrategy: { type: "root" } },
+      ]);
+    }).pipe(Effect.provide(server.layer));
+  });
+
+  it.effect("needs exactly one of project_id and scratch, and no checkout with scratch", () => {
+    const server = launchingServer();
+    return Effect.gen(function* () {
+      for (const input of [
+        {},
+        { scratch: false },
+        { scratch: true, project_id: "project-1" },
+        { scratch: true, checkout: { mode: "local" as const } },
+      ]) {
+        expect((yield* Effect.flip(scratch(input))).message).toMatch(/project_id|checkout/);
+      }
+      expect(server.launches).toEqual([]);
+    }).pipe(Effect.provide(server.layer));
+  });
+});
+
+describe("update_session", () => {
+  const update = (input: Omit<UpdateSessionInput, "server_id" | "session_id">) =>
+    callTool("update_session", { server_id: "home", session_id: threadId, ...input });
+  const stamp = DateTime.makeUnsafe(NOW);
+  /** The server's part: each command changes the thread the next read returns. */
+  const applied = (command: OrchestrationV2Command, current: OrchestrationV2ThreadProjection) => {
+    const thread = current.thread;
+    const next = (() => {
+      switch (command.type) {
+        case "thread.model-selection.set":
+          return { ...thread, modelSelection: command.modelSelection };
+        case "thread.metadata.update":
+          return { ...thread, title: command.title ?? thread.title };
+        case "thread.settle":
+          return { ...thread, settledOverride: "settled" as const, pinnedAt: null };
+        case "thread.archive":
+          return { ...thread, archivedAt: stamp };
+        case "thread.snooze":
+          return { ...thread, snoozedUntil: DateTime.makeUnsafe(command.snoozedUntil) };
+        default:
+          return undefined;
+      }
+    })();
+    return next === undefined ? undefined : [{ ...current, thread: next }];
+  };
+  const configured = (dispatch?: T3Environment["dispatch"]) =>
+    threadServer(projection({ thread: appThread({ pinnedAt: stamp }) }), applied, {
+      serverConfig: Effect.succeed(effortConfig),
+      ...(dispatch === undefined ? {} : { dispatch }),
+    });
+
+  it.effect(
+    "applies each change with T3's own command, model first, and reports what it stored",
+    () => {
+      const server = configured();
+      return Effect.gen(function* () {
+        const updated = yield* update({
+          archived: true,
+          settled: true,
+          title: "Flaky test fix",
+          model: "gpt-6-astra",
+          reasoning_effort: "high",
+        });
+        expect(updated).toMatchObject({
+          title: "Flaky test fix",
+          model: "gpt-6-astra",
+          reasoning_effort: "high",
+          // The server unpinned it on settling.
+          settled: true,
+          pinned: false,
+          archived: true,
+          changed: ["model", "title", "settled", "archived"],
+        });
+        expect(server.sent.map((command) => command.type)).toEqual([
+          "thread.model-selection.set",
+          "thread.metadata.update",
+          "thread.settle",
+          "thread.archive",
+        ]);
+        expect(server.sent[0]).toMatchObject({
+          modelSelection: {
+            instanceId: "codex",
+            model: "gpt-6-astra",
+            options: [{ id: "reasoningEffort", value: "high" }],
+          },
+        });
+        expect(yield* update({ snooze_until: "2099-01-01T09:00:00+01:00" })).toMatchObject({
+          snoozed_until: "2099-01-01T08:00:00.000Z",
+        });
+      }).pipe(Effect.provide(server.layer));
+    },
+  );
+
+  it.effect("reverses each mark with its own command", () => {
+    const server = configured();
+    return Effect.gen(function* () {
+      yield* update({ pinned: true, snoozed: false, settled: false, archived: false });
+      expect(server.sent).toMatchObject([
+        { type: "thread.pin" },
+        { type: "thread.unsnooze", reason: "user" },
+        { type: "thread.unsettle", reason: "user" },
+        { type: "thread.unarchive" },
+      ]);
+    }).pipe(Effect.provide(server.layer));
+  });
+
+  it.effect("sends nothing for an invalid request, and names what applied before a failure", () => {
+    const sent: Array<string> = [];
+    const server = configured((command) =>
+      Effect.suspend(() => {
+        sent.push(command.type);
+        return command.type === "thread.settle"
+          ? Effect.fail(new BridgeError({ message: "Server refused." }))
+          : Effect.succeed({ sequence: 1 });
+      }),
+    );
+    return Effect.gen(function* () {
+      for (const input of [
+        {},
+        { snooze_until: "1969-12-31T00:00:00Z" },
+        { snooze_until: "2099-01-01T00:00:00Z", snoozed: false as const },
+        { pinned: true, settled: true },
+        { settled: true, snooze_until: "2099-01-01T00:00:00Z" },
+        { model: "no-such-model" },
+      ]) {
+        yield* Effect.flip(update(input));
+      }
+      expect(sent).toEqual([]);
+      const error = yield* Effect.flip(update({ title: "Renamed", settled: true, archived: true }));
+      expect(error.message).toBe(
+        "Server refused. settled was not changed; already applied: title.",
+      );
+      expect(sent).toEqual(["thread.metadata.update", "thread.settle"]);
+    }).pipe(Effect.provide(server.layer));
+  });
+});
 
 describe("reasoning effort", () => {
   it.effect("launches exactly as before when reasoning_effort is omitted or null", () =>

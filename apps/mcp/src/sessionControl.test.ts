@@ -69,14 +69,22 @@ const send = (message: string, mode?: "queue" | "steer" | null) =>
   });
 
 const control = (
-  action: "stop" | "resume_queue" | "drop_queued",
+  action:
+    | "stop"
+    | "resume_queue"
+    | "drop_queued"
+    | "edit_queued"
+    | "move_queued"
+    | "send_queued_now",
   messageIds?: ReadonlyArray<string>,
+  extra: { readonly text?: string; readonly before_message_id?: string } = {},
 ) =>
   callTool("control_session", {
     server_id: "home",
     session_id: threadId,
     action,
     ...(messageIds === undefined ? {} : { message_ids: messageIds }),
+    ...extra,
   });
 const stop = control("stop");
 
@@ -304,8 +312,10 @@ describe("control_session stop", () => {
     const server = threadServer(withQueue, queueServer);
     const status = callTool("get_session_status", { server_id: "home", session_id: threadId });
     return Effect.gen(function* () {
-      const queue = (state: "waiting" | "held") =>
-        ["from-bridge", "from-web"].map((message_id) => ({ message_id, state }));
+      const queue = (state: "waiting" | "held") => [
+        { message_id: "from-bridge", state, text: "Then the docs" },
+        { message_id: "from-web", state, text: "Then the changelog" },
+      ];
       expect((yield* status).queued_messages).toEqual(queue("waiting"));
       expect((yield* stop).queued_messages).toEqual(queue("held"));
       expect(server.sent).toMatchObject([
@@ -432,4 +442,75 @@ describe("control_session drop_queued", () => {
       expect(server.sent).toEqual([]);
     }).pipe(Effect.provide(server.layer));
   });
+});
+
+describe("control_session queued-message actions", () => {
+  it.effect("lists the queue in the server's send order", () => {
+    // from-web was moved in front of from-bridge.
+    const reordered = {
+      ...withQueue,
+      runs: withQueue.runs.map((candidate) =>
+        candidate.id === "run-3"
+          ? { ...candidate, queuePosition: 0 }
+          : candidate.id === "run-2"
+            ? { ...candidate, queuePosition: 1 }
+            : candidate,
+      ),
+    };
+    return Effect.gen(function* () {
+      const status = yield* callTool("get_session_status", {
+        server_id: "home",
+        session_id: threadId,
+      });
+      expect(status.queued_messages.map((queued) => queued.message_id)).toEqual([
+        "from-web",
+        "from-bridge",
+      ]);
+    }).pipe(Effect.provide(threadServer(reordered).layer));
+  });
+
+  it.effect("edits, moves, and sends a queued message now with T3's queue commands", () => {
+    const server = threadServer(withQueue);
+    return Effect.gen(function* () {
+      expect(
+        yield* control("edit_queued", ["from-bridge"], { text: "Then the docs, briefly" }),
+      ).toMatchObject({ result: "edited" });
+      expect(
+        yield* control("move_queued", ["from-web"], { before_message_id: "from-bridge" }),
+      ).toMatchObject({ result: "moved" });
+      expect(yield* control("move_queued", ["from-web"])).toMatchObject({ result: "moved" });
+      expect(yield* control("send_queued_now", ["from-web"])).toMatchObject({
+        result: "sent_now",
+      });
+      expect(server.sent).toMatchObject([
+        { type: "queued-run.edit", runId: "run-2", text: "Then the docs, briefly" },
+        { type: "queued-run.reorder", runId: "run-3", beforeRunId: "run-2" },
+        { type: "queued-run.reorder", runId: "run-3", beforeRunId: null },
+        { type: "queued-message.promote-to-steer", queuedRunId: "run-3", targetRunId: "run-1" },
+      ]);
+    }).pipe(Effect.provide(server.layer));
+  });
+
+  it.effect(
+    "changes nothing for a message that is not queued, or with no turn to send into",
+    () => {
+      const server = threadServer(held);
+      return Effect.gen(function* () {
+        expect(yield* Effect.flip(control("edit_queued", ["user-1"], { text: "x" }))).toMatchObject(
+          {
+            code: "not_queued",
+          },
+        );
+        expect(
+          yield* Effect.flip(
+            control("move_queued", ["from-web"], { before_message_id: "missing" }),
+          ),
+        ).toMatchObject({ code: "not_queued" });
+        expect(yield* Effect.flip(control("send_queued_now", ["from-web"]))).toMatchObject({
+          code: "message_not_applicable",
+        });
+        expect(server.sent).toEqual([]);
+      }).pipe(Effect.provide(server.layer));
+    },
+  );
 });
