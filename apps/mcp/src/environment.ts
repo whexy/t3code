@@ -12,6 +12,7 @@ import {
   ProjectMutationError,
   SourceControlRepositoryError,
   type OrchestrationV2Command,
+  type OrchestrationV2SearchThreadsInput,
   type OrchestrationV2ThreadLaunchInput,
   type OrchestrationV2ThreadProjection,
   type ProjectCloneSnapshot,
@@ -69,6 +70,7 @@ const isAuthorizationError = Schema.is(EnvironmentAuthorizationError);
 const isActionError = Schema.is(
   Schema.Union([
     GitCommandError,
+    OrchestrationDispatchCommandError,
     OrchestrationV2DispatchCommandError,
     OrchestrationV2ThreadLaunchError,
   ]),
@@ -110,8 +112,14 @@ const commandFailure = (serverId: string, command: OrchestrationV2Command) => {
       return `T3 server "${serverId}" did not accept the interruption.`;
     case "queued-run.cancel":
       return `T3 server "${serverId}" could not cancel a queued message.`;
-    default:
+    case "queued-run.edit":
+    case "queued-run.reorder":
+    case "queued-message.promote-to-steer":
+      return `T3 server "${serverId}" could not change the queued message.`;
+    case "runtime-request.respond":
       return `T3 server "${serverId}" did not accept the response.`;
+    default:
+      return `T3 server "${serverId}" did not accept the change to the session.`;
   }
 };
 
@@ -241,23 +249,58 @@ const makeEnvironment = Effect.fn("makeEnvironment")(function* (entry: ServerRec
     client.shellSnapshot({ headers, query: {} }),
   ).pipe(Effect.catch(failRequest("shell")));
 
+  const sessionNotFound = (threadId: ThreadId) =>
+    new BridgeError({
+      message: `Session ${threadId} was not found on T3 server "${entry.id}". It may have been archived or deleted.`,
+    });
+
   /**
    * The thread's control state (runs, requests, checkpoints) in full, with
-   * only the recent timeline: status never needs the whole history.
+   * only the recent timeline, and the cursor to the history before it.
    */
-  const thread = (threadId: ThreadId) =>
+  const boundedThread = (threadId: ThreadId) =>
     orchestration(`/api/orchestration/threads/${threadId}/bounded`, (client) =>
       client.threadBoundedSnapshot({ headers, params: { threadId }, query: {} }),
     ).pipe(
-      Effect.map((snapshot) => snapshot.projection),
+      Effect.map((snapshot) => ({
+        projection: snapshot.projection,
+        historyCursor: snapshot.hasMoreHistory ? snapshot.historyCursor : null,
+      })),
       Effect.catch((error) =>
         error._tag === "EnvironmentResourceNotFoundError"
-          ? Effect.fail(
-              new BridgeError({
-                message: `Session ${threadId} was not found on T3 server "${entry.id}". It may have been archived or deleted.`,
-              }),
-            )
+          ? Effect.fail(sessionNotFound(threadId))
           : failRequest("thread")(error),
+      ),
+    );
+
+  /** Status never needs the whole history. */
+  const thread = (threadId: ThreadId) =>
+    boundedThread(threadId).pipe(Effect.map((snapshot) => snapshot.projection));
+
+  /** The conversation page that precedes `cursor`, oldest item first. */
+  const historyPage = (threadId: ThreadId, cursor: string) =>
+    orchestration(`/api/orchestration/threads/${threadId}/history`, (client) =>
+      client.threadHistoryPage({
+        headers,
+        params: { threadId },
+        query: { cursor, view: "conversation" },
+      }),
+    ).pipe(
+      Effect.map((page) => ({
+        items: page.items,
+        historyCursor: page.hasMoreHistory ? page.nextCursor : null,
+      })),
+      Effect.catch((error) =>
+        error._tag === "EnvironmentResourceNotFoundError"
+          ? Effect.fail(sessionNotFound(threadId))
+          : error._tag === "EnvironmentRequestInvalidError"
+            ? Effect.fail(
+                new BridgeError({
+                  message:
+                    "This history cursor is no longer valid. Start again from read_session_history without before.",
+                }),
+              )
+            : failRequest("thread history")(error),
       ),
     );
 
@@ -316,6 +359,22 @@ const makeEnvironment = Effect.fn("makeEnvironment")(function* (entry: ServerRec
     expiresAt: entry.expiresAt,
     shell,
     thread,
+    boundedThread,
+    historyPage,
+    archivedShell: rpc(
+      "archived sessions",
+      `T3 server "${entry.id}" did not list its archived sessions.`,
+      (client) => client[ORCHESTRATION_V2_WS_METHODS.getArchivedShellSnapshot]({}),
+    ),
+    searchThreads: (input: OrchestrationV2SearchThreadsInput) =>
+      rpc("search sessions", `T3 server "${entry.id}" could not search its sessions.`, (client) =>
+        client[ORCHESTRATION_V2_WS_METHODS.searchThreads](input),
+      ),
+    ensureScratchProject: rpc(
+      "scratch project",
+      `T3 server "${entry.id}" could not prepare its scratch folder.`,
+      (client) => client[WS_METHODS.projectsEnsureScratch]({}),
+    ),
     serverConfig,
     dispatch,
     launchThread,
