@@ -11,9 +11,13 @@ import * as NodeHttp from "node:http";
 import * as NodePath from "node:path";
 
 export const POLICY_NAME = /^[a-z0-9][a-z0-9-]{0,62}$/;
+/** `policy.json` is only ever the single-policy server's file, never a stored policy. */
+const RESERVED_NAME = "policy";
+const isPolicyName = (name: string) => POLICY_NAME.test(name) && name !== RESERVED_NAME;
 export const API_PATH = "/api/policies";
 const MAX_POLICY_BYTES = 256 * 1024;
-const LEGACY_FILE = "policy.json";
+const LEGACY_FILE = `${RESERVED_NAME}.json`;
+const LEGACY_DIR = ".legacy";
 const MIGRATED_NAME = "dotfiles";
 
 const CONTENT_TYPES: Record<string, string> = {
@@ -93,22 +97,30 @@ export async function openPolicyStore(directory: string): Promise<PolicyStore> {
   }
   const legacy = NodePath.join(directory, LEGACY_FILE);
   const migrated = NodePath.join(directory, `${MIGRATED_NAME}.json`);
+  const legacyDir = NodePath.join(directory, LEGACY_DIR);
+  // `.legacy/` exists once this server has opened the directory, so only the first start ever
+  // migrates; a policy.json that appears later is set aside and cannot restore deleted content.
+  // Only this process writes POLICY_DIR, and it is not serving yet, so the checks cannot race.
+  const openedBefore = await exists(legacyDir);
   if (await exists(legacy)) {
-    if (await exists(migrated)) {
-      console.warn(
-        `${LEGACY_FILE} and ${MIGRATED_NAME}.json both exist in ${directory}; leaving both. ${LEGACY_FILE} is served as the policy "policy".`,
-      );
-    } else {
-      // Only this process writes POLICY_DIR, and it has not started serving, so nothing can
-      // create dotfiles.json between the check and the rename.
+    if (!openedBefore && !(await exists(migrated))) {
       await NodeFSP.rename(legacy, migrated);
-      await syncDirectory(directory);
       console.log(`migrated ${LEGACY_FILE} to ${MIGRATED_NAME}.json in ${directory}`);
+    } else {
+      await NodeFSP.mkdir(legacyDir, { recursive: true });
+      const aside = NodePath.join(
+        legacyDir,
+        `${LEGACY_FILE}.${new Date().toISOString().replace(/[:.]/g, "-")}`,
+      );
+      await NodeFSP.rename(legacy, aside);
+      console.warn(`set ${LEGACY_FILE} aside as ${aside}; it is not served`);
     }
   }
+  await NodeFSP.mkdir(legacyDir, { recursive: true });
+  await syncDirectory(directory);
 
   const pathOf = (name: string) => {
-    if (!POLICY_NAME.test(name)) throw new Error(`invalid policy name ${JSON.stringify(name)}`);
+    if (!isPolicyName(name)) throw new Error(`invalid policy name ${JSON.stringify(name)}`);
     return NodePath.join(directory, `${name}.json`);
   };
 
@@ -134,7 +146,7 @@ export async function openPolicyStore(directory: string): Promise<PolicyStore> {
   const list = async () => {
     const names = (await NodeFSP.readdir(directory))
       .map((file) => /^(.+)\.json$/.exec(file)?.[1])
-      .filter((name): name is string => name !== undefined && POLICY_NAME.test(name))
+      .filter((name): name is string => name !== undefined && isPolicyName(name))
       .toSorted();
     const policies = await Promise.all(
       names.map(async (name) => {
@@ -298,6 +310,14 @@ async function handlePolicy(
   name: string,
 ) {
   response.setHeader("Cache-Control", "no-cache");
+  if (name === RESERVED_NAME) {
+    fail(
+      response,
+      400,
+      `The name ${RESERVED_NAME} is reserved for the single-policy server's file.`,
+    );
+    return;
+  }
   if (!POLICY_NAME.test(name)) {
     fail(
       response,
@@ -481,7 +501,8 @@ export function createPublicServer(options: { readonly store: PolicyStore }): No
       return;
     }
     const name = PUBLIC_POLICY_PATH.exec(pathname)?.[1];
-    const policy = name === undefined ? null : await options.store.read(name);
+    const policy =
+      name === undefined || !isPolicyName(name) ? null : await options.store.read(name);
     if (policy === null) {
       fail(response, 404, "Not found.");
       return;

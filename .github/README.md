@@ -7,12 +7,12 @@ self-hosted fleet. For T3 Code itself (install, docs, issues), go to
 
 ## What the fork adds
 
-| Feature        | What it does                                                                                                                                                                       | Ships as                                                      |
-| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
-| Client MCP     | An MCP server that works as a T3 Code client, so an MCP client can start and follow sessions on paired T3 servers. [`apps/mcp`](../apps/mcp)                                       | `ghcr.io/whexy/t3code-mcp`                                    |
-| Policy Editor  | Edits the fleet's named managed policies and serves each read-only at `/<name>.json`, which a host fetches before its server starts. [`apps/policy-editor`](../apps/policy-editor) | `ghcr.io/whexy/t3code-policy-editor` (private)                |
-| Web Hub        | The web client, with connections kept in a shared catalog instead of one browser. [`scripts/self-hosted`](../scripts/self-hosted)                                                  | `ghcr.io/whexy/t3code-hub`                                    |
-| Server changes | `T3CODE_DEV_MANAGED_POLICY_PATH` gives each user their own managed policy file, and the `t3` server builds as a Nix package. [`nix`](../nix)                                       | `packages.{x86_64-linux,aarch64-darwin}.t3-server`, on Cachix |
+| Feature        | What it does                                                                                                                                                                              | Ships as                                                      |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| Client MCP     | An MCP server that works as a T3 Code client, so an MCP client can start and follow sessions on paired T3 servers. [`apps/mcp`](../apps/mcp)                                              | `ghcr.io/whexy/t3code-mcp`                                    |
+| Policy Editor  | Edits the fleet's named managed policies and serves each read-only at `/<name>.json`, which following hosts pick up within about 2 minutes. [`apps/policy-editor`](../apps/policy-editor) | `ghcr.io/whexy/t3code-policy-editor` (private)                |
+| Web Hub        | The web client, with connections kept in a shared catalog instead of one browser. [`scripts/self-hosted`](../scripts/self-hosted)                                                         | `ghcr.io/whexy/t3code-hub`                                    |
+| Server changes | `T3CODE_DEV_MANAGED_POLICY_PATH` gives each user their own managed policy file, and the `t3` server builds as a Nix package. [`nix`](../nix)                                              | `packages.{x86_64-linux,aarch64-darwin}.t3-server`, on Cachix |
 
 ## How it stays current
 
