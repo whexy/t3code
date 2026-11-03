@@ -1,7 +1,7 @@
 // @effect-diagnostics globalFetch:off globalDate:off - Stubs the browser's fetch that remote.ts calls.
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { loadRemotePolicy, type RemoteLoad } from "./remote.ts";
+import { listPolicies, loadPolicy, type RemoteList, type RemoteLoad } from "./remote.ts";
 
 const json = (status: number, body: string, headers: Record<string, string> = {}) =>
   new Response(body, { status, headers: { "Content-Type": "application/json", ...headers } });
@@ -15,32 +15,43 @@ const brokenBody = () =>
 const timeout = () => {
   throw new DOMException("The operation timed out.", "TimeoutError");
 };
+const LISTED = {
+  name: "dotfiles",
+  etag: '"v1"',
+  size: 2,
+  modifiedAt: "2026-11-02T23:19:03.000Z",
+  publicUrl: "https://t3-policy.clusters.work/dotfiles.json",
+};
 
-describe("loadRemotePolicy", () => {
+describe("listPolicies", () => {
   const cases: ReadonlyArray<{
     readonly name: string;
     readonly dev: boolean;
     readonly respond: () => Response | Promise<Response>;
-    /** The load, or the message a failed load must name. */
-    readonly expected: RemoteLoad | RegExp;
+    /** The list, or the message a failed list must name. */
+    readonly expected: RemoteList | RegExp;
   }> = [
     {
-      name: "a saved policy",
+      name: "the stored policies",
       dev: false,
-      respond: () =>
-        json(200, "{}", { ETag: '"v1"', "Last-Modified": "Mon, 02 Nov 2026 23:19:03 GMT" }),
+      respond: () => json(200, JSON.stringify({ policies: [LISTED] })),
       expected: {
-        status: "saved",
-        text: "{}",
-        etag: '"v1"',
-        savedAt: new Date("2026-11-02T23:19:03Z"),
+        status: "listed",
+        policies: [
+          {
+            name: "dotfiles",
+            etag: '"v1"',
+            modifiedAt: new Date("2026-11-02T23:19:03Z"),
+            publicUrl: LISTED.publicUrl,
+          },
+        ],
       },
     },
     {
-      name: "none saved yet",
+      name: "a list it cannot read",
       dev: false,
-      respond: () => json(404, '{"error":"none"}'),
-      expected: { status: "empty" },
+      respond: () => json(200, JSON.stringify({ policies: [{ name: "x" }] })),
+      expected: /cannot read/,
     },
     {
       name: "a proxy error page",
@@ -83,7 +94,55 @@ describe("loadRemotePolicy", () => {
 
   it.each(cases)("reports $name", async ({ dev, respond, expected }) => {
     using _fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => respond());
-    const result = await loadRemotePolicy({ dev });
+    const result = await listPolicies({ dev });
+    if (expected instanceof RegExp) {
+      expect(result).toMatchObject({
+        status: "failed",
+        message: expect.stringMatching(expected),
+      });
+    } else {
+      expect(result).toEqual(expected);
+    }
+  });
+});
+
+describe("loadPolicy", () => {
+  const cases: ReadonlyArray<{
+    readonly name: string;
+    readonly respond: () => Response | Promise<Response>;
+    readonly expected: RemoteLoad | RegExp;
+  }> = [
+    {
+      name: "a saved policy",
+      respond: () =>
+        json(200, "{}", { ETag: '"v1"', "Last-Modified": "Mon, 02 Nov 2026 23:19:03 GMT" }),
+      expected: {
+        status: "saved",
+        text: "{}",
+        etag: '"v1"',
+        savedAt: new Date("2026-11-02T23:19:03Z"),
+      },
+    },
+    {
+      name: "no policy by that name",
+      respond: () => json(404, '{"error":"none"}'),
+      expected: { status: "missing" },
+    },
+    {
+      name: "a proxy's 404 page",
+      respond: () => new Response("<html>", { status: 404 }),
+      expected: /HTTP 404/,
+    },
+    {
+      name: "a body that breaks off",
+      respond: brokenBody,
+      expected: /connection reset/,
+    },
+  ];
+
+  it.each(cases)("reports $name", async ({ respond, expected }) => {
+    using _fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => respond());
+    const result = await loadPolicy("dotfiles");
     if (expected instanceof RegExp) {
       expect(result).toMatchObject({
         status: "failed",
