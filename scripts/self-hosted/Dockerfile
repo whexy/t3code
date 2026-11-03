@@ -1,6 +1,6 @@
 # Build context: `server.ts` next to `web/`, a hosted web build made with
-# VITE_SHARED_CATALOG_PATH=/__t3code/shared-catalog. The self-hosted build
-# pipeline assembles it.
+# VITE_SHARED_CATALOG_PATH=/__t3code/shared-catalog. The web-hub job in
+# .github/workflows/self-hosted-build.yml assembles it.
 FROM node:24-alpine
 WORKDIR /app
 COPY server.ts ./
