@@ -180,3 +180,76 @@ describe("findSessions", () => {
     ]);
   });
 });
+
+describe("findSessions message search", () => {
+  it("adds sessions the server's search matched in their messages, and reports their marks", () => {
+    const olderSettled = session("older", "Tidy the README", 3, {
+      settledOverride: "settled",
+      settledAt: utc(4),
+    });
+    const listed = findSessions(
+      [
+        {
+          serverId: "home",
+          shell: shell(
+            [t3code],
+            [
+              session("flaky", "Fix the flaky test", 5, { pinnedAt: utc(6) }),
+              session("retry", "Speed up CI", 8),
+            ],
+          ),
+          search: {
+            matches: [
+              {
+                threadId: ThreadId.make("retry"),
+                projectId: t3code.id,
+                source: "assistant",
+                snippet: "the flaky retry loop",
+                messageCreatedAt: at(7),
+              },
+              {
+                threadId: ThreadId.make("older"),
+                projectId: t3code.id,
+                source: "user",
+                snippet: "a flaky link",
+                messageCreatedAt: at(2),
+              },
+              // A title match wins over the same session's message match.
+              {
+                threadId: ThreadId.make("flaky"),
+                projectId: t3code.id,
+                source: "user",
+                snippet: "flaky again",
+                messageCreatedAt: at(4),
+              },
+            ],
+            threads: [olderSettled],
+          },
+        },
+      ],
+      { query: "flaky", limit: 10 },
+    );
+    expect(
+      listed.sessions.map(({ session_id, match, settled, pinned }) => ({
+        session_id,
+        match,
+        settled,
+        pinned,
+      })),
+    ).toEqual([
+      {
+        session_id: "retry",
+        match: { in: "assistant_message", snippet: "the flaky retry loop" },
+        settled: false,
+        pinned: false,
+      },
+      { session_id: "flaky", match: { in: "title" }, settled: false, pinned: true },
+      {
+        session_id: "older",
+        match: { in: "user_message", snippet: "a flaky link" },
+        settled: true,
+        pinned: false,
+      },
+    ]);
+  });
+});
