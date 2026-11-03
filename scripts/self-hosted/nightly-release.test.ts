@@ -23,10 +23,12 @@ it("resolves the most recently published nightly tag", async () => {
       nightly("v0.0.46-nightly.20261006.2752", "2026-10-07T00:09:56Z"),
     ]),
   );
-  await expect(resolveNightlyRelease(fetchReleases)).resolves.toBe("v0.0.46-nightly.20261007.2787");
-  expect(fetchReleases.mock.calls[0]?.[0]).toBe(
-    "https://api.github.com/repos/pingdotgg/t3code/releases?per_page=30",
+  await expect(resolveNightlyRelease(fetchReleases, "ghs_token")).resolves.toBe(
+    "v0.0.46-nightly.20261007.2787",
   );
+  const [url, init] = fetchReleases.mock.calls[0] ?? [];
+  expect(url).toBe("https://api.github.com/repos/pingdotgg/t3code/releases?per_page=30");
+  expect(init?.headers).toMatchObject({ Authorization: "Bearer ghs_token" });
 });
 
 it.each([
