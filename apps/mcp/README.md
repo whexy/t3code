@@ -22,27 +22,77 @@ It exposes these tools:
   with provider/model filters and daily or hourly breakdowns across servers.
   See [Usage analytics](#usage-analytics).
 - `list_sessions`: existing sessions, most recently active first, including
-  ones started in T3 Code. Filter by server, project, or words from the title.
-  Archived sessions are not listed.
+  ones started in T3 Code. Filter by server, project, or a query that matches
+  titles and message text. See [Finding sessions](#finding-sessions).
 - `create_session`: starts a new thread in a project with a task, and
   optionally an agent, model, and reasoning effort. Spoken names such as
   "Claude" or "opus" match. Choose a checkout with the optional `checkout`
-  object; see [Session checkouts](#session-checkouts).
+  object; see [Session checkouts](#session-checkouts). With `scratch: true`
+  instead of a project, the session runs in the server's scratch folder.
 - `send_session_message`: sends a message into an existing session, which
   keeps its thread, history, agent, and model. See
   [Follow-up messages](#follow-up-messages).
-- `control_session`: stops running work, resumes a held queue, or drops queued
-  messages, as T3 Code's UI does. See [Controlling work](#controlling-work).
+- `control_session`: stops running work, resumes a held queue, or drops, edits,
+  reorders, or sends queued messages now, as T3 Code's UI does. See
+  [Controlling work](#controlling-work).
+- `update_session`: renames, pins, settles, snoozes, or archives a session, and
+  their reverses, or switches the agent, model, and reasoning effort its next
+  turns use. See [Filing sessions](#filing-sessions).
 - `get_session_status`: reports state, recent agent messages and tool
   activity, files changed, queued messages, and pending questions or approvals.
   Pass back the returned `cursor` to get only newer updates, and `wait: true`
   to hear when the agent finishes. See
   [Following a session](#following-a-session).
 - `read_session_message`: reads the rest of a message that
-  `get_session_status` cut short.
+  `get_session_status` or `read_session_history` cut short.
+- `read_session_history`: the conversation, page by page from the newest back
+  to the start. See [Reading history](#reading-history).
 - `respond_to_session`: submits the user's answers to a pending question, or
   their explicit decision on a pending approval. See
   [Questions and approvals](#questions-and-approvals).
+
+## Finding sessions
+
+`list_sessions` with a `query` lists a session when every word of the query is
+in its title, or when the server's message search finds the query in what the
+user or the agent wrote. `match` says which: `{"in":"title"}`, or
+`user_message`/`assistant_message` with a `snippet`. Message search covers each
+session's recent messages, as T3 Code's search does; a server whose search
+failed reports `search_error`, and only titles were matched there.
+
+Every session reports how it is filed in T3 Code's sidebar: `settled`,
+`pinned`, `snoozed_until` (null when awake), and `archived`. Archived sessions
+are listed only with `archived: true`, where `query` matches titles only.
+
+## Filing sessions
+
+`update_session` takes the fields to change and leaves the rest:
+
+```json
+{"server_id":"home","session_id":"session-id","settled":true}
+{"server_id":"home","session_id":"session-id","snooze_until":"2026-11-04T09:00:00+08:00"}
+{"server_id":"home","session_id":"session-id","model":"opus","reasoning_effort":"high"}
+```
+
+`title` renames. `pinned`, `settled`, and `archived` take `true` or `false`.
+`snooze_until` hides the session until a future time and `snoozed: false`
+wakes it. As in T3 Code, settling a session unpins and wakes it and pinning
+unsettles and wakes it, so a call takes at most one of `pinned: true`,
+`settled: true`, and `snooze_until`. `agent`, `model`, and `reasoning_effort` take the values
+`list_projects` reports and switch the model the session's next turns use;
+the conversation stays. Each change is its own command, applied in the order
+model, title, pinned, snoozed, settled, archived; when one fails, the error
+names those already applied. The result reports the session's title, marks,
+and model as the server stored them.
+
+## Reading history
+
+`read_session_history` returns the user's and the agent's messages, without
+tool activity, oldest first within a page. The first call returns the recent
+messages; pass its `older_cursor` as `before` for the page that precedes it,
+until `older_cursor` is null at the start of the session. Messages over 4,000
+characters are cut as in status; read the rest with `read_session_message`,
+passing the page's `history_cursor`.
 
 ## Inspecting a project
 
@@ -469,6 +519,20 @@ a status `cursor`.
   `code: not_queued` and nothing is dropped. If a message starts while the
   bridge is dropping several, the error names the ones already dropped. Only
   drop messages at the user's request.
+
+Queued messages are listed in the order they will run, each with its first
+500 characters of `text`. These actions take exactly one message in
+`message_ids`:
+
+- `edit_queued` replaces its text with `text`.
+- `move_queued` moves it in front of `before_message_id`, or to the end of the
+  queue without one.
+- `send_queued_now` sends it into the running turn as steering, like the UI's
+  Send now. It needs a running turn; otherwise it fails with
+  `code: message_not_applicable`.
+
+A message that already started or was dropped fails with `code: not_queued`
+and nothing changes.
 
 Steering over a pending question or approval returns
 `code: message_not_applicable` and `state: waiting`.
