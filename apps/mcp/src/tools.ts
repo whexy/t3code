@@ -817,8 +817,11 @@ const marksOf = (thread: OrchestrationV2ThreadProjection["thread"]) =>
     snoozedUntil: isoOrNull(thread.snoozedUntil),
   });
 
-/** Runs doing work, or due to start it without anyone acting; a held queue waits for resume_queue. */
-const WORKING_RUN_STATUSES = new Set(["queued", "preparing", "starting", "running"]);
+/**
+ * Runs doing work, or due to start it without anyone acting; a held queue waits for resume_queue.
+ * A waiting run that needs the user ends the wait through its state, not here.
+ */
+const WORKING_RUN_STATUSES = new Set(["queued", "preparing", "starting", "running", "waiting"]);
 const isWorking = (run: OrchestrationV2Run) =>
   WORKING_RUN_STATUSES.has(run.status) && run.queueHeld !== true;
 const WORKING_STATES = new Set<SessionState>(["queued", "starting", "running"]);
