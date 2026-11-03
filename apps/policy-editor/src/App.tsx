@@ -12,6 +12,7 @@ import {
   type LucideIcon,
   MessagesSquareIcon,
   PanelsTopLeftIcon,
+  RefreshCwIcon,
   SaveIcon,
   ShieldCheckIcon,
   ShieldIcon,
@@ -20,7 +21,7 @@ import {
   Trash2Icon,
   WrenchIcon,
 } from "lucide-react";
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useReducer, useRef, useState } from "react";
 
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
@@ -37,24 +38,28 @@ import { Input } from "~/components/ui/input";
 import { Textarea } from "~/components/ui/textarea";
 
 import { nearestRow, rowForKey, SETTING_SECTIONS } from "./policy/catalog.ts";
-import {
-  NEW_POLICY,
-  type OpenedText,
-  parsePolicyText,
-  serializePolicy,
-} from "./policy/document.ts";
+import { type OpenedText, parsePolicyText, readPolicyText } from "./policy/document.ts";
 import {
   canWriteInPlace,
   download,
   type OpenedFile,
   pickPolicyFile,
-  type PolicyFileHandle,
   readDroppedFile,
   readInputFile,
   saveAs,
   writeInPlace,
 } from "./policy/files.ts";
-import { isRecord, jsonEqual, setPath } from "./policy/json.ts";
+import { isRecord } from "./policy/json.ts";
+import { loadRemotePolicy, type RemoteLoad, saveRemotePolicy, sha12 } from "./policy/remote.ts";
+import {
+  afterRemoteSave,
+  FRESH,
+  INITIAL_SESSION,
+  isDirty,
+  sessionReducer,
+  type SessionAction,
+  textOf,
+} from "./policy/session.ts";
 import { type Problem, type ProblemTarget, validatePolicy } from "./policy/validate.ts";
 import { JsonEditor, ProblemList } from "./ui/controls.tsx";
 import { limitAnchor, LimitsSection } from "./ui/LimitsSection.tsx";
@@ -74,21 +79,6 @@ const SECTION_ICONS: Record<string, LucideIcon> = {
   "/settings/maintenance": WrenchIcon,
   "/settings/diagnostics": WrenchIcon,
   "/settings/labs": FlaskConicalIcon,
-};
-
-interface Editing {
-  readonly document: unknown;
-  /** The file as opened or last saved; saving it unchanged writes these bytes back. */
-  readonly opened: OpenedText | undefined;
-  readonly name: string;
-  readonly handle: PolicyFileHandle | undefined;
-}
-
-const FRESH: Editing = {
-  document: NEW_POLICY,
-  opened: undefined,
-  name: "policy.json",
-  handle: undefined,
 };
 
 const sectionAnchor = (id: string) => `section:${id}`;
@@ -130,45 +120,109 @@ function summaryLine(serverRefuses: boolean, errors: number, warnings: number): 
 const scrollTo = (id: string) =>
   document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
 
-export function App() {
-  const [editing, setEditing] = useState<Editing>(FRESH);
-  const [notice, setNotice] = useState<{ tone: "error" | "info"; text: string } | undefined>();
+const loadTask = async (): Promise<SessionAction> => ({
+  type: "loaded",
+  load: await loadRemotePolicy({ dev: import.meta.env.DEV }),
+});
+
+function fleetStatus(fleet: (typeof INITIAL_SESSION)["fleet"]): string | undefined {
+  switch (fleet.mode) {
+    case "files":
+      return undefined;
+    case "loading":
+      return "loading…";
+    case "failed":
+      return "not loaded";
+    case "ready":
+      if (fleet.etag === null) return "not saved yet";
+      return fleet.unreadable
+        ? `${sha12(fleet.etag)} · cannot be opened`
+        : `${sha12(fleet.etag)} · saved ${fleet.savedAt?.toLocaleString() ?? ""}`;
+  }
+}
+
+export function App({ initialLoad }: { readonly initialLoad: Promise<RemoteLoad> }) {
+  const [session, dispatch] = useReducer(sessionReducer, INITIAL_SESSION);
   const [pasteOpen, setPasteOpen] = useState(false);
   const [dragging, setDragging] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
+  // Guards against a second load or save starting before the first one's state renders.
+  const inFlight = useRef(true);
 
+  const { editing, fleet, notice, busy } = session;
   const { document: policy } = editing;
   const checked = useDeferredValue(policy);
   const verdict = useMemo(() => validatePolicy(checked), [checked]);
-  const text = serializePolicy(policy, editing.opened);
-  const dirty =
-    editing.opened === undefined ? !jsonEqual(policy, NEW_POLICY) : text !== editing.opened.text;
+  const text = textOf(editing);
+  const dirty = isDirty(editing, text);
   const errors = verdict.problems.filter((problem) => problem.severity === "error");
   const warnings = verdict.problems.filter((problem) => problem.severity === "warning");
+  const onFleet = fleet.mode !== "files";
+  const canSave = !busy && fleet.mode !== "loading" && fleet.mode !== "failed";
 
   const edit = (segments: ReadonlyArray<string>, value: unknown) =>
-    setEditing((current) => ({ ...current, document: setPath(current.document, segments, value) }));
+    dispatch({ type: "edit", segments, value });
   const setSetting = (key: string, entry: { value: unknown; locked: boolean } | undefined) =>
     edit(["settings", key], entry);
 
+  /** Runs one load or save at a time; the task's action ends it. */
+  const run = (task: () => Promise<SessionAction>) => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    dispatch({ type: "begin" });
+    void task()
+      .catch((error: unknown): SessionAction => ({
+        type: "settled",
+        notice: {
+          tone: "error",
+          text: `Could not save: ${error instanceof Error ? error.message : String(error)}`,
+        },
+      }))
+      .then((action) => {
+        inFlight.current = false;
+        dispatch(action);
+      });
+  };
+
+  // The first load starts before the page renders, so a slow server never blanks it.
+  useEffect(() => {
+    let current = true;
+    void initialLoad.then((load) => {
+      if (!current) return;
+      inFlight.current = false;
+      dispatch({ type: "loaded", load });
+    });
+    return () => {
+      current = false;
+    };
+  }, [initialLoad]);
+
   const load = (file: OpenedFile) => {
-    const parsed = parsePolicyText(file.text);
-    if (!parsed.ok) return setNotice({ tone: "error", text: `${file.name}: ${parsed.message}` });
-    if (!isRecord(parsed.document)) {
-      return setNotice({ tone: "error", text: `${file.name}: a policy is a JSON object.` });
+    if (inFlight.current) return;
+    const read = readPolicyText(file.text);
+    if (!read.ok) {
+      return dispatch({
+        type: "notice",
+        notice: { tone: "error", text: `${file.name}: ${read.message}` },
+      });
     }
     if (dirty && !window.confirm("Discard the changes to the current policy?")) return;
-    setEditing({
-      document: parsed.document,
-      opened: { text: file.text, document: parsed.document },
-      name: file.name,
-      handle: file.handle,
-    });
-    setNotice({
-      tone: "info",
-      text: file.handle
-        ? `Opened ${file.name}. Save writes back to it.`
-        : `Opened ${file.name}. Save downloads a copy.`,
+    dispatch({
+      type: "replace",
+      editing: {
+        document: read.document,
+        opened: { text: file.text, document: read.document },
+        name: file.name,
+        handle: file.handle,
+      },
+      notice: {
+        tone: "info",
+        text: onFleet
+          ? `Opened ${file.name}. Save publishes it as the fleet policy.`
+          : file.handle
+            ? `Opened ${file.name}. Save writes back to it.`
+            : `Opened ${file.name}. Save downloads a copy.`,
+      },
     });
   };
 
@@ -178,32 +232,43 @@ export function App() {
     if (file !== undefined) load(file);
   };
 
-  const save = async () => {
-    if (!verdict.valid && !window.confirm("t3 policy check refuses this policy. Save it anyway?"))
-      return;
-    try {
-      if (editing.handle !== undefined && (await writeInPlace(editing.handle, text))) {
-        setEditing((current) => ({ ...current, opened: { text, document: current.document } }));
-        return setNotice({ tone: "info", text: `Saved ${editing.name}.` });
-      }
-      const saved = await saveAs(editing.name, text);
-      if (saved === undefined) return;
-      setEditing((current) => ({
-        ...current,
-        name: saved.name,
-        handle: saved.handle,
-        opened: { text, document: current.document },
-      }));
-      setNotice({
+  const reload = () => {
+    if (inFlight.current) return;
+    if (dirty && !window.confirm("Discard the changes to the current policy?")) return;
+    run(loadTask);
+  };
+
+  const saveFile = async (submitted: OpenedText): Promise<SessionAction> => {
+    if (editing.handle !== undefined && (await writeInPlace(editing.handle, submitted.text))) {
+      return { type: "saved", submitted, notice: { tone: "info", text: `Saved ${editing.name}.` } };
+    }
+    const saved = await saveAs(editing.name, submitted.text);
+    if (saved === undefined) return { type: "settled" };
+    return {
+      type: "saved",
+      submitted,
+      file: { name: saved.name, handle: saved.handle },
+      notice: {
         tone: "info",
         text: saved.handle ? `Saved ${saved.name}.` : `Downloaded ${saved.name}.`,
-      });
-    } catch (error) {
-      setNotice({
-        tone: "error",
-        text: `Could not save: ${error instanceof Error ? error.message : String(error)}`,
-      });
-    }
+      },
+    };
+  };
+
+  const save = () => {
+    if (inFlight.current || !canSave) return;
+    if (!verdict.valid && !window.confirm("t3 policy check refuses this policy. Save it anyway?"))
+      return;
+    const submitted: OpenedText = { text, document: policy };
+    if (fleet.mode !== "ready") return run(() => saveFile(submitted));
+    if (
+      fleet.unreadable &&
+      !window.confirm(
+        `The saved fleet policy (${sha12(fleet.etag ?? "")}) cannot be opened. Replace it with this policy?`,
+      )
+    )
+      return;
+    run(async () => afterRemoteSave(submitted, await saveRemotePolicy(text, fleet.etag)));
   };
 
   // Warn before closing with unsaved changes, and save on Cmd/Ctrl+S: both are window events.
@@ -214,7 +279,7 @@ export function App() {
     const shortcut = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
         event.preventDefault();
-        void save();
+        save();
       }
     };
     window.addEventListener("beforeunload", beforeUnload);
@@ -328,11 +393,18 @@ export function App() {
           <div className="mx-auto flex max-w-4xl flex-wrap items-center gap-2 px-4 py-2.5 sm:px-6">
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
-                <span className="truncate text-sm font-medium">{editing.name}</span>
+                <span className="truncate text-sm font-medium">
+                  {onFleet ? "Fleet policy" : editing.name}
+                </span>
                 {dirty ? (
                   <Badge variant="warning" size="sm">
                     Unsaved
                   </Badge>
+                ) : null}
+                {onFleet ? (
+                  <span className="truncate text-xs text-muted-foreground">
+                    {fleetStatus(fleet)}
+                  </span>
                 ) : null}
               </div>
               <button
@@ -347,21 +419,27 @@ export function App() {
               <Button
                 size="sm"
                 variant="ghost"
+                disabled={busy}
                 onClick={() => {
                   if (dirty && !window.confirm("Discard the changes to the current policy?"))
                     return;
-                  setEditing(FRESH);
-                  setNotice(undefined);
+                  dispatch({ type: "replace", editing: FRESH, notice: undefined });
                 }}
               >
                 <FilePlusIcon />
                 New
               </Button>
-              <Button size="sm" variant="ghost" onClick={() => void open()}>
+              {onFleet ? (
+                <Button size="sm" variant="ghost" disabled={busy} onClick={reload}>
+                  <RefreshCwIcon />
+                  {fleet.mode === "failed" ? "Retry" : "Reload"}
+                </Button>
+              ) : null}
+              <Button size="sm" variant="ghost" disabled={busy} onClick={() => void open()}>
                 <FolderOpenIcon />
                 Open
               </Button>
-              <Button size="sm" variant="ghost" onClick={() => setPasteOpen(true)}>
+              <Button size="sm" variant="ghost" disabled={busy} onClick={() => setPasteOpen(true)}>
                 <ClipboardPasteIcon />
                 Paste
               </Button>
@@ -369,15 +447,18 @@ export function App() {
                 <DownloadIcon />
                 Download
               </Button>
-              <Button size="sm" onClick={() => void save()}>
+              <Button size="sm" disabled={!canSave} onClick={save}>
                 <SaveIcon />
-                {editing.handle ? "Save" : "Save as…"}
+                {onFleet || editing.handle ? "Save" : "Save as…"}
               </Button>
             </div>
           </div>
         </header>
 
-        <div className="mx-auto flex w-full max-w-4xl flex-col gap-8 px-4 pt-6 pb-24 sm:px-6">
+        <div
+          inert={fleet.mode === "loading"}
+          className="mx-auto flex w-full max-w-4xl flex-col gap-8 px-4 pt-6 pb-24 sm:px-6"
+        >
           {notice ? (
             <div
               role="status"
