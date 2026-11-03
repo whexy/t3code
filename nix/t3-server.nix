@@ -7,13 +7,30 @@
   nodejs-slim,
   rustPlatform,
   autoPatchelfHook,
+  darwin,
   jq,
   writableTmpDirAsHomeHook,
   versionCheckHook,
+  # nix/update-sources.sh passes the pins it is computing.
+  sources ? lib.importJSON ./sources.json,
 }:
 
 let
-  sources = lib.importJSON ./sources.json;
+  # nix/update-sources.sh pins every system listed here.
+  platforms = {
+    x86_64-linux = {
+      name = "linux-x64";
+      # Including the musl builds some addons pick at runtime.
+      pnpmArchitectures = ''{os: ["linux"], cpu: ["x64"], libc: ["glibc", "musl"]}'';
+    };
+    aarch64-darwin = {
+      name = "darwin-arm64";
+      pnpmArchitectures = ''{os: ["darwin"], cpu: ["arm64"]}'';
+    };
+  };
+  inherit (stdenv.hostPlatform) system isLinux isDarwin;
+  platform = platforms.${system} or (throw "t3-server: unsupported system ${system}");
+  hashes = sources.${system};
   root = ../.;
   fs = lib.fileset;
   rootPackage = lib.importJSON ../package.json;
@@ -23,21 +40,23 @@ let
   # The Node release upstream builds with. Its pristine binary becomes the
   # executable's runtime; a patched copy runs the build.
   nodeDist = fetchurl {
-    url = "https://nodejs.org/dist/v${nodeVersion}/node-v${nodeVersion}-linux-x64.tar.xz";
-    hash = sources.nodeHash;
+    url = "https://nodejs.org/dist/v${nodeVersion}/node-v${nodeVersion}-${platform.name}.tar.xz";
+    hash = hashes.nodeHash;
   };
   # autoPatchelf sets the interpreter before the rpath, which leaves Node's
   # release binary (and an executable built from it) crashing at startup;
-  # setting the rpath first does not.
-  patchNodeBinary = file: ''
-    patchelf --set-rpath ${
-      lib.makeLibraryPath [
-        stdenv.cc.libc
-        stdenv.cc.cc.lib
-      ]
-    } ${file}
-    patchelf --set-interpreter "$(cat $NIX_CC/nix-support/dynamic-linker)" ${file}
-  '';
+  # setting the rpath first does not. macOS runs it as released.
+  patchNodeBinary =
+    file:
+    lib.optionalString isLinux ''
+      patchelf --set-rpath ${
+        lib.makeLibraryPath [
+          stdenv.cc.libc
+          stdenv.cc.cc.lib
+        ]
+      } ${file}
+      patchelf --set-interpreter "$(cat $NIX_CC/nix-support/dynamic-linker)" ${file}
+    '';
   node = stdenv.mkDerivation {
     pname = "node-bin";
     version = nodeVersion;
@@ -49,19 +68,25 @@ let
     '';
   };
 
-  pnpm = stdenv.mkDerivation {
-    pname = "pnpm";
-    version = pnpmVersion;
-    src = fetchurl {
-      url = "https://registry.npmjs.org/@pnpm/exe.linux-x64/-/exe.linux-x64-${pnpmVersion}.tgz";
-      hash = sources.pnpmHash;
-    };
-    nativeBuildInputs = [ autoPatchelfHook ];
-    buildInputs = [ stdenv.cc.cc.lib ];
-    installPhase = "install -Dm755 pnpm $out/bin/pnpm";
-    # fetchPnpmDeps runs its store fixup on this.
-    passthru = { inherit nodejs-slim; };
-  };
+  pnpm = stdenv.mkDerivation (
+    {
+      pname = "pnpm";
+      version = pnpmVersion;
+      src = fetchurl {
+        url = "https://registry.npmjs.org/@pnpm/exe.${platform.name}/-/exe.${platform.name}-${pnpmVersion}.tgz";
+        hash = hashes.pnpmHash;
+      };
+      installPhase = "install -Dm755 pnpm $out/bin/pnpm";
+      # fetchPnpmDeps runs its store fixup on this.
+      passthru = { inherit nodejs-slim; };
+    }
+    // lib.optionalAttrs isLinux {
+      nativeBuildInputs = [ autoPatchelfHook ];
+      buildInputs = [ stdenv.cc.cc.lib ];
+    }
+    # Stripping invalidates the release's signature.
+    // lib.optionalAttrs isDarwin { dontStrip = true; }
+  );
 
   # Every workspace project's manifest, so pnpm sees the workspace the lockfile
   # describes; only the projects the server build reads come in whole.
@@ -107,6 +132,9 @@ let
         );
   };
 
+  # Where tsdown looks for its downloads; it ignores XDG on macOS.
+  tsdownCache = if isDarwin then "$HOME/Library/Caches/tsdown" else "$XDG_CACHE_HOME/tsdown";
+
   # Versioned by its own crate, so a nightly that leaves it alone reuses the cached build.
   resourceMonitor = rustPlatform.buildRustPackage {
     pname = "t3-resource-monitor";
@@ -128,41 +156,27 @@ stdenv.mkDerivation (finalAttrs: {
     "@t3tools/monorepo"
   ];
 
-  pnpmDeps = fetchPnpmDeps {
-    inherit (finalAttrs)
-      pname
-      version
-      src
-      pnpmWorkspaces
-      ;
-    inherit pnpm;
-    fetcherVersion = 5;
-    hash = sources.pnpmDepsHash;
-    # The fetcher takes every platform's packages; this build needs Linux x64's,
-    # including the musl builds some addons pick at runtime.
-    prePnpmInstall = ''
-      export pnpm_config_force_ignores_platform=false
-      yq -i -y '.supportedArchitectures = {os: ["linux"], cpu: ["x64"], libc: ["glibc", "musl"]}' pnpm-workspace.yaml
-    '';
-  };
+  pnpmDeps = finalAttrs.passthru.pnpmDepsFor.${system};
 
   nativeBuildInputs = [
     node
     pnpm
     pnpmConfigHook
     jq
-    autoPatchelfHook
-    writableTmpDirAsHomeHook
-  ];
+  ]
+  ++ lib.optional isLinux autoPatchelfHook
+  ++ [ writableTmpDirAsHomeHook ]
+  # tsdown signs the executable it builds with whichever codesign it finds.
+  ++ lib.optional isDarwin darwin.sigtool;
 
   # The libraries the Node runtime and the native addons link.
-  buildInputs = [ stdenv.cc.cc.lib ];
+  buildInputs = lib.optionals isLinux [ stdenv.cc.cc.lib ];
 
   # Addons ship musl builds beside the glibc ones and load them only on musl.
-  autoPatchelfIgnoreMissingDeps = [ "libc.musl-*.so.1" ];
+  autoPatchelfIgnoreMissingDeps = lib.optionals isLinux [ "libc.musl-*.so.1" ];
   # The executable is patched in installPhase; only the addons go through here.
   dontAutoPatchelf = true;
-  postFixup = ''
+  postFixup = lib.optionalString isLinux ''
     autoPatchelf "$out/libexec/t3code/node_modules"
   '';
 
@@ -174,6 +188,9 @@ stdenv.mkDerivation (finalAttrs: {
     T3CODE_TELEMETRY_CHANNEL = "nightly";
     VITE_PLUS_TELEMETRY = "0";
   };
+
+  # Node's macOS release reads its OpenSSL config from here at startup.
+  __impureHostDeps = lib.optionals isDarwin [ "/System/Library/OpenSSL" ];
 
   # What scripts/update-release-package-versions.ts does for a release, for the
   # manifests in this build; the version names the build channel too.
@@ -195,29 +212,29 @@ stdenv.mkDerivation (finalAttrs: {
     node_modules/.bin/vp run --filter @t3tools/web build
 
     export XDG_CACHE_HOME="$TMPDIR/cache"
-    nodeCache="$XDG_CACHE_HOME/tsdown/node/v${nodeVersion}/linux-x64"
+    nodeCache="${tsdownCache}/node/v${nodeVersion}/${platform.name}"
     mkdir -p "$nodeCache"
-    tar -xJf ${nodeDist} -O node-v${nodeVersion}-linux-x64/bin/node > "$nodeCache/node"
+    tar -xJf ${nodeDist} -O node-v${nodeVersion}-${platform.name}/bin/node > "$nodeCache/node"
     chmod +x "$nodeCache/node"
-    (cd apps/server && T3CODE_PACK_EXE=1 T3CODE_PACK_EXE_TARGET=linux-x64 ../../node_modules/.bin/vp pack)
+    (cd apps/server && T3CODE_PACK_EXE=1 T3CODE_PACK_EXE_TARGET=${platform.name} ../../node_modules/.bin/vp pack)
 
     runHook postBuild
   '';
 
-  # The layout of upstream's t3-<version>-linux-x64.tar.gz.
+  # The layout of upstream's t3-<version>-<platform>.tar.gz.
   installPhase = ''
     runHook preInstall
 
     dir="$out/libexec/t3code"
-    install -Dm755 apps/server/dist-exe/t3-linux-x64 "$dir/t3"
+    install -Dm755 apps/server/dist-exe/t3-${platform.name} "$dir/t3"
     cp -R apps/web/dist "$dir/client"
     find "$dir/client" -name '*.map' -delete
-    install -Dm755 ${resourceMonitor}/bin/t3-resource-monitor "$dir/resource-monitor/linux-x64/t3-resource-monitor"
+    install -Dm755 ${resourceMonitor}/bin/t3-resource-monitor "$dir/resource-monitor/${platform.name}/t3-resource-monitor"
 
     pnpm --filter=t3 --prod --offline --config.inject-workspace-packages=true deploy "$TMPDIR/deploy"
     node nix/prune-node-modules.ts "$TMPDIR/deploy"
     for prebuild in "$TMPDIR"/deploy/node_modules/.pnpm/node-pty@*/node_modules/node-pty/prebuilds/*; do
-      [[ "''${prebuild##*/}" == linux-x64 ]] || rm -rf "$prebuild"
+      [[ "''${prebuild##*/}" == ${platform.name} ]] || rm -rf "$prebuild"
     done
     mv "$TMPDIR/deploy/node_modules" "$dir/node_modules"
 
@@ -232,13 +249,41 @@ stdenv.mkDerivation (finalAttrs: {
   doInstallCheck = true;
   versionCheckProgramArg = "--version";
 
-  passthru = { inherit node pnpm resourceMonitor; };
+  passthru = {
+    inherit
+      node
+      pnpm
+      resourceMonitor
+      platforms
+      ;
+    # Every system's: what pnpm fetches depends only on the platforms it is
+    # told to take, so nix/update-sources.sh pins them all from one machine.
+    pnpmDepsFor = lib.mapAttrs (
+      depsSystem: depsPlatform:
+      fetchPnpmDeps {
+        inherit (finalAttrs)
+          pname
+          version
+          src
+          pnpmWorkspaces
+          ;
+        inherit pnpm;
+        fetcherVersion = 5;
+        hash = sources.${depsSystem}.pnpmDepsHash;
+        # The fetcher takes every platform's packages; a build needs its own.
+        prePnpmInstall = ''
+          export pnpm_config_force_ignores_platform=false
+          yq -i -y '.supportedArchitectures = ${depsPlatform.pnpmArchitectures}' pnpm-workspace.yaml
+        '';
+      }
+    ) platforms;
+  };
 
   meta = {
     description = "T3 Code server, built from the whexy/t3code self-hosted fork";
     homepage = "https://github.com/whexy/t3code";
     license = lib.licenses.mit;
     mainProgram = "t3";
-    platforms = [ "x86_64-linux" ];
+    platforms = builtins.attrNames platforms;
   };
 })
