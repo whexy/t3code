@@ -1,0 +1,13 @@
+@import "tailwindcss" source(none);
+@import "./frost/tokens.css";
+@import "./frost/components.css";
+
+@source "../src/adminView.ts";
+
+/* Frost's font stacks read these. The page loads the families from Google Fonts. */
+:root {
+  --font-lato: "Lato";
+  --font-fira: "Fira Sans";
+  --font-notosans: "Noto Sans SC";
+  --font-jetbrains: "JetBrains Mono";
+}
