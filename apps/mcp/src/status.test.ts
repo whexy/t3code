@@ -84,6 +84,17 @@ describe("summarizeSession", () => {
     );
     expect(resumed.state).toBe("running");
     expect(resumed.waiting_for).toBeUndefined();
+
+    // A run held by a request the user does not answer is working, as T3 Code shows it.
+    const toolCall = summarizeSession(
+      projection({
+        runs: [run({ status: "waiting" })],
+        runtimeRequests: [runtimeRequest("request-2", "dynamic_tool_call")],
+      }),
+      { limit: 5 },
+    );
+    expect(toolCall.state).toBe("running");
+    expect(toolCall.waiting_for).toBeUndefined();
   });
 
   it("is starting while the workspace prepares, and failed with the run's error", () => {
