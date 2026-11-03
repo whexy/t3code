@@ -25,9 +25,9 @@ packages only the server depends on by path.
 
 ## Deployment
 
-`.woodpecker/self-hosted-policy-editor.yaml` publishes `ghcr.io/whexy/t3code-policy-editor` on
-every push to `self-hosted-nightly`, with the same `1.1.<pipeline>` version as the web image, so
-each nightly brings that nightly's policy rules. The image serves `dist/` with `serve.ts` on port
+`.github/workflows/self-hosted-build.yml` publishes `ghcr.io/whexy/t3code-policy-editor` on every
+push to `self-hosted-nightly`, with the same `1.2.<run>` version as the web hub image, so each
+nightly brings that nightly's policy rules. The image serves `dist/` with `serve.ts` on port
 8080 and answers `GET /healthz`. `./build-image.sh` builds it locally.
 
 ## How it checks a policy
