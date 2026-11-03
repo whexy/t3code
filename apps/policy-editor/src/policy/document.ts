@@ -1,4 +1,4 @@
-import { jsonEqual } from "./json.ts";
+import { isRecord, jsonEqual } from "./json.ts";
 
 /** A file as it was opened, so saving it unchanged gives back the same bytes. */
 export interface OpenedText {
@@ -21,6 +21,19 @@ export function parsePolicyText(
       message: `Not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
     };
   }
+}
+
+/** A policy file's text as a document the editor can open. */
+export function readPolicyText(
+  text: string,
+):
+  | { readonly ok: true; readonly document: unknown }
+  | { readonly ok: false; readonly message: string } {
+  const parsed = parsePolicyText(text);
+  if (parsed.ok && !isRecord(parsed.document)) {
+    return { ok: false, message: "A policy is a JSON object." };
+  }
+  return parsed;
 }
 
 /** Indentation and final newline of `text`, so an edited file keeps its layout. */
