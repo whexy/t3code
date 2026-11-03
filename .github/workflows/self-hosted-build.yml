@@ -273,8 +273,10 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
-      - uses: ./.github/actions/self-hosted-current
-      - env:
+      - id: current
+        uses: ./.github/actions/self-hosted-current
+      - if: steps.current.outputs.current == 'true'
+        env:
           HUB: ${{ needs.web-hub.outputs.digest }}
           MCP: ${{ needs.mcp.outputs.digest }}
           POLICY_EDITOR: ${{ needs.policy-editor.outputs.digest }}
@@ -302,8 +304,10 @@ jobs:
       - uses: actions/checkout@v6
         with:
           sparse-checkout: .github/actions
-      - uses: ./.github/actions/self-hosted-current
-      - env:
+      - id: current
+        uses: ./.github/actions/self-hosted-current
+      - if: steps.current.outputs.current == 'true'
+        env:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag="pin/${GITHUB_SHA::12}"
@@ -319,8 +323,10 @@ jobs:
       - uses: actions/checkout@v6
         with:
           sparse-checkout: .github/actions
-      - uses: ./.github/actions/self-hosted-current
+      - id: current
+        uses: ./.github/actions/self-hosted-current
       - name: Start the dotfiles pin lane
+        if: steps.current.outputs.current == 'true'
         env:
           WOODPECKER_TOKEN: ${{ secrets.WOODPECKER_TOKEN }}
         run: |

@@ -1,12 +1,18 @@
 name: Check this run may still publish
 description: >-
-  Fails unless this is the run's first attempt and self-hosted-nightly still
-  points at its commit. Publishing jobs run it right before they change
-  anything, since the branch can move after the gate.
+  Fails unless this is the run's first attempt. Outputs current=false, and
+  writes the SUPERSEDED summary line, when self-hosted-nightly has moved past
+  the run's commit, since the newer push publishes itself. Publishing jobs run
+  it right before they change anything and gate those steps on `current`.
+outputs:
+  current:
+    description: "'true' when self-hosted-nightly still points at this run's commit"
+    value: ${{ steps.head.outputs.current }}
 runs:
   using: composite
   steps:
-    - shell: bash
+    - id: head
+      shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
       run: |
@@ -15,7 +21,9 @@ runs:
           exit 1
         fi
         head="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/self-hosted-nightly" --jq .object.sha)"
-        if [[ "$head" != "$GITHUB_SHA" ]]; then
-          echo "::error::self-hosted-nightly moved to $head after the gate; that push publishes itself."
-          exit 1
+        if [[ "$head" == "$GITHUB_SHA" ]]; then
+          echo current=true >> "$GITHUB_OUTPUT"
+        else
+          echo "state=SUPERSEDED commit=$GITHUB_SHA head=$head" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo current=false >> "$GITHUB_OUTPUT"
         fi

@@ -25,9 +25,9 @@ finish() {
   exit 0
 }
 
-# Every rebase replays the fork commit that changed nix/sources.json's format
-# onto the original file, without the dropped pin commit in between, so it
-# conflicts there. PIN rewrites the file, so the fork's version stands in.
+# A fork commit that edits nix/sources.json after the dropped pin commit, such
+# as the one that keyed its hashes by system on its first rebase, conflicts
+# there. PIN rewrites the file, so the fork's version stands in.
 rebase_onto() {
   # Git 2.45+ writes `pick <sha> # <subject>`, older versions omit the `# `.
   GIT_SEQUENCE_EDITOR="sed -i -E '/^pick [0-9a-f]+ (# )?chore\\(nix\\): pin sources /s/^pick/drop/'" \
