@@ -1,5 +1,5 @@
 # Build context: `bin.mjs`, the MCP bridge bundled by `vp pack` in apps/mcp.
-# The self-hosted build pipeline assembles it.
+# The mcp job in .github/workflows/self-hosted-build.yml assembles it.
 #
 # Port 8787 serves MCP at /mcp, only behind the Cloudflare Access application
 # named by T3_MCP_ACCESS_TEAM_DOMAIN and T3_MCP_ACCESS_AUD, which the bridge
