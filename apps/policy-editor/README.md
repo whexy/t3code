@@ -8,7 +8,8 @@ edit with the server's own code, so what it accepts `t3 policy check` accepts.
 Served by `serve.ts`, the editor opens the fleet policy at `/policy.json` and Save writes it back
 there; each T3 server fetches that URL and applies the policy the next time it starts. Open, Paste
 and New replace what you are editing, and Save then publishes it; Download keeps a copy as a file.
-If someone else saved since you loaded, Save is refused and Reload fetches their version.
+If someone else saved since you loaded, Save is refused and Reload fetches their version. If the
+policy cannot be loaded, the editor says why and Save stays off until Retry loads it.
 
 Without that server, as under `vp dev`, policies stay in the browser: save back to the opened file
 (in Chromium browsers) or download it.
@@ -37,9 +38,10 @@ nightly brings that nightly's policy rules. `./build-image.sh` builds it locally
 
 - `GET /policy.json`: the saved policy with `ETag: "<sha256>"`; 404 before the first save.
 - `PUT /policy.json`: replace it. `If-None-Match: *` creates the first one and `If-Match: "<etag>"`
-  replaces that version; a stale precondition gets 412, none at all 428. The body is a JSON object
-  of at most 256 KiB with `schemaVersion: 1` and an `organization` string.
-- `GET /healthz`: 200 while `POLICY_DIR` is writable.
+  replaces that version (`*` for whichever is saved). A stale precondition gets 412 and a missing
+  one 428. The body is a JSON object of at most 256 KiB with `schemaVersion: 1` and an
+  `organization` string.
+- `GET /healthz`: 200 while `POLICY_DIR` is a writable directory.
 
 `POLICY_DIR` (`/data` in the image) holds `policy.json`. Mount a persistent volume there, writable
 by uid 1000, and run one replica: saves are serialized inside the process. There is no login, so

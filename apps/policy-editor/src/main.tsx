@@ -10,9 +10,9 @@ import { loadRemotePolicy } from "./policy/remote.ts";
 
 const root = document.getElementById("root");
 if (root === null) throw new Error("The page has no #root element.");
-const initial = await loadRemotePolicy();
+const initialLoad = loadRemotePolicy({ dev: import.meta.env.DEV });
 createRoot(root).render(
   <StrictMode>
-    <App initial={initial} />
+    <App initialLoad={initialLoad} />
   </StrictMode>,
 );
