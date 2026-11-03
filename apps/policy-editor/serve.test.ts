@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off globalFetch:off - Exercises the Node-only server over real HTTP, as hosts and the editor do.
 import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
+import * as NodeHttp from "node:http";
 import type * as NodeNet from "node:net";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -178,5 +179,18 @@ describe("static files", () => {
     await using server = await startServer();
     expect(await (await fetch(`${server.origin}/`)).text()).toBe("<editor>");
     expect((await fetch(`${server.origin}/%E0%A4%A`)).status).toBe(404);
+  });
+
+  it("answers 400 to a request URL it cannot parse, and keeps serving", async () => {
+    await using server = await startServer();
+    // fetch would normalize this URL, so send the raw request line.
+    const status = await new Promise<number | undefined>((resolve, reject) => {
+      NodeHttp.get(`${server.origin}/`, { path: "//[" }, (response) => {
+        response.resume();
+        resolve(response.statusCode);
+      }).on("error", reject);
+    });
+    expect(status).toBe(400);
+    expect((await fetch(`${server.origin}/healthz`)).status).toBe(200);
   });
 });

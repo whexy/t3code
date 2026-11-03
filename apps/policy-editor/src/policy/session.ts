@@ -173,6 +173,8 @@ function loaded(state: Session, load: RemoteLoad): Session {
 export function sessionReducer(state: Session, action: SessionAction): Session {
   switch (action.type) {
     case "edit":
+      // The first load replaces the whole document, so the editor is read-only until it settles.
+      if (state.fleet.mode === "loading") return state;
       return {
         ...state,
         editing: {

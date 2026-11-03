@@ -32,15 +32,20 @@ export interface PolicyEditorServerOptions {
 export function createPolicyEditorServer(options: PolicyEditorServerOptions): NodeHttp.Server {
   const store = makePolicyStore(options.policyDir);
   const root = NodePath.resolve(options.webRoot);
+  const route = async (request: NodeHttp.IncomingMessage, response: NodeHttp.ServerResponse) => {
+    let pathname: string;
+    try {
+      pathname = new URL(request.url ?? "/", "http://localhost").pathname;
+    } catch {
+      fail(response, 400, "The request URL is malformed.");
+      return;
+    }
+    if (pathname === POLICY_PATH) return handlePolicy(request, response, store);
+    if (pathname === "/healthz") return handleHealth(response, options.policyDir);
+    return serveStatic(request, response, root, pathname);
+  };
   return NodeHttp.createServer((request, response) => {
-    const pathname = new URL(request.url ?? "/", "http://localhost").pathname;
-    const handled =
-      pathname === POLICY_PATH
-        ? handlePolicy(request, response, store)
-        : pathname === "/healthz"
-          ? handleHealth(response, options.policyDir)
-          : serveStatic(request, response, root, pathname);
-    handled.catch((error: unknown) => {
+    route(request, response).catch((error: unknown) => {
       console.error(error);
       if (!response.headersSent) fail(response, 500, "The server could not complete the request.");
       else response.end();
@@ -248,15 +253,21 @@ function makePolicyStore(directory: string): PolicyStore {
         await NodeFSP.rm(temporaryPath, { force: true });
         throw error;
       }
-      // The rename is durable only once the directory entry is.
-      const directoryHandle = await NodeFSP.open(directory, "r");
+      // The rename is durable only once the directory entry is. It has already committed the
+      // write, so a failure from here on is a warning, not a failed save.
+      let savedAt = new Date();
       try {
-        await directoryHandle.sync();
-      } finally {
-        await directoryHandle.close();
+        const directoryHandle = await NodeFSP.open(directory, "r");
+        try {
+          await directoryHandle.sync();
+        } finally {
+          await directoryHandle.close();
+        }
+        savedAt = (await NodeFSP.stat(currentPath)).mtime;
+      } catch (error) {
+        console.warn(`policy saved, but syncing ${directory} failed: ${(error as Error).message}`);
       }
       const sha256 = sha256Of(raw);
-      const savedAt = (await NodeFSP.stat(currentPath)).mtime;
       console.log(`policy saved sha=${sha256.slice(0, 12)} size=${Buffer.byteLength(raw)}`);
       return { status: "saved", etag: `"${sha256}"`, sha256, savedAt };
     });

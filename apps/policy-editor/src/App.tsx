@@ -455,7 +455,10 @@ export function App({ initialLoad }: { readonly initialLoad: Promise<RemoteLoad>
           </div>
         </header>
 
-        <div className="mx-auto flex w-full max-w-4xl flex-col gap-8 px-4 pt-6 pb-24 sm:px-6">
+        <div
+          inert={fleet.mode === "loading"}
+          className="mx-auto flex w-full max-w-4xl flex-col gap-8 px-4 pt-6 pb-24 sm:px-6"
+        >
           {notice ? (
             <div
               role="status"

@@ -79,6 +79,26 @@ describe("loading the fleet policy", () => {
     expect(retried.editing.opened?.text).toBe(SAVED_TEXT);
   });
 
+  it("ignores edits until the first load settles", () => {
+    const early = run(INITIAL_SESSION, {
+      type: "edit",
+      segments: ["organization"],
+      value: "typed early",
+    });
+    expect(early.editing).toBe(FRESH);
+
+    const ready = run(
+      early,
+      { type: "loaded", load: saved() },
+      {
+        type: "edit",
+        segments: ["organization"],
+        value: "typed later",
+      },
+    );
+    expect(ready.editing.document).toEqual({ schemaVersion: 1, organization: "typed later" });
+  });
+
   it("keeps the version being edited when a reload fails", () => {
     const edited = run(loaded(saved()), { type: "edit", segments: ["organization"], value: "a" });
 
