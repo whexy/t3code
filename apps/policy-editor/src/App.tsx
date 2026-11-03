@@ -1,12 +1,16 @@
 import {
   BotIcon,
+  CheckIcon,
+  CircleAlertIcon,
   ClipboardPasteIcon,
+  CopyIcon,
   DownloadIcon,
   FilePlusIcon,
   FlaskConicalIcon,
   FolderOpenIcon,
   FolderTreeIcon,
   GitBranchIcon,
+  GitForkIcon,
   GlobeIcon,
   KeyRoundIcon,
   type LucideIcon,
@@ -23,18 +27,15 @@ import {
 } from "lucide-react";
 import { useDeferredValue, useEffect, useMemo, useReducer, useRef, useState } from "react";
 
-import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
-import {
-  Dialog,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogPanel,
-  DialogPopup,
-  DialogTitle,
-} from "~/components/ui/dialog";
 import { Input } from "~/components/ui/input";
+import {
+  Select,
+  SelectItem,
+  SelectPopup,
+  SelectTrigger,
+  SelectValue,
+} from "~/components/ui/select";
 import { Textarea } from "~/components/ui/textarea";
 
 import { nearestRow, rowForKey, SETTING_SECTIONS } from "./policy/catalog.ts";
@@ -50,18 +51,30 @@ import {
   writeInPlace,
 } from "./policy/files.ts";
 import { isRecord } from "./policy/json.ts";
-import { loadRemotePolicy, type RemoteLoad, saveRemotePolicy, sha12 } from "./policy/remote.ts";
+import {
+  deletePolicy,
+  listPolicies,
+  type Opened,
+  openPolicies,
+  POLICY_NAME,
+  savePolicy,
+  sha12,
+} from "./policy/remote.ts";
 import {
   afterRemoteSave,
   FRESH,
+  type Fleet,
   INITIAL_SESSION,
   isDirty,
+  type Notice,
+  pickerNames,
   sessionReducer,
   type SessionAction,
   textOf,
 } from "./policy/session.ts";
 import { type Problem, type ProblemTarget, validatePolicy } from "./policy/validate.ts";
 import { JsonEditor, ProblemList } from "./ui/controls.tsx";
+import { Dialog } from "./ui/dialog.tsx";
 import { limitAnchor, LimitsSection } from "./ui/LimitsSection.tsx";
 import { type PolicyKey, settingAnchor, SettingRowView } from "./ui/SettingRowView.tsx";
 import { SettingsGroupHeading, SettingsRow, SettingsSection } from "./ui/settingsLayout.tsx";
@@ -120,12 +133,16 @@ function summaryLine(serverRefuses: boolean, errors: number, warnings: number): 
 const scrollTo = (id: string) =>
   document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
 
-const loadTask = async (): Promise<SessionAction> => ({
-  type: "loaded",
-  load: await loadRemotePolicy({ dev: import.meta.env.DEV }),
-});
+const DISCARD = (name: string) => `Discard the unsaved changes to ${name}?`;
 
-function fleetStatus(fleet: (typeof INITIAL_SESSION)["fleet"]): string | undefined {
+const openTask =
+  (name: string | undefined, notice?: Notice) => async (): Promise<SessionAction> => ({
+    type: "opened",
+    ...(await openPolicies(name)),
+    ...(notice === undefined ? {} : { notice }),
+  });
+
+function fleetStatus(fleet: Fleet): string | undefined {
   switch (fleet.mode) {
     case "files":
       return undefined;
@@ -133,17 +150,23 @@ function fleetStatus(fleet: (typeof INITIAL_SESSION)["fleet"]): string | undefin
       return "loading…";
     case "failed":
       return "not loaded";
-    case "ready":
-      if (fleet.etag === null) return "not saved yet";
-      return fleet.unreadable
-        ? `${sha12(fleet.etag)} · cannot be opened`
-        : `${sha12(fleet.etag)} · saved ${fleet.savedAt?.toLocaleString() ?? ""}`;
+    case "ready": {
+      const { target } = fleet;
+      if (target === undefined || target.etag === null) return "not saved yet";
+      return target.unreadable
+        ? `${sha12(target.etag)} · cannot be opened`
+        : `${sha12(target.etag)} · saved ${target.savedAt?.toLocaleString() ?? ""}`;
+    }
   }
 }
 
-export function App({ initialLoad }: { readonly initialLoad: Promise<RemoteLoad> }) {
+/** New starts a draft; Fork and a first Save store the current policy under a new name. */
+type Naming = "new" | "fork";
+
+export function App({ initialOpen }: { readonly initialOpen: Promise<Opened> }) {
   const [session, dispatch] = useReducer(sessionReducer, INITIAL_SESSION);
   const [pasteOpen, setPasteOpen] = useState(false);
+  const [naming, setNaming] = useState<Naming | undefined>(undefined);
   const [dragging, setDragging] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   // Guards against a second load or save starting before the first one's state renders.
@@ -158,7 +181,15 @@ export function App({ initialLoad }: { readonly initialLoad: Promise<RemoteLoad>
   const errors = verdict.problems.filter((problem) => problem.severity === "error");
   const warnings = verdict.problems.filter((problem) => problem.severity === "warning");
   const onFleet = fleet.mode !== "files";
+  const ready = fleet.mode === "ready" ? fleet : undefined;
+  const target = ready?.target;
+  const targetName = target?.name;
+  const publicUrl =
+    target?.etag === null
+      ? undefined
+      : ready?.policies.find((summary) => summary.name === targetName)?.publicUrl;
   const canSave = !busy && fleet.mode !== "loading" && fleet.mode !== "failed";
+  const currentLabel = targetName ?? "this policy";
 
   const edit = (segments: ReadonlyArray<string>, value: unknown) =>
     dispatch({ type: "edit", segments, value });
@@ -175,7 +206,7 @@ export function App({ initialLoad }: { readonly initialLoad: Promise<RemoteLoad>
         type: "settled",
         notice: {
           tone: "error",
-          text: `Could not save: ${error instanceof Error ? error.message : String(error)}`,
+          text: `The request failed: ${error instanceof Error ? error.message : String(error)}`,
         },
       }))
       .then((action) => {
@@ -187,15 +218,28 @@ export function App({ initialLoad }: { readonly initialLoad: Promise<RemoteLoad>
   // The first load starts before the page renders, so a slow server never blanks it.
   useEffect(() => {
     let current = true;
-    void initialLoad.then((load) => {
+    void initialOpen.then((opened) => {
       if (!current) return;
       inFlight.current = false;
-      dispatch({ type: "loaded", load });
+      dispatch({ type: "opened", ...opened });
     });
     return () => {
       current = false;
     };
-  }, [initialLoad]);
+  }, [initialOpen]);
+
+  // Keeps the address bar naming the open policy, so a page reload reopens it.
+  useEffect(() => {
+    if (targetName === undefined || target?.etag === null) return;
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("policy") === targetName) return;
+    url.searchParams.set("policy", targetName);
+    window.history.replaceState(null, "", url);
+  }, [targetName, target?.etag]);
+
+  const confirmDiscard = () => !dirty || window.confirm(DISCARD(currentLabel));
+  const confirmInvalid = () =>
+    verdict.valid || window.confirm("t3 policy check refuses this policy. Save it anyway?");
 
   const load = (file: OpenedFile) => {
     if (inFlight.current) return;
@@ -206,19 +250,21 @@ export function App({ initialLoad }: { readonly initialLoad: Promise<RemoteLoad>
         notice: { tone: "error", text: `${file.name}: ${read.message}` },
       });
     }
-    if (dirty && !window.confirm("Discard the changes to the current policy?")) return;
+    if (!confirmDiscard()) return;
     dispatch({
       type: "replace",
       editing: {
         document: read.document,
         opened: { text: file.text, document: read.document },
-        name: file.name,
-        handle: file.handle,
+        name: onFleet ? editing.name : file.name,
+        handle: onFleet ? undefined : file.handle,
       },
       notice: {
         tone: "info",
         text: onFleet
-          ? `Opened ${file.name}. Save publishes it as the fleet policy.`
+          ? target === undefined
+            ? `Opened ${file.name}. Save names and publishes it.`
+            : `Opened ${file.name} into ${target.name}. Save replaces ${target.name} with it.`
           : file.handle
             ? `Opened ${file.name}. Save writes back to it.`
             : `Opened ${file.name}. Save downloads a copy.`,
@@ -233,9 +279,13 @@ export function App({ initialLoad }: { readonly initialLoad: Promise<RemoteLoad>
   };
 
   const reload = () => {
-    if (inFlight.current) return;
-    if (dirty && !window.confirm("Discard the changes to the current policy?")) return;
-    run(loadTask);
+    if (inFlight.current || !confirmDiscard()) return;
+    run(openTask(targetName));
+  };
+
+  const switchTo = (name: string) => {
+    if (name === targetName || inFlight.current || !confirmDiscard()) return;
+    run(openTask(name));
   };
 
   const saveFile = async (submitted: OpenedText): Promise<SessionAction> => {
@@ -255,20 +305,81 @@ export function App({ initialLoad }: { readonly initialLoad: Promise<RemoteLoad>
     };
   };
 
+  const saveTask =
+    (submitted: OpenedText, name: string, etag: string | null) =>
+    async (): Promise<SessionAction> => {
+      const result = await savePolicy(name, submitted.text, etag);
+      const list = result.status === "saved" ? await listPolicies({ dev: false }) : undefined;
+      return afterRemoteSave(
+        submitted,
+        name,
+        etag,
+        result,
+        list?.status === "listed" ? list.policies : undefined,
+      );
+    };
+
   const save = () => {
-    if (inFlight.current || !canSave) return;
-    if (!verdict.valid && !window.confirm("t3 policy check refuses this policy. Save it anyway?"))
-      return;
+    if (inFlight.current || !canSave || !confirmInvalid()) return;
     const submitted: OpenedText = { text, document: policy };
-    if (fleet.mode !== "ready") return run(() => saveFile(submitted));
+    if (ready === undefined) return run(() => saveFile(submitted));
+    if (target === undefined) return setNaming("fork");
     if (
-      fleet.unreadable &&
+      target.unreadable &&
       !window.confirm(
-        `The saved fleet policy (${sha12(fleet.etag ?? "")}) cannot be opened. Replace it with this policy?`,
+        `The saved ${target.name} (${sha12(target.etag ?? "")}) cannot be opened. Replace it with this policy?`,
       )
     )
       return;
-    run(async () => afterRemoteSave(submitted, await saveRemotePolicy(text, fleet.etag)));
+    run(saveTask(submitted, target.name, target.etag));
+  };
+
+  const fork = (name: string) => {
+    setNaming(undefined);
+    if (inFlight.current || !confirmInvalid()) return;
+    run(saveTask({ text, document: policy }, name, null));
+  };
+
+  const startDraft = (name: string) => {
+    setNaming(undefined);
+    if (!confirmDiscard()) return;
+    dispatch({ type: "draft", name });
+  };
+
+  const newFile = () => {
+    if (!confirmDiscard()) return;
+    dispatch({ type: "replace", editing: FRESH, notice: undefined });
+  };
+
+  const remove = () => {
+    if (inFlight.current || target === undefined) return;
+    if (target.etag === null) {
+      if (confirmDiscard()) run(openTask(undefined));
+      return;
+    }
+    const { name, etag } = target;
+    if (
+      !window.confirm(
+        `Delete ${name}?${publicUrl === undefined ? "" : ` Hosts that fetch ${publicUrl} will no longer find it.`}${dirty ? " Your unsaved changes are lost too." : ""}`,
+      )
+    )
+      return;
+    run(async () => {
+      const result = await deletePolicy(name, etag);
+      if (result.status === "deleted") {
+        return openTask(undefined, { tone: "info", text: `Deleted ${name}.` })();
+      }
+      return {
+        type: "settled",
+        notice: {
+          tone: "error",
+          text:
+            result.status === "conflict"
+              ? `${name} changed elsewhere since you loaded it, so it was not deleted. Reload to see the current version.`
+              : `Could not delete ${name}: ${result.message}`,
+        },
+      };
+    });
   };
 
   // Warn before closing with unsaved changes, and save on Cmd/Ctrl+S: both are window events.
@@ -334,7 +445,7 @@ export function App({ initialLoad }: { readonly initialLoad: Promise<RemoteLoad>
   return (
     <div
       // The web stylesheet locks body and #root scrolling, so the editor scrolls its own panes.
-      className="relative flex h-dvh overflow-hidden bg-background text-foreground"
+      className="relative flex h-dvh flex-col overflow-y-auto bg-canvas font-sans text-ink md:flex-row md:overflow-hidden"
       onDragOver={(event) => {
         if (![...event.dataTransfer.types].includes("Files")) return;
         event.preventDefault();
@@ -350,7 +461,7 @@ export function App({ initialLoad }: { readonly initialLoad: Promise<RemoteLoad>
       }}
     >
       {dragging ? (
-        <div className="pointer-events-none fixed inset-3 z-50 flex items-center justify-center rounded-2xl border-2 border-dashed border-primary/60 bg-background/80 text-sm font-medium">
+        <div className="glass-card pointer-events-none fixed inset-3 z-50 flex items-center justify-center font-title text-sm font-medium text-ink-glass">
           Drop a policy file to open it
         </div>
       ) : null}
@@ -366,90 +477,140 @@ export function App({ initialLoad }: { readonly initialLoad: Promise<RemoteLoad>
         }}
       />
 
-      <aside className="hidden h-full w-56 shrink-0 overflow-y-auto border-r border-border/60 bg-sidebar px-2 py-4 md:block">
-        <div className="px-2 pb-4 text-sm font-semibold">Policy editor</div>
-        <nav className="flex flex-col gap-0.5">
+      <aside className="flex shrink-0 flex-col gap-4 px-0 pt-4 sm:px-4 md:h-full md:w-72 md:overflow-y-auto md:px-3 md:pb-6">
+        <div className="px-4 font-title text-lg font-bold tracking-tight md:px-2">
+          Policy editor
+        </div>
+        <div className="glass-card p-4 max-sm:rounded-none md:rounded-2xl">
+          <div className="glass-tint from-blue-100/30 via-purple-50/20 to-pink-100/30" />
+          <div className="glow-blob top-4 left-4 h-16 w-16 from-blue-200/20 to-cyan-200/20 blur-lg" />
+          <div className="glow-blob right-6 bottom-4 h-16 w-16 from-purple-200/15 to-pink-200/15 blur-lg" />
+          <div className="glass-shine" />
+          <div className="relative z-10 space-y-3">
+            {ready === undefined ? null : (
+              <PolicyPicker
+                names={pickerNames(fleet)}
+                value={targetName}
+                disabled={busy}
+                onChange={switchTo}
+              />
+            )}
+            {publicUrl === undefined ? null : <PublicUrl url={publicUrl} />}
+            <div className="grid grid-cols-2 gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={busy || fleet.mode === "loading" || fleet.mode === "failed"}
+                onClick={() => (ready === undefined ? newFile() : setNaming("new"))}
+              >
+                <FilePlusIcon />
+                New
+              </Button>
+              {ready === undefined ? null : (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={busy}
+                  onClick={() => setNaming("fork")}
+                >
+                  <GitForkIcon />
+                  Fork
+                </Button>
+              )}
+              <Button size="sm" variant="outline" disabled={busy} onClick={() => void open()}>
+                <FolderOpenIcon />
+                Open
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={busy}
+                onClick={() => setPasteOpen(true)}
+              >
+                <ClipboardPasteIcon />
+                Paste
+              </Button>
+              {onFleet ? (
+                <Button size="sm" variant="outline" disabled={busy} onClick={reload}>
+                  <RefreshCwIcon />
+                  {fleet.mode === "failed" ? "Retry" : "Reload"}
+                </Button>
+              ) : null}
+              {ready === undefined ? null : (
+                <Button
+                  size="sm"
+                  variant="destructive-outline"
+                  disabled={busy || target === undefined}
+                  onClick={remove}
+                >
+                  <Trash2Icon />
+                  Delete
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
+        <nav aria-label="Sections" className="hidden flex-col gap-0.5 md:flex">
           {nav.map((item) => (
             <button
               key={item.id}
               type="button"
               onClick={() => scrollTo(sectionAnchor(item.id))}
-              className="flex h-8 items-center gap-2 rounded-md px-2 text-left text-sm text-sidebar-foreground hover:bg-sidebar-accent"
+              className="nav-link flex h-8 items-center gap-2 rounded-xl px-2 text-left transition-colors duration-150 hover:secondbg"
             >
-              <item.icon className="size-4 shrink-0 text-muted-foreground" />
+              <item.icon className="size-4 shrink-0 text-ink-muted" />
               <span className="min-w-0 flex-1 truncate">{item.label}</span>
               {item.count > 0 ? (
-                <Badge variant="error" size="sm">
+                <span
+                  className="flex items-center gap-1 text-xs text-ink"
+                  aria-label={plural(item.count, "problem")}
+                >
+                  <CircleAlertIcon className="size-3.5" aria-hidden />
                   {item.count}
-                </Badge>
+                </span>
               ) : null}
             </button>
           ))}
         </nav>
       </aside>
 
-      <main className="h-full min-w-0 flex-1 overflow-y-auto scrollbar-gutter-both">
-        <header className="sticky top-0 z-40 border-b border-border/60 bg-background/90 backdrop-blur">
-          <div className="mx-auto flex max-w-4xl flex-wrap items-center gap-2 px-4 py-2.5 sm:px-6">
+      <main className="min-w-0 flex-1 md:h-full scrollbar-gutter-both md:overflow-y-auto">
+        <header className="header-bar border-b border-black/5">
+          <div className="mx-auto flex max-w-content flex-wrap items-center gap-3 px-4 py-2">
             <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2">
-                <span className="truncate text-sm font-medium">
-                  {onFleet ? "Fleet policy" : editing.name}
+              <div className="flex items-baseline gap-2">
+                <span className="shrink-0 font-title text-sm font-bold">
+                  {onFleet ? (targetName ?? "New policy") : editing.name}
                 </span>
                 {dirty ? (
-                  <Badge variant="warning" size="sm">
-                    Unsaved
-                  </Badge>
+                  <span className="shrink-0 text-xs font-medium text-ink-subtle">Unsaved</span>
                 ) : null}
                 {onFleet ? (
-                  <span className="truncate text-xs text-muted-foreground">
-                    {fleetStatus(fleet)}
-                  </span>
+                  <span className="truncate text-xs text-ink-muted">{fleetStatus(fleet)}</span>
                 ) : null}
               </div>
               <button
                 type="button"
                 onClick={() => scrollTo("problems")}
-                className="text-xs text-muted-foreground hover:text-foreground"
+                className="text-left text-xs text-ink-muted transition-colors duration-150 hover:text-ink-strong focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
               >
                 {summaryLine(verdict.serverReason !== undefined, errors.length, warnings.length)}
               </button>
             </div>
-            <div className="flex flex-wrap items-center gap-1.5">
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={busy}
-                onClick={() => {
-                  if (dirty && !window.confirm("Discard the changes to the current policy?"))
-                    return;
-                  dispatch({ type: "replace", editing: FRESH, notice: undefined });
-                }}
-              >
-                <FilePlusIcon />
-                New
-              </Button>
-              {onFleet ? (
-                <Button size="sm" variant="ghost" disabled={busy} onClick={reload}>
-                  <RefreshCwIcon />
-                  {fleet.mode === "failed" ? "Retry" : "Reload"}
-                </Button>
-              ) : null}
-              <Button size="sm" variant="ghost" disabled={busy} onClick={() => void open()}>
-                <FolderOpenIcon />
-                Open
-              </Button>
-              <Button size="sm" variant="ghost" disabled={busy} onClick={() => setPasteOpen(true)}>
-                <ClipboardPasteIcon />
-                Paste
-              </Button>
-              <Button size="sm" variant="ghost" onClick={() => download(editing.name, text)}>
+            <div className="flex items-center gap-2">
+              <Button size="sm" variant="outline" onClick={() => download(editing.name, text)}>
                 <DownloadIcon />
                 Download
               </Button>
               <Button size="sm" disabled={!canSave} onClick={save}>
                 <SaveIcon />
-                {onFleet || editing.handle ? "Save" : "Save as…"}
+                {onFleet
+                  ? target === undefined
+                    ? "Save as…"
+                    : "Save"
+                  : editing.handle
+                    ? "Save"
+                    : "Save as…"}
               </Button>
             </div>
           </div>
@@ -457,34 +618,34 @@ export function App({ initialLoad }: { readonly initialLoad: Promise<RemoteLoad>
 
         <div
           inert={fleet.mode === "loading"}
-          className="mx-auto flex w-full max-w-4xl flex-col gap-8 px-4 pt-6 pb-24 sm:px-6"
+          className="mx-auto flex w-full max-w-content flex-col gap-8 px-0 pt-4 pb-24 sm:px-4 sm:pt-10"
         >
           {notice ? (
             <div
               role="status"
-              className={
-                notice.tone === "error"
-                  ? "rounded-xl border border-destructive/32 bg-destructive/4 px-4 py-2.5 text-sm text-destructive-foreground"
-                  : "rounded-xl border border-border/60 bg-card/40 px-4 py-2.5 text-sm text-muted-foreground"
-              }
+              className="glass-card flex items-start gap-2 px-4 py-3 text-sm max-sm:rounded-none sm:rounded-2xl"
             >
-              {notice.text}
+              {notice.tone === "error" ? (
+                <CircleAlertIcon className="mt-0.5 size-4 shrink-0 text-ink" aria-label="Error" />
+              ) : null}
+              <span className={notice.tone === "error" ? "text-ink" : "text-ink-subtle"}>
+                {notice.text}
+              </span>
             </div>
           ) : null}
 
           <section id="problems" className="scroll-mt-20 space-y-2">
             {verdict.problems.length === 0 ? (
-              <p className="px-3 text-sm text-muted-foreground sm:px-4">
-                Each setting can be left{" "}
-                <strong className="font-medium text-foreground">not set</strong> (the user's own
-                value, or the built-in default), given a{" "}
-                <strong className="font-medium text-foreground">default</strong> users can change,
-                or <strong className="font-medium text-foreground">locked</strong>. Open or drop a
-                policy file to edit it.
+              <p className="px-4 text-sm text-ink-muted">
+                Each setting can be left <strong className="font-medium text-ink">not set</strong>{" "}
+                (the user's own value, or the built-in default), given a{" "}
+                <strong className="font-medium text-ink">default</strong> users can change, or{" "}
+                <strong className="font-medium text-ink">locked</strong>. Open or drop a policy file
+                to edit it.
               </p>
             ) : (
-              <div className="rounded-xl border border-border/60 bg-card/40 p-3 sm:p-4">
-                <h2 className="pb-2 text-sm font-semibold">
+              <div className="glass-card px-4 py-3 max-sm:rounded-none sm:rounded-2xl">
+                <h2 className="pb-2 font-title text-sm font-bold">
                   {errors.length > 0 ? "Problems" : "Warnings"}
                 </h2>
                 <ul className="space-y-1.5">
@@ -496,13 +657,12 @@ export function App({ initialLoad }: { readonly initialLoad: Promise<RemoteLoad>
                       <button
                         type="button"
                         onClick={() => scrollTo(anchorFor(problem.target))}
-                        className={
-                          problem.severity === "error"
-                            ? "text-left text-destructive-foreground hover:underline"
-                            : "text-left text-warning-foreground hover:underline"
-                        }
+                        className={`text-left hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${problem.severity === "error" ? "text-ink" : "text-ink-subtle"}`}
                       >
-                        <code className="font-medium">{describeTarget(problem.target)}</code>:{" "}
+                        <span className="font-medium">
+                          {problem.severity === "error" ? "Refused " : "Warning "}
+                        </span>
+                        <code className="font-mono">{describeTarget(problem.target)}</code>:{" "}
                         {problem.message}
                       </button>
                     </li>
@@ -518,7 +678,7 @@ export function App({ initialLoad }: { readonly initialLoad: Promise<RemoteLoad>
               invalid={documentProblems("organization").length > 0}
               title="Organization"
               description='Shown to users in Settings and beside each control the policy locks, as "Managed by <organization>".'
-              status={<code className="text-[11px] text-muted-foreground/80">organization</code>}
+              status={<code className="font-mono text-xs text-ink-muted">organization</code>}
               control={
                 <Input
                   size="sm"
@@ -536,7 +696,7 @@ export function App({ initialLoad }: { readonly initialLoad: Promise<RemoteLoad>
               invalid={documentProblems("supportUrl").length > 0}
               title="Support URL"
               description="Users see a link to it beside each locked control. Optional."
-              status={<code className="text-[11px] text-muted-foreground/80">supportUrl</code>}
+              status={<code className="font-mono text-xs text-ink-muted">supportUrl</code>}
               control={
                 <Input
                   size="sm"
@@ -557,7 +717,7 @@ export function App({ initialLoad }: { readonly initialLoad: Promise<RemoteLoad>
               invalid={documentProblems("schemaVersion").length > 0}
               title="Schema version"
               description="The policy format. This version of T3 Code reads version 1."
-              status={<code className="text-[11px] text-muted-foreground/80">schemaVersion</code>}
+              status={<code className="font-mono text-xs text-ink-muted">schemaVersion</code>}
               control={
                 record.schemaVersion === 1 ? (
                   <span className="text-sm">1</span>
@@ -575,7 +735,7 @@ export function App({ initialLoad }: { readonly initialLoad: Promise<RemoteLoad>
                 key={key}
                 id={`policy:${key}`}
                 invalid
-                title={<code>{key}</code>}
+                title={<code className="font-mono">{key}</code>}
                 control={
                   <Button
                     size="sm"
@@ -613,7 +773,7 @@ export function App({ initialLoad }: { readonly initialLoad: Promise<RemoteLoad>
                   key={key}
                   id={settingAnchor(key)}
                   invalid
-                  title={<code>{key}</code>}
+                  title={<code className="font-mono">{key}</code>}
                   control={
                     <Button
                       size="sm"
@@ -666,7 +826,7 @@ export function App({ initialLoad }: { readonly initialLoad: Promise<RemoteLoad>
             title="Policy JSON"
             description="What Save and Download write."
           >
-            <pre className="max-h-96 overflow-auto px-3 py-3 font-mono text-xs leading-relaxed whitespace-pre-wrap break-all sm:px-4">
+            <pre className="max-h-96 overflow-auto px-4 py-3 font-mono text-xs leading-relaxed break-all whitespace-pre-wrap sm:px-6">
               {text}
             </pre>
           </SettingsSection>
@@ -681,7 +841,144 @@ export function App({ initialLoad }: { readonly initialLoad: Promise<RemoteLoad>
           setPasteOpen(false);
         }}
       />
+      <NameDialog
+        naming={naming}
+        taken={ready === undefined ? [] : pickerNames(ready)}
+        from={targetName}
+        onCancel={() => setNaming(undefined)}
+        onSubmit={(name) => (naming === "new" ? startDraft(name) : fork(name))}
+      />
     </div>
+  );
+}
+
+function PolicyPicker({
+  names,
+  value,
+  disabled,
+  onChange,
+}: {
+  readonly names: ReadonlyArray<string>;
+  readonly value: string | undefined;
+  readonly disabled: boolean;
+  readonly onChange: (name: string) => void;
+}) {
+  return (
+    <Select
+      value={value ?? null}
+      disabled={disabled || names.length === 0}
+      onValueChange={(name) => {
+        if (typeof name === "string") onChange(name);
+      }}
+    >
+      <SelectTrigger aria-label="Policy">
+        <SelectValue>{(name: string | null) => name ?? "No policy stored"}</SelectValue>
+      </SelectTrigger>
+      <SelectPopup alignItemWithTrigger={false}>
+        {names.map((name) => (
+          <SelectItem key={name} value={name}>
+            {name}
+          </SelectItem>
+        ))}
+      </SelectPopup>
+    </Select>
+  );
+}
+
+function PublicUrl({ url }: { readonly url: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="flex items-center gap-1">
+      <a
+        href={url}
+        target="_blank"
+        rel="noreferrer"
+        className="min-w-0 flex-1 font-mono text-xs break-all text-ink-subtle transition-colors duration-150 hover:text-ink-strong focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+      >
+        {url.replace(/^https:\/\//, "")}
+      </a>
+      <Button
+        size="icon-xs"
+        variant="ghost"
+        aria-label={copied ? "Copied" : "Copy the public URL"}
+        onClick={() =>
+          void navigator.clipboard.writeText(url).then(() => {
+            setCopied(true);
+            window.setTimeout(() => setCopied(false), 1500);
+          })
+        }
+      >
+        {copied ? <CheckIcon /> : <CopyIcon />}
+      </Button>
+    </div>
+  );
+}
+
+function NameDialog({
+  naming,
+  taken,
+  from,
+  onCancel,
+  onSubmit,
+}: {
+  readonly naming: Naming | undefined;
+  readonly taken: ReadonlyArray<string>;
+  /** The policy a fork copies; undefined when nothing is stored yet. */
+  readonly from: string | undefined;
+  readonly onCancel: () => void;
+  readonly onSubmit: (name: string) => void;
+}) {
+  const [name, setName] = useState("");
+  const [shownFor, setShownFor] = useState<Naming | undefined>(undefined);
+  if (shownFor !== naming) {
+    setShownFor(naming);
+    setName(naming === "fork" && from !== undefined ? `${from}-copy` : "");
+  }
+  const problem =
+    name === ""
+      ? undefined
+      : !POLICY_NAME.test(name)
+        ? "Use up to 63 lowercase letters, digits and hyphens, starting with a letter or digit."
+        : taken.includes(name)
+          ? `${name} already exists.`
+          : undefined;
+  const valid = name !== "" && problem === undefined;
+  const title = naming === "new" ? "New policy" : from === undefined ? "Save as" : `Fork ${from}`;
+  const description =
+    naming === "new"
+      ? "Starts an empty policy. Save creates it."
+      : `Saves ${from === undefined ? "this policy" : `${from}, with any unsaved changes,`} under a new name.`;
+  return (
+    <Dialog open={naming !== undefined} onClose={onCancel} title={title} description={description}>
+      <form
+        className="space-y-4"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (valid) onSubmit(name);
+        }}
+      >
+        <div className="space-y-1.5">
+          <Input
+            aria-label="Policy name"
+            placeholder="team-name"
+            spellCheck={false}
+            autoCapitalize="none"
+            autoFocus
+            value={name}
+            onChange={(event) => setName(event.target.value.trim())}
+          />
+          {problem === undefined ? null : <p className="text-xs text-ink">{problem}</p>}
+        </div>
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="ghost" onClick={onCancel}>
+            Cancel
+          </Button>
+          <Button type="submit" disabled={!valid}>
+            {naming === "new" ? "Create" : "Save"}
+          </Button>
+        </div>
+      </form>
+    </Dialog>
   );
 }
 
@@ -697,34 +994,33 @@ function PasteDialog({
   const [text, setText] = useState("");
   const parsed = text.trim() === "" ? undefined : parsePolicyText(text);
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogPopup>
-        <DialogHeader>
-          <DialogTitle>Paste a policy</DialogTitle>
-          <DialogDescription>Paste the policy's JSON to edit it here.</DialogDescription>
-        </DialogHeader>
-        <DialogPanel>
-          <Textarea
-            aria-label="Policy JSON"
-            className="font-mono"
-            rows={12}
-            spellCheck={false}
-            value={text}
-            onChange={(event) => setText(event.target.value)}
-          />
-          {parsed !== undefined && !parsed.ok ? (
-            <p className="text-xs text-destructive-foreground">{parsed.message}</p>
-          ) : null}
-        </DialogPanel>
-        <DialogFooter>
-          <Button variant="ghost" onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-          <Button disabled={parsed === undefined || !parsed.ok} onClick={() => onImport(text)}>
-            Open
-          </Button>
-        </DialogFooter>
-      </DialogPopup>
+    <Dialog
+      open={open}
+      onClose={() => onOpenChange(false)}
+      title="Paste a policy"
+      description="Paste the policy's JSON to edit it here."
+    >
+      <div className="space-y-1.5">
+        <Textarea
+          aria-label="Policy JSON"
+          className="font-mono"
+          rows={12}
+          spellCheck={false}
+          value={text}
+          onChange={(event) => setText(event.target.value)}
+        />
+        {parsed !== undefined && !parsed.ok ? (
+          <p className="text-xs text-ink">{parsed.message}</p>
+        ) : null}
+      </div>
+      <div className="flex justify-end gap-2">
+        <Button variant="ghost" onClick={() => onOpenChange(false)}>
+          Cancel
+        </Button>
+        <Button disabled={parsed === undefined || !parsed.ok} onClick={() => onImport(text)}>
+          Open
+        </Button>
+      </div>
     </Dialog>
   );
 }
