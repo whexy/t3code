@@ -89,7 +89,17 @@ describe("bridge listeners", () => {
       const mcp = `http://127.0.0.1:${mcpPort}`;
       const admin = `http://127.0.0.1:${adminPort}`;
       expect(yield* statusOf(`${admin}/`)).toBe(200);
+      expect(yield* statusOf(`${admin}/pair`)).toBe(200);
+      expect(yield* statusOf(`${admin}/endpoint`)).toBe(200);
+      expect(yield* statusOf(`${admin}/servers/missing`)).toBe(404);
       expect(yield* statusOf(`${admin}/mcp`)).toBe(404);
+      const saved = yield* HttpClient.execute(
+        HttpClientRequest.post(`${admin}/settings`).pipe(
+          HttpClientRequest.bodyUrlParams({ publicUrl: "https://t3-mcp.example.com" }),
+        ),
+      ).pipe(Effect.provideService(FetchHttpClient.RequestInit, { redirect: "manual" }));
+      expect(saved.status).toBe(303);
+      expect(saved.headers.location).toBe("/endpoint?notice=Saved+the+public+URL.");
       expect(yield* statusOf(`${mcp}/`)).toBe(404);
       expect(yield* statusOf(`${mcp}/servers/pair`)).toBe(404);
       const endpoint = `${mcp}/mcp`;
