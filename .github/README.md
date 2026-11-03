@@ -10,7 +10,7 @@ self-hosted fleet. For T3 Code itself (install, docs, issues), go to
 | Feature        | What it does                                                                                                                                                      | Ships as                                                      |
 | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
 | Client MCP     | An MCP server that works as a T3 Code client, so an MCP client can start and follow sessions on paired T3 servers. [`apps/mcp`](../apps/mcp)                      | `ghcr.io/whexy/t3code-mcp`                                    |
-| Policy Editor  | Edits the fleet's managed policy and serves it as `/policy.json`, which each host fetches before its server starts. [`apps/policy-editor`](../apps/policy-editor) | `ghcr.io/whexy/t3code-policy-editor`                          |
+| Policy Editor  | Edits the fleet's managed policy and serves it as `/policy.json`, which each host fetches before its server starts. [`apps/policy-editor`](../apps/policy-editor) | `ghcr.io/whexy/t3code-policy-editor` (private)                |
 | Web Hub        | The web client, with connections and settings kept in a shared catalog instead of one browser. [`scripts/self-hosted`](../scripts/self-hosted)                    | `ghcr.io/whexy/t3code-hub`                                    |
 | Server changes | `T3CODE_DEV_MANAGED_POLICY_PATH` gives each user their own managed policy file, and the `t3` server builds as a Nix package. [`nix`](../nix)                      | `packages.{x86_64-linux,aarch64-darwin}.t3-server`, on Cachix |
 
@@ -58,4 +58,4 @@ Pin a commit, not the branch, since the branch is force-pushed. As a flake
 input, do not make it follow your `nixpkgs`: the cache holds only the paths
 built from the fork's own lock.
 
-The images are listed in the table above; take a `1.2.<run>` tag.
+The hub and MCP images are public on GHCR; take a `1.2.<run>` tag.
