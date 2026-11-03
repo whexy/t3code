@@ -1,3 +1,4 @@
+// @effect-diagnostics globalConsole:off - CI runs this copy without an install and reads the tag from stdout.
 import * as NodeURL from "node:url";
 
 const NIGHTLY_TAG = /^v\d+\.\d+\.\d+-nightly\.\d{8}\.\d+$/;
