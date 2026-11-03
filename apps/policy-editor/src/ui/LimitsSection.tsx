@@ -110,7 +110,7 @@ function CheckList({
             />
             <span className="min-w-0">
               <span className="block leading-4">{item.label}</span>
-              <span className="block text-xs text-muted-foreground">
+              <span className="block text-xs text-ink-muted">
                 <code>{item.id}</code>
                 {item.description ? ` · ${item.description}` : ""}
               </span>
@@ -134,7 +134,7 @@ function OptionalText({
   readonly onChange: (value: string | undefined) => void;
 }) {
   return (
-    <label className="block space-y-1 text-xs text-muted-foreground">
+    <label className="block space-y-1 text-xs text-ink-muted">
       <span>{label}</span>
       <Input
         size="sm"
@@ -168,15 +168,14 @@ function ProviderPin({
   return (
     <div
       id={limitAnchor("providers.instances", driverId)}
-      className="scroll-mt-20 space-y-3 rounded-lg border border-border/60 p-3"
+      className="scroll-mt-20 space-y-3 rounded-xl border border-black/5 p-3"
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="text-sm font-medium">
-          {known?.label ?? driverId}{" "}
-          <code className="text-xs text-muted-foreground">{driverId}</code>
+          {known?.label ?? driverId} <code className="text-xs text-ink-muted">{driverId}</code>
         </div>
         <div className="flex items-center gap-2">
-          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+          <label className="flex items-center gap-2 text-xs text-ink-muted">
             Locked
             <Switch
               size="sm"
@@ -194,7 +193,7 @@ function ProviderPin({
           </Button>
         </div>
       </div>
-      <p className="text-xs text-muted-foreground">
+      <p className="text-xs text-ink-muted">
         {fields.locked === true
           ? "Users cannot change the fields set here."
           : "The fields set here fill in only what the user left empty."}
@@ -216,7 +215,7 @@ function ProviderPin({
         />
       ) : null}
       <div className="space-y-1.5">
-        <div className="text-xs text-muted-foreground">Environment variables</div>
+        <div className="text-xs text-ink-muted">Environment variables</div>
         {environment.map((variable, index) => {
           const record = isRecord(variable) ? variable : {};
           const update = (key: "name" | "value", text: string) =>
@@ -311,7 +310,7 @@ export function LimitsSection({
         invalid={invalid("maxRuntimeMode")}
         title="Broadest permission mode"
         description="Covers threads that users, agents, and scheduled tasks start. With it set, you own each provider's launch settings: binary path, launch arguments, config home, and environment variables."
-        status={<code className="text-[11px] text-muted-foreground/80">limits.maxRuntimeMode</code>}
+        status={<code className="font-mono text-xs text-ink-muted">limits.maxRuntimeMode</code>}
         control={
           <Select
             value={limits.maxRuntimeMode === undefined ? "unset" : String(limits.maxRuntimeMode)}
@@ -344,7 +343,7 @@ export function LimitsSection({
         invalid={invalid("clients")}
         title="Clients"
         description="How the server may run. Without remote, it listens only on a loopback address and signs out devices that paired earlier. On machines with the desktop app, keep Desktop app in the list."
-        status={<code className="text-[11px] text-muted-foreground/80">limits.clients</code>}
+        status={<code className="font-mono text-xs text-ink-muted">limits.clients</code>}
         control={
           <StateToggle
             label="Clients policy state"
@@ -374,9 +373,7 @@ export function LimitsSection({
           invalid={invalid(capability.key)}
           title={capability.title}
           description={capability.description}
-          status={
-            <code className="text-[11px] text-muted-foreground/80">limits.{capability.key}</code>
-          }
+          status={<code className="font-mono text-xs text-ink-muted">limits.{capability.key}</code>}
           control={
             <StateToggle
               label={`${capability.title} policy state`}
@@ -399,9 +396,7 @@ export function LimitsSection({
         title="Allowed providers"
         description="The providers that may run. Threads on other providers stay, marked unavailable."
         status={
-          <code className="text-[11px] text-muted-foreground/80">
-            limits.providers.allowedDrivers
-          </code>
+          <code className="font-mono text-xs text-ink-muted">limits.providers.allowedDrivers</code>
         }
         control={
           <StateToggle
@@ -435,7 +430,7 @@ export function LimitsSection({
         title="Provider fields"
         description="Fields set on every instance of a provider, such as an environment variable that routes Claude through Amazon Bedrock or a base URL for a company gateway. A locked codex entry rules out Connect with ChatGPT; a locked opencode entry rules out a server URL."
         status={
-          <code className="text-[11px] text-muted-foreground/80">limits.providers.instances</code>
+          <code className="font-mono text-xs text-ink-muted">limits.providers.instances</code>
         }
       >
         <div className="mt-3 space-y-2">
@@ -477,7 +472,7 @@ export function LimitsSection({
         invalid={invalid("updates")}
         title="Updates"
         description="Off stops T3 Code from checking for updates, for machines that get it through device management. A feed URL makes the desktop app update from your own mirror of the release feed."
-        status={<code className="text-[11px] text-muted-foreground/80">limits.updates</code>}
+        status={<code className="font-mono text-xs text-ink-muted">limits.updates</code>}
         control={
           <StateToggle
             label="Updates policy state"
@@ -492,7 +487,7 @@ export function LimitsSection({
       >
         {updates === undefined ? null : (
           <div className="mt-3 grid gap-3 sm:grid-cols-2">
-            <label className="block space-y-1 text-xs text-muted-foreground">
+            <label className="block space-y-1 text-xs text-ink-muted">
               <span>Mode</span>
               <Select
                 value={typeof updates.mode === "string" ? updates.mode : "auto"}
@@ -519,7 +514,7 @@ export function LimitsSection({
               value={updates.feedUrl}
               onChange={(value) => setLimit(["updates", "feedUrl"], value)}
             />
-            <div className="space-y-1 text-xs text-muted-foreground sm:col-span-2">
+            <div className="space-y-1 text-xs text-ink-muted sm:col-span-2">
               <span className="block">Nightly channel</span>
               <StateToggle
                 label="Nightly channel policy state"
