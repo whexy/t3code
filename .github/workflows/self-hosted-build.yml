@@ -1,0 +1,369 @@
+# Checks and publishes the fork's self-hosted-nightly branch. Each check job
+# also hands its result over: an image pushed by digest only, or a t3-server
+# closure pushed to Cachix. Neither deploys anything until the promote jobs
+# tag the images and the commit, which they do only when every check passed
+# and the branch still points at this commit; then the dotfiles pin lane
+# starts. A failure is reported to T3 Code, which starts an agent run to
+# repair the branch, and the last good build keeps serving.
+#
+# Pushes come from self-hosted-rebase.yml (as the whexy-bot App) and from
+# merged pull requests. Pull requests run the checks without the macOS leg and
+# push nothing.
+#
+# Images get `sha-<12 hex>` and `1.2.<run_number>`, so the version only grows.
+# Retry with workflow_dispatch on the branch head, never "Re-run": a re-run
+# reuses run_number, so the publishing jobs refuse it. Never rename this file:
+# run_number counts per workflow file, and a new name restarts 1.2.N.
+name: self-hosted-build
+
+on:
+  push:
+    branches: [self-hosted-nightly]
+  workflow_dispatch:
+  pull_request:
+    branches: [self-hosted-nightly]
+
+# A newer pending publish replaces an older one; pull requests get their own
+# group so they never displace a pending publish.
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('build-pr-{0}', github.event.pull_request.number) || 'build-publish' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  web-hub:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.image.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            /*
+            !/.repos/
+            !/apps/mobile/modules/t3-terminal/Vendor/**/*.a
+          sparse-checkout-cone-mode: false
+
+      - uses: ./.github/actions/setup-ci-deps
+        with:
+          install: "false"
+
+      # The branch commits no lockfile changes but the apps/mcp importer, which
+      # can fall behind upstream's catalog, so resolve before the frozen install.
+      - name: Install
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
+        run: |
+          vp install --lockfile-only
+          vp install --frozen-lockfile --filter=@t3tools/scripts... --filter=@t3tools/web...
+
+      # Tests run from their package: a repo-root run loads every package's
+      # config, and the filtered install lacks the mobile app's.
+      - name: Test and typecheck
+        run: |
+          (cd apps/web && vp test run --project unit src/connection/sharedCatalog.test.ts src/connection/storage.test.ts)
+          (cd scripts && vp test run --config ../vite.config.ts --dir . self-hosted)
+          vp run --filter @t3tools/web typecheck
+
+      # The storage tests expect the browser catalog, so only the build sees the shared one.
+      - name: Build
+        env:
+          VITE_HOSTED_APP_CHANNEL: nightly
+          VITE_SHARED_CATALOG_PATH: /__t3code/shared-catalog
+        run: |
+          vp run --filter @t3tools/web build
+          node scripts/apply-web-brand-assets.ts --channel nightly
+          mkdir -p "$RUNNER_TEMP/context"
+          cp scripts/self-hosted/server.ts "$RUNNER_TEMP/context/"
+          cp -R apps/web/dist "$RUNNER_TEMP/context/web"
+
+      - id: image
+        uses: ./.github/actions/self-hosted-image
+        with:
+          name: hub
+          dockerfile: scripts/self-hosted/Dockerfile
+          context: ${{ runner.temp }}/context
+
+  mcp:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.image.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            /*
+            !/.repos/
+            !/apps/mobile/modules/t3-terminal/Vendor/**/*.a
+          sparse-checkout-cone-mode: false
+
+      - uses: ./.github/actions/setup-ci-deps
+        with:
+          install: "false"
+
+      - name: Install
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
+        run: |
+          vp install --lockfile-only
+          vp install --frozen-lockfile --filter=@t3tools/mcp...
+
+      - name: Test, typecheck and bundle
+        run: |
+          (cd apps/mcp && vp test run)
+          vp run --filter @t3tools/mcp typecheck
+          (cd apps/mcp && vp pack)
+          mkdir -p "$RUNNER_TEMP/context"
+          cp apps/mcp/dist/bin.mjs "$RUNNER_TEMP/context/"
+
+      - id: image
+        uses: ./.github/actions/self-hosted-image
+        with:
+          name: mcp
+          dockerfile: scripts/self-hosted/mcp.Dockerfile
+          context: ${{ runner.temp }}/context
+
+  policy-editor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.image.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            /*
+            !/.repos/
+            !/apps/mobile/modules/t3-terminal/Vendor/**/*.a
+          sparse-checkout-cone-mode: false
+
+      - uses: ./.github/actions/setup-ci-deps
+        with:
+          install: "false"
+
+      # The editor is not a workspace package: it borrows the web app's
+      # dependencies and the server's source files. Install scripts only build
+      # native modules the server runs and the editor never loads.
+      - name: Install
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
+        run: |
+          vp install --lockfile-only
+          vp install --frozen-lockfile --ignore-scripts --filter=@t3tools/web... --filter=t3...
+
+      - name: Test, typecheck and build
+        working-directory: apps/policy-editor
+        run: |
+          vp test run
+          ../../node_modules/.bin/effect-tsgo tsrs --noEmit -p .
+          vp build
+          mkdir -p "$RUNNER_TEMP/context"
+          cp serve.ts "$RUNNER_TEMP/context/"
+          cp -R dist "$RUNNER_TEMP/context/dist"
+
+      - id: image
+        uses: ./.github/actions/self-hosted-image
+        with:
+          name: policy-editor
+          dockerfile: apps/policy-editor/Dockerfile
+          context: ${{ runner.temp }}/context
+
+  nix-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    outputs:
+      out: ${{ steps.check.outputs.out }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: cachix/install-nix-action@v31
+      # Pushes only the t3-server closure below, not every path the build makes.
+      - uses: cachix/cachix-action@v17
+        with:
+          name: whexy-t3code
+          authToken: ${{ github.event_name != 'pull_request' && secrets.CACHIX_AUTH_TOKEN || '' }}
+          skipPush: true
+
+      - id: check
+        run: scripts/self-hosted/nix-check.sh x86_64-linux
+
+      - if: github.event_name != 'pull_request'
+        env:
+          OUT: ${{ steps.check.outputs.out }}
+        run: cachix push whexy-t3code "$OUT"
+
+  nix-darwin:
+    if: github.event_name != 'pull_request'
+    runs-on: macos-15
+    timeout-minutes: 90
+    outputs:
+      out: ${{ steps.check.outputs.out }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: cachix/install-nix-action@v31
+      - uses: cachix/cachix-action@v17
+        with:
+          name: whexy-t3code
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+          skipPush: true
+
+      - id: check
+        run: scripts/self-hosted/nix-check.sh aarch64-darwin
+
+      - env:
+          OUT: ${{ steps.check.outputs.out }}
+        run: cachix push whexy-t3code "$OUT"
+
+  # A newer push builds itself, so a superseded commit is never tagged.
+  gate:
+    needs: [web-hub, mcp, policy-editor, nix-linux, nix-darwin]
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/self-hosted-nightly'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      current: ${{ steps.head.outputs.current }}
+    steps:
+      - id: head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LINUX_OUT: ${{ needs.nix-linux.outputs.out }}
+          DARWIN_OUT: ${{ needs.nix-darwin.outputs.out }}
+        run: |
+          echo "t3-server: $LINUX_OUT $DARWIN_OUT"
+          head="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/self-hosted-nightly" --jq .object.sha)"
+          if [[ "$head" == "$GITHUB_SHA" ]]; then
+            echo current=true >> "$GITHUB_OUTPUT"
+          else
+            echo "state=SUPERSEDED commit=$GITHUB_SHA head=$head" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo current=false >> "$GITHUB_OUTPUT"
+          fi
+
+  promote-images:
+    needs: [gate, web-hub, mcp, policy-editor]
+    if: needs.gate.outputs.current == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: .github/actions
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - id: current
+        uses: ./.github/actions/self-hosted-current
+      - if: steps.current.outputs.current == 'true'
+        env:
+          HUB: ${{ needs.web-hub.outputs.digest }}
+          MCP: ${{ needs.mcp.outputs.digest }}
+          POLICY_EDITOR: ${{ needs.policy-editor.outputs.digest }}
+        run: |
+          promote() {
+            local image="ghcr.io/whexy/t3code-$1"
+            docker buildx imagetools create --prefer-index=false \
+              -t "$image:sha-${GITHUB_SHA::12}" -t "$image:1.2.$GITHUB_RUN_NUMBER" "$image@${2:?no digest for $1}"
+          }
+          promote hub "$HUB"
+          promote mcp "$MCP"
+          promote policy-editor "$POLICY_EDITOR"
+          echo "images: 1.2.$GITHUB_RUN_NUMBER sha-${GITHUB_SHA::12}" >> "$GITHUB_STEP_SUMMARY"
+
+  # Hosts fetch the flake by commit; the tag keeps it fetchable after the next
+  # rebase force-pushes the branch.
+  promote-pin:
+    needs: gate
+    if: needs.gate.outputs.current == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: .github/actions
+      - id: current
+        uses: ./.github/actions/self-hosted-current
+      - if: steps.current.outputs.current == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="pin/${GITHUB_SHA::12}"
+          if ! gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$tag" -f sha="$GITHUB_SHA" > /dev/null; then
+            [[ "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --jq .object.sha)" == "$GITHUB_SHA" ]]
+          fi
+
+  notify:
+    needs: [promote-images, promote-pin]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: .github/actions
+      - id: current
+        uses: ./.github/actions/self-hosted-current
+      - name: Start the dotfiles pin lane
+        if: steps.current.outputs.current == 'true'
+        env:
+          WOODPECKER_TOKEN: ${{ secrets.WOODPECKER_TOKEN }}
+        run: |
+          curl -fsS --retry 3 -X POST https://make.clusters.work/api/repos/3/pipelines \
+            -H "Authorization: Bearer $WOODPECKER_TOKEN" -H "Content-Type: application/json" \
+            -d "{\"branch\":\"master\",\"variables\":{\"T3CODE_FORK_REV\":\"$GITHUB_SHA\"}}" |
+            jq -c '{number, status}'
+          echo "state=DONE commit=$GITHUB_SHA version=1.2.$GITHUB_RUN_NUMBER" | tee -a "$GITHUB_STEP_SUMMARY"
+
+  report-failure:
+    needs:
+      [
+        web-hub,
+        mcp,
+        policy-editor,
+        nix-linux,
+        nix-darwin,
+        gate,
+        promote-images,
+        promote-pin,
+        notify,
+      ]
+    if: always() && github.event_name != 'pull_request' && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            scripts/self-hosted
+            nix/sources.json
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - env:
+          T3_REPAIR_WEBHOOK: ${{ secrets.T3_REPAIR_WEBHOOK }}
+          T3_ALERT_WEBHOOK: ${{ secrets.T3_ALERT_WEBHOOK }}
+          T3_FAILURE_NEEDS: ${{ toJSON(needs) }}
+        run: T3_FAILURE_RELEASE_TAG="v$(jq -r .version nix/sources.json)" node scripts/self-hosted/report-failure.ts build
