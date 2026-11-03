@@ -41,12 +41,21 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
+      - id: token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+
+      # Persists the App token rather than dropping credentials: with
+      # persist-credentials false, checkout runs `git submodule foreach`, which
+      # dies on upstream's .repos gitlinks that have no .gitmodules entry.
       - id: checkout
         uses: actions/checkout@v6
         with:
           ref: self-hosted-nightly
           fetch-depth: 0
-          persist-credentials: false
+          token: ${{ steps.token.outputs.token }}
 
       - id: node
         uses: actions/setup-node@v6
@@ -54,12 +63,6 @@ jobs:
           node-version: 24
       - id: nix
         uses: cachix/install-nix-action@v31
-
-      - id: token
-        uses: actions/create-github-app-token@v2
-        with:
-          app-id: ${{ secrets.BOT_APP_ID }}
-          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
 
       # The rebase rewrites the checkout, so the state machine runs from a copy.
       - id: rebase
