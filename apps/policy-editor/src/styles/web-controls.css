@@ -1,0 +1,55 @@
+/*
+ * The inputs, selects, switches and dialogs borrowed from apps/web name colors by web roles
+ * (primary, border, ring, destructive, ...), which Frost's closed palette clears. Each role
+ * points at a Frost token here, so nothing below is a new value. Frost has no status colors
+ * yet, so destructive, warning, success and info render in ink tones.
+ */
+@theme inline {
+  --color-background: var(--color-white);
+  --color-foreground: var(--color-ink);
+  --color-card: var(--color-white);
+  --color-card-foreground: var(--color-ink);
+  --color-popover: var(--color-white);
+  --color-popover-foreground: var(--color-ink);
+  --color-primary: var(--color-ink);
+  --color-primary-foreground: var(--color-on-ink);
+  --color-secondary-foreground: var(--color-ink-glass);
+  --color-secondary-label: var(--color-ink-muted);
+  --color-muted: var(--color-wash);
+  --color-muted-foreground: var(--color-ink-muted);
+  --color-accent-foreground: var(--color-ink-strong);
+  --color-icon-muted: var(--color-ink-faint);
+  --color-border: var(--color-rule);
+  --color-input: var(--color-rule);
+  --color-ring: var(--focus-ring);
+  --color-destructive: var(--color-ink);
+  --color-destructive-foreground: var(--color-ink);
+  --color-warning: var(--color-ink-subtle);
+  --color-warning-foreground: var(--color-ink-subtle);
+  --color-success: var(--color-ink-muted);
+  --color-success-foreground: var(--color-ink-muted);
+  --color-info: var(--color-ink-muted);
+  --color-info-foreground: var(--color-ink-muted);
+}
+
+/* Web inputs color placeholders with `placeholder`, which Frost keeps for a missing avatar's disc. */
+[data-slot="input"]::placeholder,
+[data-slot="textarea"]::placeholder,
+[data-slot="select-value"][data-placeholder] {
+  color: var(--color-ink-faint);
+}
+
+/* Web buttons, select items and number steppers highlight with `accent`, which Frost keeps for
+   links, focus and selection; give them Frost's hover wash. The ring reads the rose through
+   `--focus-ring`, resolved on :root, so the override does not reach it. */
+:root {
+  --focus-ring: var(--color-highlight);
+}
+
+[data-slot="button"],
+[data-slot="select-trigger"],
+[data-slot="select-item"],
+[data-slot="number-field-decrement"],
+[data-slot="number-field-increment"] {
+  --color-highlight: var(--color-wash);
+}
