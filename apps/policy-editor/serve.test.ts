@@ -24,24 +24,41 @@ async function startServer(input: { setup?: (policyDir: string) => Promise<void>
   await NodeFSP.writeFile(NodePath.join(webRoot, "index.html"), "<editor>");
   await input.setup?.(policyDir);
 
-  const store = await openPolicyStore(policyDir);
-  const admin = createAdminServer({ webRoot, store, publicUrl: "https://policy.example/" });
-  const publicServer = createPublicServer({ store });
-  const origin = await listen(admin);
-  const publicOrigin = await listen(publicServer);
-  return {
-    origin,
-    publicOrigin,
+  const boot = async () => {
+    const store = await openPolicyStore(policyDir);
+    const servers = [
+      createAdminServer({ webRoot, store, publicUrl: "https://policy.example/" }),
+      createPublicServer({ store }),
+    ];
+    const [origin, publicOrigin] = await Promise.all(servers.map(listen));
+    return { servers, origin: origin!, publicOrigin: publicOrigin! };
+  };
+  const close = (servers: ReadonlyArray<NodeHttp.Server>) =>
+    Promise.all(servers.map((server) => new Promise((resolve) => server.close(resolve))));
+
+  let running = await boot();
+  const handle = {
+    origin: running.origin,
+    publicOrigin: running.publicOrigin,
     policyDir,
-    policyUrl: (name: string) => `${origin}${API_PATH}/${name}`,
+    policyUrl: (name: string) => `${handle.origin}${API_PATH}/${name}`,
     read: (file: string) => NodeFSP.readFile(NodePath.join(policyDir, file), "utf8"),
+    /** What POLICY_DIR holds, without the hidden `.legacy/`. */
+    files: async () =>
+      (await NodeFSP.readdir(policyDir)).filter((file) => !file.startsWith(".")).toSorted(),
+    /** Stops both listeners and opens the same POLICY_DIR again, as a pod restart does. */
+    restart: async () => {
+      await close(running.servers);
+      running = await boot();
+      handle.origin = running.origin;
+      handle.publicOrigin = running.publicOrigin;
+    },
     [Symbol.asyncDispose]: async () => {
-      await Promise.all(
-        [admin, publicServer].map((server) => new Promise((resolve) => server.close(resolve))),
-      );
+      await close(running.servers);
       await NodeFSP.rm(directory, { recursive: true, force: true });
     },
   };
+  return handle;
 }
 
 const put = (url: string, body: string, headers: Record<string, string>) =>
@@ -108,10 +125,7 @@ describe("/api/policies/<name>", () => {
 
     expect(await server.read("work.json")).toBe(policy("w2"));
     expect(await server.read("home.json")).toBe(policy("h1"));
-    expect((await NodeFSP.readdir(server.policyDir)).toSorted()).toEqual([
-      "home.json",
-      "work.json",
-    ]);
+    expect(await server.files()).toEqual(["home.json", "work.json"]);
   });
 
   it("deletes only the version the caller loaded", async () => {
@@ -127,7 +141,7 @@ describe("/api/policies/<name>", () => {
     expect((await remove(url, { "If-Match": etagOf(policy("v2")) })).status).toBe(204);
     expect((await fetch(url)).status).toBe(404);
     expect((await remove(url, { "If-Match": "*" })).status).toBe(412);
-    expect(await NodeFSP.readdir(server.policyDir)).toEqual([]);
+    expect(await server.files()).toEqual([]);
   });
 
   it("cleans up after a failed write, and the next write succeeds", async () => {
@@ -136,7 +150,7 @@ describe("/api/policies/<name>", () => {
     });
     const url = server.policyUrl("work");
     const v1 = (await create(url, policy("v1"))).headers.get("ETag")!;
-    expect(await NodeFSP.readdir(server.policyDir)).toEqual(["work.json"]);
+    expect(await server.files()).toEqual(["work.json"]);
 
     // A dangling link where the temporary file goes makes opening it fail.
     await NodeFSP.symlink(
@@ -144,7 +158,7 @@ describe("/api/policies/<name>", () => {
       NodePath.join(server.policyDir, `work.json.${process.pid}.tmp`),
     );
     expect((await put(url, policy("v2"), { "If-Match": v1 })).status).toBe(500);
-    expect(await NodeFSP.readdir(server.policyDir)).toEqual(["work.json"]);
+    expect(await server.files()).toEqual(["work.json"]);
     expect(await (await fetch(url)).text()).toBe(policy("v1"));
 
     expect((await put(url, policy("v2"), { "If-Match": v1 })).status).toBe(200);
@@ -208,7 +222,7 @@ describe("/api/policies/<name>", () => {
       413,
       ...Array(7).fill(400),
     ]);
-    expect(await NodeFSP.readdir(server.policyDir)).toEqual([]);
+    expect(await server.files()).toEqual([]);
   });
 });
 
@@ -242,28 +256,67 @@ describe(API_PATH, () => {
 });
 
 describe("the single-policy layout", () => {
-  it("moves policy.json to dotfiles.json, keeping its bytes", async () => {
+  const writeLegacy = (policyDir: string, raw: string) =>
+    NodeFSP.writeFile(NodePath.join(policyDir, "policy.json"), raw);
+  const legacyCopies = async (policyDir: string) => {
+    const names = await NodeFSP.readdir(NodePath.join(policyDir, ".legacy"));
+    return Promise.all(
+      names
+        .filter((name) => name.startsWith("policy.json."))
+        .map((name) => NodeFSP.readFile(NodePath.join(policyDir, ".legacy", name), "utf8")),
+    );
+  };
+
+  it("moves policy.json to dotfiles.json once, keeping its bytes", async () => {
     const raw = `{\n  "schemaVersion": 1,\n  "organization": "dotfiles"\n}\n`;
-    await using server = await startServer({
-      setup: (policyDir) => NodeFSP.writeFile(NodePath.join(policyDir, "policy.json"), raw),
-    });
-    expect(await NodeFSP.readdir(server.policyDir)).toEqual(["dotfiles.json"]);
+    await using server = await startServer({ setup: (policyDir) => writeLegacy(policyDir, raw) });
     expect(await server.read("dotfiles.json")).toBe(raw);
     const served = await fetch(`${server.publicOrigin}/dotfiles.json`);
     expect(served.headers.get("ETag")).toBe(etagOf(raw));
     expect((await fetch(`${server.publicOrigin}/policy.json`)).status).toBe(404);
     expect((await fetch(`${server.origin}/policy.json`)).status).toBe(404);
+
+    // A deleted policy stays deleted, even if an old server wrote policy.json again meanwhile.
+    expect((await remove(server.policyUrl("dotfiles"), { "If-Match": etagOf(raw) })).status).toBe(
+      204,
+    );
+    await writeLegacy(server.policyDir, policy("rolled back"));
+    await server.restart();
+    expect((await fetch(server.policyUrl("dotfiles"))).status).toBe(404);
+    expect(await legacyCopies(server.policyDir)).toEqual([policy("rolled back")]);
   });
 
-  it("leaves both files alone when dotfiles.json already exists", async () => {
+  it("sets policy.json aside, unserved, when dotfiles.json already exists", async () => {
     await using server = await startServer({
       setup: async (policyDir) => {
-        await NodeFSP.writeFile(NodePath.join(policyDir, "policy.json"), policy("legacy"));
+        await writeLegacy(policyDir, policy("legacy"));
         await NodeFSP.writeFile(NodePath.join(policyDir, "dotfiles.json"), policy("current"));
       },
     });
-    expect(await server.read("policy.json")).toBe(policy("legacy"));
+    expect(await legacyCopies(server.policyDir)).toEqual([policy("legacy")]);
     expect(await server.read("dotfiles.json")).toBe(policy("current"));
+    const { policies } = (await (await fetch(`${server.origin}${API_PATH}`)).json()) as {
+      policies: Array<{ name: string }>;
+    };
+    expect(policies.map((listed) => listed.name)).toEqual(["dotfiles"]);
+    expect((await fetch(`${server.publicOrigin}/policy.json`)).status).toBe(404);
+
+    await remove(server.policyUrl("dotfiles"), { "If-Match": etagOf(policy("current")) });
+    await server.restart();
+    expect((await fetch(server.policyUrl("dotfiles"))).status).toBe(404);
+  });
+
+  it("reserves the name policy for the legacy file", async () => {
+    await using server = await startServer();
+    const created = await create(server.policyUrl("policy"), policy("new"));
+    expect(created.status).toBe(400);
+    expect(((await created.json()) as { error: string }).error).toMatch(/reserved/);
+
+    await writeLegacy(server.policyDir, policy("stray"));
+    expect((await fetch(`${server.publicOrigin}/policy.json`)).status).toBe(404);
+    expect((await fetch(server.policyUrl("policy"))).status).toBe(400);
+    await server.restart();
+    expect((await fetch(server.policyUrl("dotfiles"))).status).toBe(404);
   });
 });
 
@@ -325,7 +378,7 @@ describe("the public listener", () => {
     ]) {
       expect({ path, status: (await fetch(at(path))).status }).toEqual({ path, status: 404 });
     }
-    expect(await NodeFSP.readdir(server.policyDir)).toEqual(["dotfiles.json"]);
+    expect(await server.files()).toEqual(["dotfiles.json"]);
     expect(await server.read("dotfiles.json")).toBe(raw);
   });
 });
