@@ -339,16 +339,14 @@ The two listeners have different audiences:
 
 ## Admin page
 
-Open the admin port in a browser.
+Open the admin port in a browser. The sidebar switches between its pages.
 
-- **MCP endpoint** shows the URL to give your MCP client once you enter the
-  public URL the bridge is reached at. In ChatGPT or Claude, add a custom
-  connector with that URL and OAuth, leaving the client ID and secret empty.
-- **T3 servers** lists every paired server with its status, token expiry, and
-  the permissions its token holds on that server. Edit a server's id or name, disable it to hide it from the tools without
-  forgetting its token, re-pair it, or remove it. Changes apply to the next
-  tool call, without a restart. The id is the `server_id` a chat uses, so
-  renaming breaks the session ids it already holds.
+- **All servers** lists every paired server with its status and token expiry.
+  Open a server to see the permissions its token holds on that server, edit
+  its id or name, disable it to hide it from the tools without forgetting its
+  token, re-pair it, or remove it. Changes apply to the next tool call,
+  without a restart. The id is the `server_id` a chat uses, so renaming breaks
+  the session ids it already holds.
 - **Pair a server** takes a pairing link. Create one in T3 Code under Settings →
   Connections on that server. The bridge asks only for the permissions its
   tools use: view environment and operate tasks, view diagnostics and usage
@@ -358,6 +356,9 @@ Open the admin port in a browser.
   need it fail and the server's status says which permissions are missing. The
   server lists the bridge as "T3 MCP bridge" under its Connections, where you
   can revoke it.
+- **MCP endpoint** shows the URL to give your MCP client once you enter the
+  public URL the bridge is reached at. In ChatGPT or Claude, add a custom
+  connector with that URL and OAuth, leaving the client ID and secret empty.
 
 Tokens from pairing last 30 days. The admin page shows how long each has left,
 and `list_projects` warns during the last week so the chat can remind you.
