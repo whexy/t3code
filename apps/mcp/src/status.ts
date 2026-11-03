@@ -189,6 +189,9 @@ export function sessionState(signals: StateSignals): SessionState {
     case "preparing":
     case "starting":
       return "starting";
+    // Held by a request the user does not answer, such as a client tool call; T3 Code shows it as Working.
+    case "waiting":
+      return "running";
     case "cancelled":
       return "interrupted";
     case "rolled_back":
