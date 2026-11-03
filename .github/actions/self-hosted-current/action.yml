@@ -1,0 +1,21 @@
+name: Check this run may still publish
+description: >-
+  Fails unless this is the run's first attempt and self-hosted-nightly still
+  points at its commit. Publishing jobs run it right before they change
+  anything, since the branch can move after the gate.
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        if ((GITHUB_RUN_ATTEMPT > 1)); then
+          echo "::error::Use workflow_dispatch to retry; re-running reuses run_number, and with it the 1.2.N version."
+          exit 1
+        fi
+        head="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/self-hosted-nightly" --jq .object.sha)"
+        if [[ "$head" != "$GITHUB_SHA" ]]; then
+          echo "::error::self-hosted-nightly moved to $head after the gate; that push publishes itself."
+          exit 1
+        fi

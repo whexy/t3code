@@ -2,7 +2,7 @@ name: Build a self-hosted image
 description: >-
   Builds a linux/amd64 image. Outside pull requests it pushes the image to
   ghcr.io/whexy/t3code-<name> by digest only, which nothing deploys until
-  build.yml's promote job tags it, and outputs the digest.
+  self-hosted-build.yml's promote job tags it, and outputs the digest.
 inputs:
   name:
     description: Image name; it is pushed as ghcr.io/whexy/t3code-<name>

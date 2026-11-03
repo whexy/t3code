@@ -6,12 +6,15 @@
 # starts. A failure is reported to T3 Code, which starts an agent run to
 # repair the branch, and the last good build keeps serving.
 #
-# Pushes come from rebase.yml (as the whexy-bot App) and from merged pull
-# requests. Pull requests run the checks without the macOS leg and push
-# nothing. Re-run a failed promote with workflow_dispatch on the branch head.
+# Pushes come from self-hosted-rebase.yml (as the whexy-bot App) and from
+# merged pull requests. Pull requests run the checks without the macOS leg and
+# push nothing.
 #
 # Images get `sha-<12 hex>` and `1.2.<run_number>`, so the version only grows.
-name: build
+# Retry with workflow_dispatch on the branch head, never "Re-run": a re-run
+# reuses run_number, so the publishing jobs refuse it. Never rename this file:
+# run_number counts per workflow file, and a new name restarts 1.2.N.
+name: self-hosted-build
 
 on:
   push:
@@ -28,6 +31,10 @@ concurrency:
 
 permissions:
   contents: read
+
+defaults:
+  run:
+    shell: bash
 
 jobs:
   web-hub:
@@ -155,7 +162,11 @@ jobs:
       # dependencies and the server's source files. Install scripts only build
       # native modules the server runs and the editor never loads.
       - name: Install
-        run: vp install --frozen-lockfile --ignore-scripts --filter=@t3tools/web... --filter=t3...
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
+        run: |
+          vp install --lockfile-only
+          vp install --frozen-lockfile --ignore-scripts --filter=@t3tools/web... --filter=t3...
 
       - name: Test, typecheck and build
         working-directory: apps/policy-editor
@@ -190,12 +201,12 @@ jobs:
           skipPush: true
 
       - id: check
-        run: |
-          scripts/self-hosted/nix-check.sh x86_64-linux
-          echo "out=$(readlink -f result)" >> "$GITHUB_OUTPUT"
+        run: scripts/self-hosted/nix-check.sh x86_64-linux
 
       - if: github.event_name != 'pull_request'
-        run: cachix push whexy-t3code "$(readlink -f result)"
+        env:
+          OUT: ${{ steps.check.outputs.out }}
+        run: cachix push whexy-t3code "$OUT"
 
   nix-darwin:
     if: github.event_name != 'pull_request'
@@ -213,11 +224,11 @@ jobs:
           skipPush: true
 
       - id: check
-        run: |
-          scripts/self-hosted/nix-check.sh aarch64-darwin
-          echo "out=$(readlink -f result)" >> "$GITHUB_OUTPUT"
+        run: scripts/self-hosted/nix-check.sh aarch64-darwin
 
-      - run: cachix push whexy-t3code "$(readlink -f result)"
+      - env:
+          OUT: ${{ steps.check.outputs.out }}
+        run: cachix push whexy-t3code "$OUT"
 
   # A newer push builds itself, so a superseded commit is never tagged.
   gate:
@@ -249,8 +260,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
+      contents: read
       packages: write
     steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: .github/actions
       - uses: docker/setup-buildx-action@v4
       - uses: docker/login-action@v4
         with:
@@ -258,6 +273,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
+      - uses: ./.github/actions/self-hosted-current
       - env:
           HUB: ${{ needs.web-hub.outputs.digest }}
           MCP: ${{ needs.mcp.outputs.digest }}
@@ -265,7 +281,7 @@ jobs:
         run: |
           promote() {
             local image="ghcr.io/whexy/t3code-$1"
-            docker buildx imagetools create \
+            docker buildx imagetools create --prefer-index=false \
               -t "$image:sha-${GITHUB_SHA::12}" -t "$image:1.2.$GITHUB_RUN_NUMBER" "$image@${2:?no digest for $1}"
           }
           promote hub "$HUB"
@@ -283,6 +299,10 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: .github/actions
+      - uses: ./.github/actions/self-hosted-current
       - env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -296,6 +316,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: .github/actions
+      - uses: ./.github/actions/self-hosted-current
       - name: Start the dotfiles pin lane
         env:
           WOODPECKER_TOKEN: ${{ secrets.WOODPECKER_TOKEN }}

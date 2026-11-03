@@ -2,6 +2,7 @@
 // dedupes on kind, stage, commit, and release tag; T3_ALERT_WEBHOOK tells
 // Wenxuan when that webhook is unset or does not answer 2xx. A sync names its
 // stage in T3_FAILURE_STAGE, a build passes `toJSON(needs)` in T3_FAILURE_NEEDS.
+import * as NodeFS from "node:fs";
 import * as NodeURL from "node:url";
 
 type Env = Readonly<Record<string, string | undefined>>;
@@ -63,25 +64,39 @@ export async function reportFailure(
     log(`Nobody was told: ${reason}, and T3_ALERT_WEBHOOK is not set.`);
     return false;
   }
-  const response = await post(fetchUrl, env.T3_ALERT_WEBHOOK, {
-    source: "t3code-fork",
-    severity: "error",
-    title: `Fork ${kind} failed at ${payload.stage}`,
-    detail: `${reason}. Commit ${payload.commit}, release ${payload.release_tag || "unknown"}.`,
-    url: payload.run_url,
-  });
-  if (!response.ok) {
-    log(`Nobody was told: ${reason}, and the alert webhook answered ${response.status}.`);
-    return false;
+  let alertFailure: string;
+  try {
+    const response = await post(fetchUrl, env.T3_ALERT_WEBHOOK, {
+      source: "t3code-fork",
+      severity: "error",
+      title: `Fork ${kind} failed at ${payload.stage}`,
+      detail: `${reason}. Commit ${payload.commit}, release ${payload.release_tag || "unknown"}.`,
+      url: payload.run_url,
+    });
+    if (response.ok) {
+      log(`Alerted instead: ${reason}.`);
+      return true;
+    }
+    alertFailure = `answered ${response.status}`;
+  } catch (error) {
+    alertFailure = `failed: ${String(error)}`;
   }
-  log(`Alerted instead: ${reason}.`);
-  return true;
+  log(`Nobody was told: ${reason}, and the alert webhook ${alertFailure}.`);
+  return false;
 }
 
 if (process.argv[1] === NodeURL.fileURLToPath(import.meta.url)) {
   const kind = process.argv[2];
   if (kind !== "sync" && kind !== "build") {
     throw new Error("Usage: report-failure.ts <sync|build>");
+  }
+  // A sync's report step writes its own line, with the tag and start head.
+  if (kind === "build" && process.env.GITHUB_STEP_SUMMARY) {
+    const { stage, commit, release_tag } = repairPayload(kind, process.env);
+    NodeFS.appendFileSync(
+      process.env.GITHUB_STEP_SUMMARY,
+      `state=FAILED(${stage}) commit=${commit} release=${release_tag}\n`,
+    );
   }
   if (!(await reportFailure(kind, process.env))) process.exitCode = 1;
 }

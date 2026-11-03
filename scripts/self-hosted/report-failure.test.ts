@@ -61,6 +61,18 @@ it("alerts instead when the repair webhook does not answer 2xx", async () => {
   ]);
 });
 
+it("says nobody was told when the alert webhook is unreachable too", async () => {
+  const fetchUrl = vi
+    .fn<typeof fetch>()
+    .mockRejectedValueOnce(new TypeError("fetch failed"))
+    .mockRejectedValueOnce(new TypeError("fetch failed"));
+  const log = vi.fn();
+  await expect(reportFailure("sync", env, fetchUrl, log)).resolves.toBe(false);
+  expect(log).toHaveBeenCalledWith(
+    "Nobody was told: the repair webhook failed: TypeError: fetch failed, and the alert webhook failed: TypeError: fetch failed.",
+  );
+});
+
 it("tells nobody, and says so, when neither webhook is set", async () => {
   const fetchUrl = vi.fn<typeof fetch>();
   const log = vi.fn();
