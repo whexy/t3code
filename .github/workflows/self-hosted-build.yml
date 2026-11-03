@@ -73,6 +73,7 @@ jobs:
         run: |
           (cd apps/web && vp test run --project unit src/connection/sharedCatalog.test.ts src/connection/storage.test.ts)
           (cd scripts && vp test run --config ../vite.config.ts --dir . self-hosted)
+          vp run --filter @t3tools/scripts typecheck
           vp run --filter @t3tools/web typecheck
 
       # The storage tests expect the browser catalog, so only the build sees the shared one.

@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - CI runs this without an install, so only Node built-ins exist.
 // T3_REPAIR_WEBHOOK's task starts an agent run that repairs the branch and
 // dedupes on kind, stage, commit, and release tag; T3_ALERT_WEBHOOK tells
 // Wenxuan when that webhook is unset or does not answer 2xx. A sync names its
