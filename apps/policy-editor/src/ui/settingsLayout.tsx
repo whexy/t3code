@@ -11,8 +11,8 @@ export function SettingsGroup({ className, ...props }: ComponentPropsWithoutRef<
       data-slot="settings-group"
       {...props}
       className={cn(
-        "relative overflow-visible rounded-xl border border-border/60 bg-card/40 text-foreground shadow-xs/5",
-        "[&>*+*]:border-t [&>*+*]:border-border/50 [&>[data-slot=settings-row]]:rounded-none",
+        "panel relative overflow-visible text-ink",
+        "[&>*+*]:border-t [&>*+*]:border-black/5 [&>[data-slot=settings-row]]:rounded-none",
         className,
       )}
     />
@@ -30,13 +30,13 @@ export function SettingsSection({
   readonly children: ReactNode;
 }) {
   return (
-    <section {...props} className="scroll-mt-20 space-y-2.5">
-      <div className="space-y-1 px-3 sm:px-4">
-        <h2 className="flex min-h-7 items-center text-base font-semibold text-foreground">
+    <section {...props} className="scroll-mt-20 space-y-3">
+      <div className="space-y-1 px-4 sm:px-6">
+        <h2 className="flex min-h-7 items-center font-title text-lg font-bold tracking-tight text-ink">
           {title}
         </h2>
         {description ? (
-          <p className="max-w-2xl text-xs leading-normal text-muted-foreground">{description}</p>
+          <p className="text-xs leading-normal text-ink-muted">{description}</p>
         ) : null}
       </div>
       <SettingsGroup>{children}</SettingsGroup>
@@ -46,7 +46,7 @@ export function SettingsSection({
 
 export function SettingsGroupHeading({ children }: { readonly children: ReactNode }) {
   return (
-    <div className="bg-muted/24 px-3 py-1.5 text-xs font-medium text-muted-foreground sm:px-4">
+    <div className="px-4 pt-4 pb-2 text-xs font-semibold tracking-wide text-ink-muted uppercase sm:px-6">
       {children}
     </div>
   );
@@ -75,26 +75,23 @@ export function SettingsRow({
       {...props}
       data-slot="settings-row"
       className={cn(
-        "group/settings-row @container/settings-row scroll-mt-20 rounded-xl px-3 sm:px-4",
-        children ? "pt-3 pb-3" : "py-3",
-        invalid && "bg-destructive/4",
+        "group/settings-row @container/settings-row scroll-mt-20 px-4 py-4 sm:px-6",
+        invalid && "bg-wash",
       )}
     >
-      <div className="flex flex-col gap-3 @min-[32rem]/settings-row:grid @min-[32rem]/settings-row:grid-cols-[minmax(0,1fr)_minmax(10rem,auto)] @min-[32rem]/settings-row:items-center @min-[32rem]/settings-row:gap-8">
+      <div className="flex flex-col gap-3 @lg/settings-row:flex-row @lg/settings-row:items-center @lg/settings-row:gap-8">
         <div className="min-w-0 flex-1 space-y-1">
           <div className="flex min-h-5 flex-wrap items-center gap-1.5">
-            <h3 className="text-sm font-medium text-foreground">{title}</h3>
+            <h3 className="font-title text-sm font-bold text-ink">{title}</h3>
             {badge}
           </div>
           {description ? (
-            <p className="max-w-2xl text-balance text-xs leading-normal text-muted-foreground">
-              {description}
-            </p>
+            <p className="text-balance text-xs leading-normal text-ink-muted">{description}</p>
           ) : null}
-          {status ? <div className="pt-0.5 text-xs text-muted-foreground">{status}</div> : null}
+          {status ? <div className="pt-0.5 text-xs text-ink-muted">{status}</div> : null}
         </div>
         {control ? (
-          <div className="flex w-full min-w-0 shrink-0 flex-wrap items-center gap-2 @min-[32rem]/settings-row:w-auto @min-[32rem]/settings-row:justify-end">
+          <div className="flex w-full min-w-0 shrink-0 flex-wrap items-center gap-2 @lg/settings-row:w-auto @lg/settings-row:justify-end">
             {control}
           </div>
         ) : null}
