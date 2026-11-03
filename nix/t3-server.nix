@@ -11,10 +11,11 @@
   jq,
   writableTmpDirAsHomeHook,
   versionCheckHook,
+  # nix/update-sources.sh passes the pins it is computing.
+  sources ? lib.importJSON ./sources.json,
 }:
 
 let
-  sources = lib.importJSON ./sources.json;
   # nix/update-sources.sh pins every system listed here.
   platforms = {
     x86_64-linux = {
