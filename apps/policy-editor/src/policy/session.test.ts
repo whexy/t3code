@@ -1,6 +1,7 @@
 // @effect-diagnostics globalDate:off - Fixed timestamps for the reducer, outside any Effect program.
 import { describe, expect, it } from "vite-plus/test";
 
+import type { PolicyFileHandle } from "./files.ts";
 import type { PolicySummary, RemoteList, RemoteLoad } from "./remote.ts";
 import {
   afterRemoteSave,
@@ -52,7 +53,7 @@ describe("saving a policy", () => {
 
     const done = run(
       start,
-      { type: "begin" },
+      { type: "begin", replacing: false },
       { type: "edit", segments: ["organization"], value: "b" },
       afterRemoteSave(submitted, "dotfiles", '"v1"', result),
     );
@@ -68,7 +69,7 @@ describe("saving a policy", () => {
 
     const quiet = run(
       start,
-      { type: "begin" },
+      { type: "begin", replacing: false },
       afterRemoteSave(submitted, "dotfiles", '"v1"', result),
     );
     expect(isDirty(quiet.editing)).toBe(false);
@@ -79,7 +80,7 @@ describe("saving a policy", () => {
 
     const refused = run(
       start,
-      { type: "begin" },
+      { type: "begin", replacing: false },
       afterRemoteSave(submittedOf(start), "dotfiles", '"v1"', {
         status: "conflict",
         message: "changed",
@@ -99,7 +100,7 @@ describe("saving a policy", () => {
 
     const forked = run(
       start,
-      { type: "begin" },
+      { type: "begin", replacing: false },
       afterRemoteSave(
         submitted,
         "copy",
@@ -118,11 +119,39 @@ describe("saving a policy", () => {
 
     const taken = run(
       start,
-      { type: "begin" },
+      { type: "begin", replacing: false },
       afterRemoteSave(submitted, "work", null, { status: "conflict", message: "exists" }),
     );
     expect(taken.fleet).toEqual(start.fleet);
     expect(taken.notice?.text).toMatch(/work already exists/);
+  });
+
+  it("counts an imported policy as unsaved until Save, keeping its layout", () => {
+    const imported = (state: Session, text: string, handle?: PolicyFileHandle) =>
+      run(state, {
+        type: "import",
+        file: { name: "import.json", text, handle },
+        document: JSON.parse(text),
+        notice: undefined,
+      });
+    const OTHER = '{\n    "schemaVersion": 1,\n    "organization": "other"\n}\n';
+
+    const into = imported(loaded(saved()), OTHER);
+    expect(isDirty(into.editing)).toBe(true);
+    expect(textOf(into.editing)).toBe(OTHER);
+    expect(into.fleet).toEqual(loaded(saved()).fleet);
+    expect(isDirty(imported(loaded(saved()), SAVED_TEXT).editing)).toBe(false);
+    expect(
+      isDirty(imported(run(INITIAL_SESSION, { type: "draft", name: "x" }), OTHER).editing),
+    ).toBe(true);
+
+    const files = run(INITIAL_SESSION, {
+      type: "opened",
+      list: { status: "absent" },
+      name: undefined,
+      load: undefined,
+    });
+    expect(isDirty(imported(files, OTHER).editing)).toBe(false);
   });
 
   it("creates a draft only on Save, and lists it until then", () => {
@@ -146,18 +175,22 @@ describe("opening a policy", () => {
     expect(failed.busy).toBe(false);
     expect(failed.notice).toMatchObject({ tone: "error", text: expect.stringMatching(/HTTP 502/) });
 
-    const retried = run(failed, { type: "begin" }, open(saved()));
+    const retried = run(failed, { type: "begin", replacing: true }, open(saved()));
     expect(retried.fleet).toMatchObject({ mode: "ready", target: { etag: '"v1"' } });
     expect(retried.editing.opened?.text).toBe(SAVED_TEXT);
   });
 
-  it("ignores edits until the first load settles", () => {
-    const early = run(INITIAL_SESSION, {
-      type: "edit",
-      segments: ["organization"],
-      value: "typed early",
-    });
+  it("ignores edits while a load replaces the policy, but not while a save runs", () => {
+    const typed = { type: "edit", segments: ["organization"], value: "typed" } as const;
+    const early = run(INITIAL_SESSION, typed);
     expect(early.editing).toBe(FRESH);
+
+    const start = loaded(saved());
+    expect(run(start, { type: "begin", replacing: true }, typed).editing).toBe(start.editing);
+    expect(run(start, { type: "begin", replacing: false }, typed).editing.document).toEqual({
+      schemaVersion: 1,
+      organization: "typed",
+    });
 
     const ready = run(early, open(saved()), {
       type: "edit",
@@ -179,7 +212,7 @@ describe("opening a policy", () => {
         load: undefined,
       } as const,
     ]) {
-      const failed = run(start, { type: "begin" }, action);
+      const failed = run(start, { type: "begin", replacing: true }, action);
       expect(failed.fleet).toEqual(start.fleet);
       expect(failed.editing).toBe(start.editing);
       expect(failed.notice).toMatchObject({
@@ -230,7 +263,7 @@ describe("opening a policy", () => {
 
       const replaced = run(
         state,
-        { type: "begin" },
+        { type: "begin", replacing: false },
         afterRemoteSave(submittedOf(state), "dotfiles", '"bad"', {
           status: "saved",
           etag: '"v2"',
