@@ -6,7 +6,8 @@ setting a policy can manage the way T3 Code's Settings page does, and checks the
 edit with the server's own code, so what it accepts `t3 policy check` accepts.
 
 Served by `serve.ts`, the editor keeps any number of named policies. Pick one in the sidebar to
-edit it; Save publishes it, and each T3 server that fetches it applies it the next time it starts.
+edit it; Save publishes it, and hosts following it pick it up within about 2 minutes, restarting
+their T3 server to apply it. Hosts following a deleted policy keep their last good copy and alert.
 The sidebar also starts a new policy, forks the open one under a new name, imports a file or pasted
 JSON into it, reloads it, and deletes it, and shows the public URL hosts fetch it from. If someone
 else saved since you loaded, Save is refused and keeps your edits; Reload fetches their version.
@@ -43,14 +44,15 @@ The image runs `serve.ts` with two listeners over one directory of policies:
 | `PUBLIC_PORT` (8081) | `GET`/`HEAD /<name>.json` and `GET /healthz`, nothing else | Hosts, including the public internet   |
 
 Each policy is `POLICY_DIR/<name>.json` (`/data` in the image), where a name is 1 to 63 lowercase
-letters, digits and hyphens, starting with a letter or digit. Mount a persistent volume there,
-writable by uid 1000, and run one replica: changes are serialized inside the process. `PUBLIC_URL`
-(default `https://t3-policy.clusters.work`) is the public listener's origin, which the editor shows
-as each policy's URL. `WEB_ROOT` (`/app/dist` in the image) holds the built editor.
+letters, digits and hyphens, starting with a letter or digit; `policy` is reserved. Mount a
+persistent volume there, writable by uid 1000, and run one replica: changes are serialized inside
+the process. `PUBLIC_URL` (default `https://t3-policy.clusters.work`) is the public listener's
+origin, which the editor shows as each policy's URL. `WEB_ROOT` (`/app/dist` in the image) holds
+the built editor.
 
-On its first start over a directory from the single-policy server, `serve.ts` renames
-`policy.json` to `dotfiles.json` and logs it. If both exist, it leaves both and logs a warning; the
-old file is then served as the policy named `policy`.
+The first time `serve.ts` opens a directory from the single-policy server, it renames
+`policy.json` to `dotfiles.json` and logs it. Any `policy.json` it finds later, or alongside an
+existing `dotfiles.json`, is moved to `.legacy/` with a timestamp, logged, and never served.
 
 ### Public listener
 

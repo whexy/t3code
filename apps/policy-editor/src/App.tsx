@@ -196,11 +196,14 @@ export function App({ initialOpen }: { readonly initialOpen: Promise<Opened> }) 
   const setSetting = (key: string, entry: { value: unknown; locked: boolean } | undefined) =>
     edit(["settings", key], entry);
 
-  /** Runs one load or save at a time; the task's action ends it. */
-  const run = (task: () => Promise<SessionAction>) => {
+  /**
+   * Runs one load or save at a time; the task's action ends it. `replacing` tasks load over what
+   * is being edited, so the editor takes no edits until they settle.
+   */
+  const run = (task: () => Promise<SessionAction>, replacing: boolean) => {
     if (inFlight.current) return;
     inFlight.current = true;
-    dispatch({ type: "begin" });
+    dispatch({ type: "begin", replacing });
     void task()
       .catch((error: unknown): SessionAction => ({
         type: "settled",
@@ -252,13 +255,9 @@ export function App({ initialOpen }: { readonly initialOpen: Promise<Opened> }) 
     }
     if (!confirmDiscard()) return;
     dispatch({
-      type: "replace",
-      editing: {
-        document: read.document,
-        opened: { text: file.text, document: read.document },
-        name: onFleet ? editing.name : file.name,
-        handle: onFleet ? undefined : file.handle,
-      },
+      type: "import",
+      file: { name: file.name, text: file.text, handle: file.handle },
+      document: read.document,
       notice: {
         tone: "info",
         text: onFleet
@@ -280,12 +279,12 @@ export function App({ initialOpen }: { readonly initialOpen: Promise<Opened> }) 
 
   const reload = () => {
     if (inFlight.current || !confirmDiscard()) return;
-    run(openTask(targetName));
+    run(openTask(targetName), true);
   };
 
   const switchTo = (name: string) => {
     if (name === targetName || inFlight.current || !confirmDiscard()) return;
-    run(openTask(name));
+    run(openTask(name), true);
   };
 
   const saveFile = async (submitted: OpenedText): Promise<SessionAction> => {
@@ -322,7 +321,7 @@ export function App({ initialOpen }: { readonly initialOpen: Promise<Opened> }) 
   const save = () => {
     if (inFlight.current || !canSave || !confirmInvalid()) return;
     const submitted: OpenedText = { text, document: policy };
-    if (ready === undefined) return run(() => saveFile(submitted));
+    if (ready === undefined) return run(() => saveFile(submitted), false);
     if (target === undefined) return setNaming("fork");
     if (
       target.unreadable &&
@@ -331,13 +330,13 @@ export function App({ initialOpen }: { readonly initialOpen: Promise<Opened> }) 
       )
     )
       return;
-    run(saveTask(submitted, target.name, target.etag));
+    run(saveTask(submitted, target.name, target.etag), false);
   };
 
   const fork = (name: string) => {
     setNaming(undefined);
     if (inFlight.current || !confirmInvalid()) return;
-    run(saveTask({ text, document: policy }, name, null));
+    run(saveTask({ text, document: policy }, name, null), false);
   };
 
   const startDraft = (name: string) => {
@@ -354,13 +353,13 @@ export function App({ initialOpen }: { readonly initialOpen: Promise<Opened> }) 
   const remove = () => {
     if (inFlight.current || target === undefined) return;
     if (target.etag === null) {
-      if (confirmDiscard()) run(openTask(undefined));
+      if (confirmDiscard()) run(openTask(undefined), true);
       return;
     }
     const { name, etag } = target;
     if (
       !window.confirm(
-        `Delete ${name}?${publicUrl === undefined ? "" : ` Hosts that fetch ${publicUrl} will no longer find it.`}${dirty ? " Your unsaved changes are lost too." : ""}`,
+        `Delete ${name}? Hosts following it keep their last good copy and raise an alert.${dirty ? " Your unsaved changes are lost too." : ""}`,
       )
     )
       return;
@@ -379,7 +378,7 @@ export function App({ initialOpen }: { readonly initialOpen: Promise<Opened> }) 
               : `Could not delete ${name}: ${result.message}`,
         },
       };
-    });
+    }, true);
   };
 
   // Warn before closing with unsaved changes, and save on Cmd/Ctrl+S: both are window events.
@@ -617,7 +616,7 @@ export function App({ initialOpen }: { readonly initialOpen: Promise<Opened> }) 
         </header>
 
         <div
-          inert={fleet.mode === "loading"}
+          inert={fleet.mode === "loading" || session.replacing}
           className="mx-auto flex w-full max-w-content flex-col gap-8 px-0 pt-4 pb-24 sm:px-4 sm:pt-10"
         >
           {notice ? (
@@ -887,15 +886,20 @@ function PolicyPicker({
 
 function PublicUrl({ url }: { readonly url: string }) {
   const [copied, setCopied] = useState(false);
+  const slash = url.lastIndexOf("/");
+  const origin = url.slice(0, slash).replace(/^https:\/\//, "");
+  const file = url.slice(slash + 1);
   return (
     <div className="flex items-center gap-1">
       <a
         href={url}
         target="_blank"
         rel="noreferrer"
-        className="min-w-0 flex-1 font-mono text-xs break-all text-ink-subtle transition-colors duration-150 hover:text-ink-strong focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+        className="min-w-0 flex-1 font-mono text-xs wrap-break-word text-ink-subtle transition-colors duration-150 hover:text-ink-strong focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
       >
-        {url.replace(/^https:\/\//, "")}
+        {/* Wraps only after the host, so the policy's file name stays whole. */}
+        {origin}/<wbr />
+        {file}
       </a>
       <Button
         size="icon-xs"
@@ -939,9 +943,11 @@ function NameDialog({
       ? undefined
       : !POLICY_NAME.test(name)
         ? "Use up to 63 lowercase letters, digits and hyphens, starting with a letter or digit."
-        : taken.includes(name)
-          ? `${name} already exists.`
-          : undefined;
+        : name === "policy"
+          ? "The name policy is reserved for the single-policy server's file."
+          : taken.includes(name)
+            ? `${name} already exists.`
+            : undefined;
   const valid = name !== "" && problem === undefined;
   const title = naming === "new" ? "New policy" : from === undefined ? "Save as" : `Fork ${from}`;
   const description =

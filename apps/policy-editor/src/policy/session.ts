@@ -7,6 +7,11 @@ export interface Editing {
   readonly document: unknown;
   /** The text as opened or last saved; saving it unchanged writes these bytes back. */
   readonly opened: OpenedText | undefined;
+  /**
+   * The text stored where Save writes, when known. Import changes `opened`, the layout to keep,
+   * but not this, so an imported policy stays unsaved until Save.
+   */
+  readonly saved: string | undefined;
   /** The file name Download and file saves use. */
   readonly name: string;
   readonly handle: PolicyFileHandle | undefined;
@@ -15,6 +20,7 @@ export interface Editing {
 export const FRESH: Editing = {
   document: NEW_POLICY,
   opened: undefined,
+  saved: undefined,
   name: "policy.json",
   handle: undefined,
 };
@@ -54,6 +60,8 @@ export interface Session {
   readonly notice: Notice | undefined;
   /** A load or save is in flight; the next one waits for it. */
   readonly busy: boolean;
+  /** The task in flight replaces what is being edited, so edits would be lost. */
+  readonly replacing: boolean;
 }
 
 export const INITIAL_SESSION: Session = {
@@ -61,13 +69,25 @@ export const INITIAL_SESSION: Session = {
   fleet: { mode: "loading" },
   notice: undefined,
   busy: true,
+  replacing: true,
 };
 
 export type SessionAction =
   | { readonly type: "edit"; readonly segments: ReadonlyArray<string>; readonly value: unknown }
   | { readonly type: "replace"; readonly editing: Editing; readonly notice: Notice | undefined }
   | { readonly type: "notice"; readonly notice: Notice | undefined }
-  | { readonly type: "begin" }
+  | { readonly type: "begin"; readonly replacing: boolean }
+  /** Open or Paste: the text replaces the document, and Save writes it where the last one went. */
+  | {
+      readonly type: "import";
+      readonly file: {
+        readonly name: string;
+        readonly text: string;
+        readonly handle: PolicyFileHandle | undefined;
+      };
+      readonly document: unknown;
+      readonly notice: Notice | undefined;
+    }
   | ({ readonly type: "opened"; readonly notice?: Notice } & Opened)
   /** A new policy that exists only here until Save creates it. */
   | { readonly type: "draft"; readonly name: string }
@@ -87,9 +107,9 @@ export type SessionAction =
 export const textOf = (editing: Editing) => serializePolicy(editing.document, editing.opened);
 
 export function isDirty(editing: Editing, text = textOf(editing)): boolean {
-  return editing.opened === undefined
+  return editing.saved === undefined
     ? !jsonEqual(editing.document, NEW_POLICY)
-    : text !== editing.opened.text;
+    : text !== editing.saved;
 }
 
 /** Messages come from servers and parsers, with or without a final period. */
@@ -112,7 +132,7 @@ export function afterRemoteSave(
         ...(policies === undefined ? {} : { policies }),
         notice: {
           tone: "info",
-          text: `Saved ${name} (${sha12(result.etag)}). Each server applies it the next time it starts.`,
+          text: `Saved ${name} (${sha12(result.etag)}). Hosts following it pick it up within about 2 minutes, restarting their T3 server to apply it.`,
         },
       };
     case "conflict":
@@ -212,6 +232,7 @@ function opened(state: Session, action: Extract<SessionAction, { type: "opened" 
     editing: {
       document: read.document,
       opened: { text: load.text, document: read.document },
+      saved: load.text,
       name: `${name}.json`,
       handle: undefined,
     },
@@ -223,8 +244,8 @@ function opened(state: Session, action: Extract<SessionAction, { type: "opened" 
 export function sessionReducer(state: Session, action: SessionAction): Session {
   switch (action.type) {
     case "edit":
-      // The first load replaces the whole document, so the editor is read-only until it settles.
-      if (state.fleet.mode === "loading") return state;
+      // A load replaces the whole document, so the editor is read-only until it settles.
+      if (state.fleet.mode === "loading" || state.replacing) return state;
       return {
         ...state,
         editing: {
@@ -237,9 +258,22 @@ export function sessionReducer(state: Session, action: SessionAction): Session {
     case "notice":
       return { ...state, notice: action.notice };
     case "begin":
-      return { ...state, busy: true };
+      return { ...state, busy: true, replacing: action.replacing };
+    case "import":
+      return {
+        ...state,
+        editing: {
+          document: action.document,
+          opened: { text: action.file.text, document: action.document },
+          // Opening a file to save back to it is not a change; importing into a policy is.
+          saved: state.fleet.mode === "files" ? action.file.text : state.editing.saved,
+          name: state.fleet.mode === "files" ? action.file.name : state.editing.name,
+          handle: state.fleet.mode === "files" ? action.file.handle : undefined,
+        },
+        notice: action.notice,
+      };
     case "opened":
-      return { ...opened(state, action), busy: false };
+      return { ...opened(state, action), busy: false, replacing: false };
     case "draft":
       if (state.fleet.mode !== "ready") return state;
       return {
@@ -256,11 +290,13 @@ export function sessionReducer(state: Session, action: SessionAction): Session {
       return {
         ...state,
         busy: false,
+        replacing: false,
         editing: {
           ...state.editing,
           ...action.file,
           ...(target === undefined ? {} : { name: `${target.name}.json` }),
           opened: action.submitted,
+          saved: action.submitted.text,
         },
         fleet:
           target === undefined || state.fleet.mode !== "ready"
@@ -280,7 +316,7 @@ export function sessionReducer(state: Session, action: SessionAction): Session {
       };
     }
     case "settled":
-      return { ...state, busy: false, notice: action.notice ?? state.notice };
+      return { ...state, busy: false, replacing: false, notice: action.notice ?? state.notice };
   }
 }
 
