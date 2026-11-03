@@ -79,6 +79,24 @@ describe("get_session_status wait", () => {
     }),
   );
 
+  it.effect("keeps waiting while the run is held by a request the user does not answer", () =>
+    Effect.gen(function* () {
+      const status = yield* waitForStatus.pipe(
+        Effect.provide(
+          watching([
+            projection(),
+            projection({
+              runs: [run({ status: "waiting" })],
+              runtimeRequests: [runtimeRequest("tool-1", "dynamic_tool_call")],
+            }),
+            projection({ runs: [finishedOne], items: [user, reply] }),
+          ]).layer,
+        ),
+      );
+      expect(status).toMatchObject({ state: "completed", timed_out: false });
+    }),
+  );
+
   it.effect("waits through work already queued when it began", () =>
     Effect.gen(function* () {
       const status = yield* waitForStatus.pipe(
