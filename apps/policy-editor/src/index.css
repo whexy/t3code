@@ -1,5 +1,18 @@
-/* The web app's theme, so the borrowed controls look as they do in T3 Code. */
+/* The web app's stylesheet brings Tailwind and the variants its borrowed controls use; Frost,
+   loaded after it, replaces its colors, radii, shadows and fonts. */
 @import "../../web/src/index.css";
+@import "./styles/frost/tokens.css";
+@import "./styles/frost/components.css";
+@import "./styles/web-controls.css";
 
 @source "../../web/src/components/ui";
 @source "./";
+
+/* Frost's font tokens read these; index.html loads the families. */
+:root {
+  --font-lato: "Lato";
+  --font-fira: "Fira Sans";
+  --font-notosans: "Noto Sans SC";
+  --font-jetbrains: "JetBrains Mono";
+  color-scheme: light;
+}
