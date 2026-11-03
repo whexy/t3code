@@ -14,5 +14,5 @@
       "~/*": ["../web/src/*"]
     }
   },
-  "include": ["src", "serve.ts", "vite.config.ts"]
+  "include": ["src", "serve.ts", "serve.test.ts", "vite.config.ts"]
 }
