@@ -1,0 +1,125 @@
+# Keeps self-hosted-nightly on top of the newest upstream nightly release.
+# n8n dispatches `nightly-release` (optional client_payload.tag) when upstream
+# publishes one; workflow_dispatch does the same by hand. The fork's commits are
+# rebased onto the release, nix/sources.json is pinned to it in one
+# `chore(nix): pin sources` commit on top, and the branch is pushed as the
+# whexy-bot App, whose push starts self-hosted-build.yml.
+# scripts/self-hosted/rebase.sh is the state machine; its summary line names
+# the state it ended in.
+#
+# A failure pushes nothing, so the last build keeps serving, and is reported
+# to T3 Code, which starts an agent run to repair the branch. The report's
+# stage is the operation that failed: setup, token, resolve, rebase, pin, push
+# or push-race, or cancelled when the run was cancelled.
+name: self-hosted-rebase
+
+on:
+  repository_dispatch:
+    types: [nightly-release]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Upstream nightly tag; empty takes the newest
+        required: false
+        type: string
+
+# A newer pending run replaces an older one, which is safe: every run resolves
+# the newest release and re-reads the branch head when it starts.
+concurrency:
+  group: rebase
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  rebase:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - id: checkout
+        uses: actions/checkout@v6
+        with:
+          ref: self-hosted-nightly
+          fetch-depth: 0
+          persist-credentials: false
+
+      - id: node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - id: nix
+        uses: cachix/install-nix-action@v31
+
+      - id: token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+
+      # The rebase rewrites the checkout, so the state machine runs from a copy.
+      - id: rebase
+        timeout-minutes: 45
+        env:
+          TAG: ${{ github.event.client_payload.tag || inputs.tag }}
+          GITHUB_TOKEN: ${{ github.token }}
+          TOKEN: ${{ steps.token.outputs.token }}
+        run: |
+          git config user.name "whexy-bot[bot]"
+          git config user.email "315421218+whexy-bot[bot]@users.noreply.github.com"
+          mkdir -p "$RUNNER_TEMP/scripts"
+          cp scripts/self-hosted/rebase.sh scripts/self-hosted/nightly-release.ts "$RUNNER_TEMP/scripts/"
+          STATE_DIR="$RUNNER_TEMP/rebase" PUSH_URL="https://x-access-token:$TOKEN@github.com/$GITHUB_REPOSITORY.git" \
+            bash "$RUNNER_TEMP/scripts/rebase.sh"
+
+      # A stopped rebase lacks the fork's later commits, so the report script
+      # comes from the head the run started from. Should that script be missing
+      # or crash, the payload goes out with curl, so a failure is never silent.
+      - name: Report the failure
+        if: failure() || cancelled()
+        env:
+          T3_REPAIR_WEBHOOK: ${{ secrets.T3_REPAIR_WEBHOOK }}
+          T3_ALERT_WEBHOOK: ${{ secrets.T3_ALERT_WEBHOOK }}
+          JOB_STATUS: ${{ job.status }}
+          STEPS: ${{ toJSON(steps) }}
+          REBASE_OUTCOME: ${{ steps.rebase.outcome }}
+          TOKEN_OUTCOME: ${{ steps.token.outcome }}
+        run: |
+          git rebase --abort 2> /dev/null || true
+          state="$RUNNER_TEMP/rebase"
+          start="$(cat "$state/start" 2> /dev/null || echo "$GITHUB_SHA")"
+          tag="$(cat "$state/tag" 2> /dev/null || true)"
+          result="$(cat "$state/result" 2> /dev/null || true)"
+          if [[ "$JOB_STATUS" == cancelled ]]; then
+            stage=cancelled
+          elif [[ "$REBASE_OUTCOME" != success && "$REBASE_OUTCOME" != skipped && "$REBASE_OUTCOME" != "" ]]; then
+            stage="$(cat "$state/stage" 2> /dev/null || echo setup)"
+          elif [[ "$TOKEN_OUTCOME" == failure ]]; then
+            stage=token
+          else
+            stage=setup
+          fi
+          outcomes="$(jq -r 'to_entries | map("\(.key):\(.value.outcome)") | join(",")' <<< "$STEPS")"
+          echo "state=FAILED($stage) tag=$tag start=$start result=$result steps=$outcomes" |
+            tee -a "$GITHUB_STEP_SUMMARY"
+
+          export T3_FAILURE_STAGE="$stage" T3_FAILURE_COMMIT="$start" T3_FAILURE_RELEASE_TAG="$tag"
+          report="$RUNNER_TEMP/report-failure.ts"
+          if { git show "$start:scripts/self-hosted/report-failure.ts" > "$report" ||
+            cp scripts/self-hosted/report-failure.ts "$report"; } && node "$report" sync; then
+            exit 0
+          fi
+          echo "The report script did not report; posting the payload with curl."
+          payload="$(jq -nc --arg stage "$stage" --arg commit "$start" --arg tag "$tag" '{
+            kind: "sync", stage: $stage, branch: env.GITHUB_REF_NAME, commit: $commit, release_tag: $tag,
+            run_id: env.GITHUB_RUN_ID,
+            run_url: "\(env.GITHUB_SERVER_URL)/\(env.GITHUB_REPOSITORY)/actions/runs/\(env.GITHUB_RUN_ID)"}')"
+          curl -fsS -X POST -H "Content-Type: application/json" -d "$payload" "$T3_REPAIR_WEBHOOK" ||
+            curl -fsS -X POST -H "Content-Type: application/json" "$T3_ALERT_WEBHOOK" -d "$(jq -nc --arg stage "$stage" '{
+              source: "t3code-fork", severity: "error", title: "Fork sync failed at \($stage)",
+              detail: "The report script failed too.",
+              url: "\(env.GITHUB_SERVER_URL)/\(env.GITHUB_REPOSITORY)/actions/runs/\(env.GITHUB_RUN_ID)"}')"

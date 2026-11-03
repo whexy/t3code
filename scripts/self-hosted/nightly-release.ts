@@ -2,12 +2,19 @@ import * as NodeURL from "node:url";
 
 const NIGHTLY_TAG = /^v\d+\.\d+\.\d+-nightly\.\d{8}\.\d+$/;
 
-export async function resolveNightlyRelease(fetchReleases = fetch) {
+// Shared CI runners exhaust GitHub's anonymous rate limit, so pass a token there.
+export async function resolveNightlyRelease(
+  fetchReleases = fetch,
+  token = process.env.GITHUB_TOKEN,
+) {
   // GitHub's latest endpoint excludes prereleases, so pick from the recent list.
   const response = await fetchReleases(
     "https://api.github.com/repos/pingdotgg/t3code/releases?per_page=30",
     {
-      headers: { Accept: "application/vnd.github+json" },
+      headers: {
+        Accept: "application/vnd.github+json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
       signal: AbortSignal.timeout(30_000),
     },
   );
