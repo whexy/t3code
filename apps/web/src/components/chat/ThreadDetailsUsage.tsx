@@ -1,9 +1,15 @@
 import type {
+  EnvironmentId,
   ProviderInstanceId,
   ServerProvider,
   ServerProviderUsageWindow,
+  ThreadId,
+  ThreadModelUsage,
   UsageLimitSourceSnapshots,
 } from "@t3tools/contracts";
+import { useAtomValue } from "@effect/atom-react";
+import { formatModelSlugName } from "@t3tools/shared/model";
+import { formatCount, formatTokens, formatUsd } from "@t3tools/shared/usageFormat";
 import {
   collectProviderUsageLimits,
   formatDuration,
@@ -12,17 +18,21 @@ import {
   paceOf,
   remainingPercent,
 } from "@t3tools/shared/usageLimits";
-import type { ReactNode } from "react";
+import { Fragment, type ReactNode, useEffect, useRef } from "react";
 
 import { usePrimarySettings } from "../../hooks/useSettings";
 import { useNowMinute } from "../../hooks/useNowMinute";
 import type { ContextWindowSnapshot } from "@t3tools/client-runtime/state/context-window";
 import { formatContextWindowTokens } from "../../lib/contextWindow";
 import { cn } from "../../lib/utils";
+import { useEnvironmentQuery } from "../../state/query";
+import { serverEnvironment } from "../../state/server";
 import { formatUpcomingTimestamp } from "../../timestampFormat";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { formatContextWindowCompactionMessage } from "./compaction.logic";
+import { getDisplayModelName } from "./providerIconUtils";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
+import { type ThreadUsageLine, type ThreadUsageView, threadUsageView } from "./threadUsageLines";
 
 const PACE_LABEL: Record<LimitPace, string> = {
   ahead: "Ahead of pace",
@@ -35,6 +45,8 @@ export interface ThreadDetailsUsageInput {
   readonly providers: readonly ServerProvider[];
   readonly sources: UsageLimitSourceSnapshots;
   readonly contextWindow: ContextWindowSnapshot | null;
+  /** Changes when one of the thread's turns finishes, so the session usage refetches. */
+  readonly usageRevision: string;
 }
 
 type UsageTone = "error" | "warning" | null;
@@ -44,7 +56,7 @@ export function ThreadDetailsUsage({
   providerInstanceId,
   providers,
   sources,
-}: Omit<ThreadDetailsUsageInput, "contextWindow">) {
+}: Pick<ThreadDetailsUsageInput, "providerInstanceId" | "providers" | "sources">) {
   const nowMinute = useNowMinute();
   const now = Date.parse(`${nowMinute}:00Z`);
   const report =
@@ -135,6 +147,252 @@ export function ThreadDetailsContext({ usage }: { readonly usage: ContextWindowS
         />
       </div>
     </ThreadDetailsSection>
+  );
+}
+
+/** What this thread spent, per model when it ran on several. Hidden until the server reports some. */
+export function ThreadDetailsSessionUsage({
+  environmentId,
+  threadId,
+  revision,
+  providers,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId;
+  readonly revision: string;
+  readonly providers: readonly ServerProvider[];
+}) {
+  const supported =
+    useAtomValue(serverEnvironment.configValueAtom(environmentId))?.environment.capabilities
+      .threadUsage === true;
+  const query = useEnvironmentQuery(
+    supported ? serverEnvironment.threadUsage({ environmentId, input: { threadId } }) : null,
+  );
+  const { refresh } = query;
+  const refreshedRevision = useRef(revision);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- refetches server-priced usage once per finished turn
+  useEffect(() => {
+    if (!supported || refreshedRevision.current === revision) return;
+    refreshedRevision.current = revision;
+    refresh();
+  }, [refresh, revision, supported]);
+
+  const view = threadUsageView({ supported, usage: query.data });
+  if (view === null) return null;
+  return (
+    <ThreadDetailsSection
+      headingId="thread-details-session-usage-heading"
+      title="Session usage"
+      showHeading={false}
+    >
+      <div
+        className={cn(
+          "grid gap-x-3 text-xs",
+          view.pricing === "unavailable"
+            ? "grid-cols-[minmax(0,1fr)_auto]"
+            : "grid-cols-[minmax(0,1fr)_auto_auto]",
+        )}
+      >
+        {view.lines.map((line) => (
+          <SessionUsageRow
+            key={line.key}
+            line={line}
+            view={view}
+            label={
+              line.kind === "total"
+                ? "Total"
+                : line.model === null
+                  ? "Unknown model"
+                  : modelDisplayName(line.model, providers)
+            }
+          />
+        ))}
+      </div>
+    </ThreadDetailsSection>
+  );
+}
+
+function modelDisplayName(model: string, providers: readonly ServerProvider[]): string {
+  for (const provider of providers) {
+    const option = provider.models.find(
+      (candidate) => candidate.slug === model || candidate.aliases?.includes(model) === true,
+    );
+    if (option) return getDisplayModelName(option);
+  }
+  // Routed ids such as `cliproxyapi/deepseek-v4.1-flash` carry a gateway prefix the name does not need.
+  return formatModelSlugName(model.slice(model.lastIndexOf("/") + 1));
+}
+
+/** The line that answers "what did this thread cost": the only line, or the total. */
+function isHeadline(line: ThreadUsageLine, view: ThreadUsageView): boolean {
+  return line.kind === "total" || view.lines.length === 1;
+}
+
+function formatCost(costUsd: number): string {
+  return costUsd > 0 && costUsd < 0.005 ? "<$0.01" : formatUsd(costUsd);
+}
+
+/** A figure plus whether it is only a floor, shown as a trailing + outside the column. */
+interface Figure {
+  readonly text: string;
+  readonly floor: boolean;
+}
+
+/** Null when prices are unavailable and the cost column is dropped. */
+function costFigure(line: ThreadUsageLine, view: ThreadUsageView): Figure | null {
+  if (view.pricing === "unavailable") return null;
+  if (!line.priced && line.costUsd === 0) return { text: "Unpriced", floor: false };
+  const text = formatCost(line.costUsd);
+  // "<$0.01" already says the amount is inexact.
+  const floor =
+    !text.startsWith("<") && (!line.priced || (isHeadline(line, view) && view.incompleteTurns > 0));
+  return { text, floor };
+}
+
+function tokensFigure(line: ThreadUsageLine, view: ThreadUsageView): Figure {
+  return {
+    text: formatTokens(line.tokens),
+    floor: isHeadline(line, view) && view.incompleteTurns > 0,
+  };
+}
+
+function plural(count: number, noun: string): string {
+  return `${formatCount(count)} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+/** Exact counts per category, zero categories omitted. Reasoning is part of output. */
+function usageBreakdown(
+  usage: ThreadModelUsage,
+): readonly { readonly label: string; readonly count: number; readonly nested?: true }[] {
+  const { totals, otherUsage } = usage;
+  return [
+    { label: "Uncached input", count: totals.uncachedInputTokens },
+    { label: "Cache read", count: totals.cachedInputTokens },
+    { label: "Cache write", count: totals.cacheCreationTokens },
+    { label: "Output", count: totals.outputTokens },
+    { label: "Reasoning", count: totals.reasoningTokens, nested: true as const },
+    {
+      label: "Subagents and compaction",
+      count: otherUsage === null ? 0 : otherUsage.inputTokens + otherUsage.outputTokens,
+    },
+  ].filter((row) => row.count > 0);
+}
+
+function usageNotes(line: ThreadUsageLine, view: ThreadUsageView): readonly string[] {
+  const notes: string[] = [];
+  if (line.usage?.otherUsage != null && line.priced && view.pricing !== "unavailable")
+    notes.push("Subagent and compaction cost is estimated");
+  if (view.pricing === "unavailable") notes.push("Model prices are unavailable");
+  else if (!line.priced)
+    notes.push(
+      line.kind === "model"
+        ? "No price for this model"
+        : line.costUsd > 0
+          ? "Cost includes priced models only"
+          : "No model has a price",
+    );
+  if (isHeadline(line, view) && view.incompleteTurns > 0)
+    notes.push(`${plural(view.incompleteTurns, "turn")} reported partial usage`);
+  return notes;
+}
+
+/** The + hangs outside the right edge so digits stay aligned with lines that have none. */
+function FigureText({ figure }: { readonly figure: Figure }) {
+  return (
+    <span className="relative">
+      {figure.text}
+      {figure.floor ? <span className="absolute left-full">+</span> : null}
+    </span>
+  );
+}
+
+function SessionUsageRow({
+  line,
+  view,
+  label,
+}: {
+  readonly line: ThreadUsageLine;
+  readonly view: ThreadUsageView;
+  readonly label: string;
+}) {
+  const headline = isHeadline(line, view);
+  const cost = costFigure(line, view);
+  const tokens = tokensFigure(line, view);
+  const priced = cost !== null && cost.text !== "Unpriced";
+  const tokensLabel = `${formatCount(line.tokens)}${tokens.floor ? "+" : ""} tokens`;
+  const costLabel =
+    cost === null ? "prices unavailable" : `${cost.text}${cost.floor ? " or more" : ""}`;
+  const breakdown = line.usage ? usageBreakdown(line.usage) : [];
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <div
+            tabIndex={0}
+            aria-label={`${label}: ${tokensLabel}, ${costLabel}`}
+            className="col-span-full grid h-6 cursor-default grid-cols-subgrid items-center rounded-lg px-2.5 outline-none hover:bg-black/[0.035] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring data-popup-open:bg-black/[0.035] dark:hover:bg-white/[0.08] dark:data-popup-open:bg-white/[0.08]"
+          />
+        }
+      >
+        <span
+          className={cn(
+            "min-w-0 truncate",
+            line.kind === "total" ? "font-medium text-foreground/80" : "text-muted-foreground",
+          )}
+        >
+          {label}
+        </span>
+        <span
+          className={cn(
+            "text-end tabular-nums whitespace-nowrap",
+            headline && !priced ? "font-medium text-foreground/80" : "text-muted-foreground",
+          )}
+        >
+          <FigureText figure={tokens} />
+        </span>
+        {cost === null ? null : (
+          <span
+            className={cn(
+              "text-end tabular-nums whitespace-nowrap",
+              headline && priced ? "font-medium text-foreground/80" : "text-muted-foreground",
+            )}
+          >
+            <FigureText figure={cost} />
+          </span>
+        )}
+      </TooltipTrigger>
+      {/* Rows sit 8px inside the card; clear its edge instead of overlapping it. */}
+      <TooltipPopup side="left" sideOffset={16}>
+        <div className="flex flex-col gap-0.5">
+          <span className="text-foreground">
+            {plural(line.tokens, "token")}
+            {priced ? ` · ${cost.text}${cost.floor ? "+" : ""} at API prices` : ""}
+          </span>
+          {breakdown.length > 0 ? (
+            <div className="grid grid-cols-[auto_auto] gap-x-4">
+              {breakdown.map((row) => (
+                <Fragment key={row.label}>
+                  <span className={cn("text-muted-foreground", row.nested && "ps-2")}>
+                    {row.label}
+                  </span>
+                  <span className="text-end tabular-nums text-foreground/80">
+                    {formatCount(row.count)}
+                  </span>
+                </Fragment>
+              ))}
+            </div>
+          ) : null}
+          {line.usage ? (
+            <span className="text-muted-foreground">{plural(line.usage.turns, "turn")}</span>
+          ) : null}
+          {usageNotes(line, view).map((text) => (
+            <span key={text} className="text-muted-foreground">
+              {text}
+            </span>
+          ))}
+        </div>
+      </TooltipPopup>
+    </Tooltip>
   );
 }
 
