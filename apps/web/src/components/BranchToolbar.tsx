@@ -97,6 +97,8 @@ interface BranchToolbarProps {
   envLocked: boolean;
   onCheckoutPullRequestRequest?: (reference: string) => void;
   onComposerFocusRequest?: () => void;
+  /** Shown at the start of the composer strip, such as the new thread's project. */
+  leading?: ReactNode;
   /** Shown at the end of the composer strip, such as the new thread's permissions. */
   trailing?: ReactNode;
   availableEnvironments?: readonly EnvironmentOption[];
@@ -617,6 +619,7 @@ export const BranchToolbar = memo(function BranchToolbar({
   onComposerFocusRequest,
   availableEnvironments,
   onEnvironmentChange,
+  leading,
   trailing,
 }: BranchToolbarProps) {
   const branchSelectorRef = useRef<BranchToolbarBranchSelectorHandle>(null);
@@ -742,6 +745,18 @@ export const BranchToolbar = memo(function BranchToolbar({
       data-compact={labelsOverflow ? "" : undefined}
       className={cn("gap-1 text-xs font-normal text-foreground/70 dark:text-muted-foreground")}
     >
+      {leading ? (
+        <>
+          {leading}
+          {showGitControls || showEnvironmentIndicator ? (
+            <Separator
+              orientation="vertical"
+              className="mx-0.5 h-3.5!"
+              data-composer-context-control
+            />
+          ) : null}
+        </>
+      ) : null}
       {showGitControls ? (
         <div className="contents @xl/composer-surface:hidden">
           <RunContextSelector
