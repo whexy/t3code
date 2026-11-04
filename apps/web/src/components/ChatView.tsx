@@ -279,7 +279,8 @@ import {
 } from "../state/entities";
 import { useEnvironmentShellHasSnapshot } from "../state/shell";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
-import { DraftHeroHeadline } from "./chat/DraftHeroHeadline";
+import { DraftTriageHeadline as DraftHeroHeadline } from "./chat/DraftTriageHeadline";
+import { DraftProjectPicker } from "./chat/DraftProjectPicker";
 import { ExpandedImageDialogHost, openExpandedImagePreview } from "./chat/ExpandedImageDialog";
 import {
   BranchRestoreConfirmHost,
@@ -1797,6 +1798,14 @@ export default function ChatView(props: ChatViewProps) {
       isGitRepo,
       showEnvironmentIndicator: showComposerEnvironmentIndicator,
     });
+  const showDraftProjectPicker = isDraftHeroState && !embedded;
+  const draftProjectPicker = showDraftProjectPicker ? (
+    <DraftProjectPicker
+      draftId={draftId}
+      activeProjectRef={activeProjectRef}
+      activeProjectTitle={activeProject?.title ?? null}
+    />
+  ) : null;
   const terminalShortcutLabelOptions = {
     context: {
       terminalFocus: true,
@@ -3591,7 +3600,9 @@ export default function ChatView(props: ChatViewProps) {
                   >
                     <ChildThreadApprovals threadRef={activeThreadRef} />
                     <div className="relative">
-                      <ComposerSurface.Shell contextRow={showComposerContextStrip}>
+                      <ComposerSurface.Shell
+                        contextRow={showComposerContextStrip || showDraftProjectPicker}
+                      >
                         <ComposerSurface.Host
                           inert={queuedRunEdit.isSaving}
                           aria-busy={queuedRunEdit.isSaving}
@@ -3787,9 +3798,10 @@ export default function ChatView(props: ChatViewProps) {
                             data-terminal-open={terminalUiState.terminalOpen ? "true" : undefined}
                             className="relative z-0"
                           >
-                            {showComposerContextStrip && (
+                            {showComposerContextStrip ? (
                               <div className="pointer-events-auto">
                                 <BranchToolbar
+                                  leading={showDraftProjectPicker ? draftProjectPicker : undefined}
                                   forceNewWorktree={multipleModelSelections !== null}
                                   ref={branchToolbarRef}
                                   environmentId={activeThread.environmentId}
@@ -3844,7 +3856,11 @@ export default function ChatView(props: ChatViewProps) {
                                       })}
                                 />
                               </div>
-                            )}
+                            ) : showDraftProjectPicker ? (
+                              <ComposerSurface.ContextStrip className="pointer-events-auto gap-1">
+                                {draftProjectPicker}
+                              </ComposerSurface.ContextStrip>
+                            ) : null}
                           </div>
                         </div>
                       </ComposerSurface.Shell>
