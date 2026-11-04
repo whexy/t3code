@@ -3551,9 +3551,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     />
                   ) : showProviderUnavailable ? (
                     gt("Enable a provider in Settings")
-                  ) : (
-                    gt("Ask anything...")
-                  )}
+                  ) : null}
                 </button>
                 {collapsedComposerImagePreviews}
                 <CollapsedComposerStopAction
@@ -3739,10 +3737,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                                   "Type your own answer, or leave this blank to use the selected option",
                                 )
                           : projectSelectionRequired
-                            ? gt("Choose a project above to start a thread")
+                            ? gt("Choose a project below to start a thread")
                             : showProviderUnavailable
                               ? gt("Enable a provider in Settings to send a message")
-                              : (offeredPromptSuggestion ?? m(DEFAULT_COMPOSER_PLACEHOLDER))
+                              : (offeredPromptSuggestion ?? DEFAULT_COMPOSER_PLACEHOLDER)
                     }
                     placeholderSuffix={
                       offeredPromptSuggestion !== null ? (
