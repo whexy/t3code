@@ -15,8 +15,10 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 import { mergeUsage } from "@t3tools/shared/usageMerge";
 import {
   EnvironmentId,
+  type OrchestrationV2ProviderTurn,
   ProviderDriverKind,
   ProviderInstanceId,
+  ThreadId,
   UsageDay,
   type UsageSource,
   type UsageSummary,
@@ -50,6 +52,7 @@ import * as AntigravityUsage from "../provider/Drivers/AntigravityUsage.ts";
 import * as ProviderHostLive from "../provider/ProviderHostLive.ts";
 import { totalTokens, type UsageRecord } from "@t3tools/provider-core/server/usage";
 import * as UsageService from "./UsageService.ts";
+import * as ProjectionStoreV2 from "../orchestration-v2/ProjectionStore.ts";
 import * as MuseSdk from "../../../../packages/provider-muse/src/server/sdk.ts";
 import { MuseUsageHome } from "@t3tools/provider-muse/server";
 import { makeScanCacheWriter, SCAN_CACHE_FILE_NAME } from "./usageScanCache.ts";
@@ -193,6 +196,7 @@ const layerService = (input: {
   readonly platform?: NodeJS.Platform;
   readonly hostname?: string;
   readonly secretStore?: Partial<ServerSecretStore.ServerSecretStore["Service"]>;
+  readonly providerTurns?: ReadonlyArray<Pick<OrchestrationV2ProviderTurn, "turnTokenUsage">>;
 }) =>
   layerCursorUsageAccounts(CursorAccountReader.layer).pipe(
     Layer.provideMerge(AntigravityUsage.layer),
@@ -200,6 +204,12 @@ const layerService = (input: {
     Layer.provideMerge(ProviderHostLive.layer),
     Layer.provideMerge(CodexUsageHistory.layer.pipe(Layer.provideMerge(Sqlite.layerMemory))),
     Layer.provideMerge(Layer.mock(BackgroundPolicy.BackgroundPolicy)({})),
+    Layer.provideMerge(
+      Layer.mock(ProjectionStoreV2.ProjectionStoreV2)({
+        getThreadRecords: () =>
+          Effect.succeed({ providerTurns: input.providerTurns ?? [] } as never),
+      }),
+    ),
     Layer.provideMerge(
       Layer.mock(ServerSecretStore.ServerSecretStore)({
         get: () => Effect.succeedNone,
@@ -2441,6 +2451,165 @@ describe("UsageService", () => {
           layerService({ prefix: "usage-service-price-overrides-test", home, settings }),
         ),
       );
+    }).pipe(Effect.scoped),
+  );
+
+  it.live("prices a thread's turns per model across a Claude to Codex switch", () =>
+    Effect.gen(function* () {
+      const { settings, home } = yield* setup;
+      let ratesFetches = 0;
+      const turn = (
+        model: string,
+        usage: { input: number; cached?: number; creation?: number; output: number },
+      ): Pick<OrchestrationV2ProviderTurn, "turnTokenUsage"> => ({
+        turnTokenUsage: {
+          usageStatus: "complete",
+          usageScope: "main_agent",
+          hasSubagents: false,
+          models: [model],
+          inputTokens: usage.input,
+          outputTokens: usage.output,
+          ...(usage.cached === undefined ? {} : { cachedInputTokens: usage.cached }),
+          ...(usage.creation === undefined ? {} : { cacheCreationTokens: usage.creation }),
+        },
+      });
+
+      const result = yield* Effect.gen(function* () {
+        const service = yield* UsageService.make;
+        return yield* service.readThreadUsage(ThreadId.make("thread-switched"));
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(
+          layerService({
+            prefix: "usage-service-thread-usage-test",
+            home,
+            settings: {
+              ...settings,
+              usageModelAliases: { "gpt-beta-2026": "gpt-beta" },
+              usagePriceOverrides: {
+                "custom-x": { inputCostPerMillionTokens: 4, outputCostPerMillionTokens: 16 },
+              },
+            },
+            onRatesFetch: () => {
+              ratesFetches += 1;
+            },
+            ratesDocument: {
+              "claude-alpha": {
+                input_cost_per_token: 0.000001,
+                output_cost_per_token: 0.00001,
+                cache_read_input_token_cost: 0.0000001,
+                cache_creation_input_token_cost: 0.00000125,
+              },
+              "gpt-beta": {
+                input_cost_per_token: 0.000002,
+                output_cost_per_token: 0.00002,
+                cache_read_input_token_cost: 0.0000002,
+              },
+            },
+            providerTurns: [
+              turn("claude-alpha", { input: 1000, cached: 600, creation: 100, output: 50 }),
+              turn("claude-alpha", { input: 200, output: 10 }),
+              { turnTokenUsage: undefined },
+              turn("gpt-beta-2026", { input: 500, cached: 300, output: 40 }),
+              turn("custom-x", { input: 100, output: 10 }),
+            ],
+          }),
+        ),
+      );
+
+      assert.isNotNull(result);
+      assert.strictEqual(ratesFetches, 1);
+      assert.deepStrictEqual(
+        result!.models.map(({ model, totals, otherUsage, priced, turns, costUsd }) => ({
+          model,
+          totals,
+          otherUsage,
+          priced,
+          turns,
+          costMicros: Math.round(costUsd * 1e6),
+        })),
+        [
+          {
+            model: "claude-alpha",
+            totals: {
+              uncachedInputTokens: 500,
+              cachedInputTokens: 600,
+              cacheCreationTokens: 100,
+              outputTokens: 60,
+              reasoningTokens: 0,
+            },
+            otherUsage: null,
+            priced: true,
+            turns: 2,
+            costMicros: 1285,
+          },
+          {
+            // The alias folds the dated id into the priced model.
+            model: "gpt-beta",
+            totals: {
+              uncachedInputTokens: 200,
+              cachedInputTokens: 300,
+              cacheCreationTokens: 0,
+              outputTokens: 40,
+              reasoningTokens: 0,
+            },
+            otherUsage: null,
+            priced: true,
+            turns: 1,
+            costMicros: 1260,
+          },
+          {
+            // Priced only by the custom price.
+            model: "custom-x",
+            totals: {
+              uncachedInputTokens: 100,
+              cachedInputTokens: 0,
+              cacheCreationTokens: 0,
+              outputTokens: 10,
+              reasoningTokens: 0,
+            },
+            otherUsage: null,
+            priced: true,
+            turns: 1,
+            costMicros: 560,
+          },
+        ],
+      );
+      assert.strictEqual(result!.totalTokens, 1260 + 540 + 110);
+      assert.closeTo(result!.costUsd, 0.003105, 1e-12);
+      assert.strictEqual(result!.incompleteTurns, 0);
+      assert.strictEqual(result!.pricing, "fresh");
+    }).pipe(Effect.scoped),
+  );
+
+  it.live("returns no thread usage, and fetches no rates, when no turn reported usage", () =>
+    Effect.gen(function* () {
+      const { settings, home } = yield* setup;
+      let ratesFetches = 0;
+      const read = (
+        providerTurns: ReadonlyArray<Pick<OrchestrationV2ProviderTurn, "turnTokenUsage">>,
+      ) =>
+        Effect.gen(function* () {
+          const service = yield* UsageService.make;
+          return yield* service.readThreadUsage(ThreadId.make("thread-unreported"));
+        }).pipe(
+          Effect.scoped,
+          Effect.provide(
+            layerService({
+              prefix: "usage-service-thread-usage-empty-test",
+              home,
+              settings,
+              onRatesFetch: () => {
+                ratesFetches += 1;
+              },
+              providerTurns,
+            }),
+          ),
+        );
+
+      assert.isNull(yield* read([]));
+      assert.isNull(yield* read([{ turnTokenUsage: undefined }, { turnTokenUsage: undefined }]));
+      assert.strictEqual(ratesFetches, 0);
     }).pipe(Effect.scoped),
   );
 
