@@ -1365,6 +1365,13 @@ export function createServerEnvironmentAtoms<R, E>(
           ),
         ),
     }),
+    // Revalidates on mount, since turns can finish while the row is closed; the row refreshes
+    // it again as turns finish. No timer.
+    threadUsage: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:thread-usage",
+      tag: WS_METHODS.serverGetThreadUsage,
+      staleTimeMs: 0,
+    }),
     resourceTelemetry: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:resource-telemetry",
       tag: WS_METHODS.subscribeResourceTelemetry,
