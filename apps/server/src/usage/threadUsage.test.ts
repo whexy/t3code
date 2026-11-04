@@ -1,4 +1,8 @@
-import type { OrchestrationV2ProviderTurn, ThreadModelUsage } from "@t3tools/contracts";
+import {
+  ProviderDriverKind,
+  type OrchestrationV2ProviderTurn,
+  type ThreadModelUsage,
+} from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import { summarizeThreadUsage, type ThreadUsagePricing } from "./threadUsage.ts";
@@ -20,7 +24,12 @@ const PRICING: ThreadUsagePricing = {
   status: "fresh",
 };
 
-const usage = (fields: Partial<TurnTokenUsage>): { turnTokenUsage: TurnTokenUsage } => ({
+const usage = (fields: Partial<TurnTokenUsage>, driver = "claudeAgent") => ({
+  nativeTurnRef: {
+    driver: ProviderDriverKind.make(driver),
+    nativeId: null,
+    strength: "none" as const,
+  },
   turnTokenUsage: {
     usageStatus: "complete",
     usageScope: "main_agent",
@@ -158,6 +167,74 @@ describe("summarizeThreadUsage", () => {
       },
       totalTokens: 410,
       incompleteTurns: 2,
+    },
+    {
+      name: "prices an OpenCode turn by the model ID after its provider ID",
+      turns: [
+        usage({ models: ["cliproxyapi/model-a"], inputTokens: 100, outputTokens: 10 }, "opencode"),
+      ],
+      model: "model-a",
+      expected: {
+        totals: {
+          uncachedInputTokens: 100,
+          cachedInputTokens: 0,
+          cacheCreationTokens: 0,
+          outputTokens: 10,
+          reasoningTokens: 0,
+        },
+        otherUsage: null,
+        priced: true,
+        turns: 1,
+        // 100 * 1e-6 + 10 * 1e-5
+        costMicros: 200,
+      },
+      totalTokens: 110,
+      incompleteTurns: 0,
+    },
+    {
+      name: "keeps a slash inside an OpenCode model ID",
+      turns: [
+        usage(
+          { models: ["openrouter/vendor/model-a"], inputTokens: 100, outputTokens: 10 },
+          "opencode",
+        ),
+      ],
+      model: "vendor/model-a",
+      expected: {
+        totals: {
+          uncachedInputTokens: 100,
+          cachedInputTokens: 0,
+          cacheCreationTokens: 0,
+          outputTokens: 10,
+          reasoningTokens: 0,
+        },
+        otherUsage: null,
+        priced: false,
+        turns: 1,
+        costMicros: 0,
+      },
+      totalTokens: 110,
+      incompleteTurns: 0,
+    },
+    {
+      name: "keeps another provider's model ID as reported",
+      turns: [usage({ models: ["cliproxyapi/model-a"], inputTokens: 100, outputTokens: 10 })],
+      model: "cliproxyapi/model-a",
+      expected: {
+        totals: {
+          uncachedInputTokens: 100,
+          cachedInputTokens: 0,
+          cacheCreationTokens: 0,
+          outputTokens: 10,
+          reasoningTokens: 0,
+        },
+        otherUsage: null,
+        priced: false,
+        turns: 1,
+        costMicros: 0,
+      },
+      totalTokens: 110,
+      incompleteTurns: 0,
     },
   ])("$name", ({ turns, model, expected, totalTokens, incompleteTurns }) => {
     const result = summarizeThreadUsage(turns, PRICING);
