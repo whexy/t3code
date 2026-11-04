@@ -1,3 +1,5 @@
+import { Toggle } from "@base-ui/react/toggle";
+import { ToggleGroup } from "@base-ui/react/toggle-group";
 import { LockIcon } from "lucide-react";
 import { type ReactNode, useState } from "react";
 
@@ -18,10 +20,9 @@ import {
 } from "~/components/ui/select";
 import { Switch } from "~/components/ui/switch";
 import { Textarea } from "~/components/ui/textarea";
-import { Toggle, ToggleGroup } from "~/components/ui/toggle-group";
 
 import type { ControlOptionValue, SettingControl } from "../policy/catalog.ts";
-import { jsonEqual } from "../policy/json.ts";
+import { isRecord, jsonEqual } from "../policy/json.ts";
 import type { Problem } from "../policy/validate.ts";
 
 export type SettingState = "unset" | "default" | "locked";
@@ -52,6 +53,7 @@ export function StateToggle<State extends string>({
 }) {
   return (
     <ToggleGroup
+      className="state-toggle"
       aria-label={label}
       value={[value]}
       onValueChange={(next) => {
@@ -60,7 +62,7 @@ export function StateToggle<State extends string>({
       }}
     >
       {states.map((state) => (
-        <Toggle key={state} value={state}>
+        <Toggle key={state} value={state} className="state-toggle-item">
           {labels?.[state] ?? STATE_LABELS[state as SettingState] ?? state}
         </Toggle>
       ))}
@@ -236,7 +238,42 @@ export function ValueControl({
   }
 }
 
-const pretty = (value: unknown) => (value === undefined ? "" : JSON.stringify(value, null, 2));
+const INLINE_WIDTH = 72;
+
+function inline(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(inline).join(", ")}]`;
+  const fields = Object.entries(value).map(
+    ([key, item]) => `${JSON.stringify(key)}: ${inline(item)}`,
+  );
+  return `{${fields.join(", ")}}`;
+}
+
+/** Indented JSON that keeps an object or array on one line while it fits, so short values stay short. */
+function pretty(value: unknown, indent = ""): string {
+  if (value === undefined) return "";
+  const flat = inline(value);
+  const empty = isRecord(value)
+    ? Object.keys(value).length === 0
+    : Array.isArray(value) && value.length === 0;
+  // The top level always opens, so every value field has the same rhythm.
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    empty ||
+    (indent !== "" && indent.length + flat.length <= INLINE_WIDTH)
+  ) {
+    return flat;
+  }
+  const inner = `${indent}  `;
+  if (Array.isArray(value)) {
+    return `[\n${value.map((item) => inner + pretty(item, inner)).join(",\n")}\n${indent}]`;
+  }
+  const lines = Object.entries(value).map(
+    ([key, item]) => `${inner}${JSON.stringify(key)}: ${pretty(item, inner)}`,
+  );
+  return `{\n${lines.join(",\n")}\n${indent}}`;
+}
 
 /**
  * A JSON value edited as text. Text that does not parse stays as typed, with the parse error,
@@ -257,13 +294,13 @@ export function JsonEditor({
   if (!jsonEqual(draft.source, value)) {
     setDraft({ text: pretty(value), source: value, error: "" });
   }
-  const lines = Math.min(16, Math.max(2, draft.text.split("\n").length));
+  const lines = Math.min(16, Math.max(1, draft.text.split("\n").length));
   return (
     <div className="space-y-1">
-      <Textarea
+      <textarea
         aria-label={label}
         aria-invalid={draft.error !== "" || undefined}
-        className="font-mono"
+        className="code-field"
         rows={lines}
         spellCheck={false}
         readOnly={readOnly}
