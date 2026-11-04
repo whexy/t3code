@@ -168,7 +168,7 @@ function ProviderPin({
   return (
     <div
       id={limitAnchor("providers.instances", driverId)}
-      className="scroll-mt-20 space-y-3 rounded-xl border border-black/5 p-3"
+      className="scroll-mt-10 space-y-3 rounded-xl border border-black/5 p-3"
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="text-sm font-medium">
@@ -286,7 +286,6 @@ export function LimitsSection({
   const instances = isRecord(providers.instances) ? providers.instances : {};
   const updates = isRecord(limits.updates) ? limits.updates : undefined;
   const invalid = (key: string) => problemsFor(key).some((problem) => problem.severity === "error");
-  const runtimeOptions = [{ value: null, label: "Not set" }, ...RUNTIME_MODES];
   const unknownKeys = Object.keys(limits).filter(
     (key) =>
       ![
@@ -312,27 +311,49 @@ export function LimitsSection({
         description="Covers threads that users, agents, and scheduled tasks start. With it set, you own each provider's launch settings: binary path, launch arguments, config home, and environment variables."
         status={<code className="font-mono text-xs text-ink-muted">limits.maxRuntimeMode</code>}
         control={
-          <Select
-            value={limits.maxRuntimeMode === undefined ? "unset" : String(limits.maxRuntimeMode)}
-            onValueChange={(mode) => {
-              if (mode !== null) setLimit(["maxRuntimeMode"], mode === "unset" ? undefined : mode);
-            }}
-          >
-            <SelectTrigger size="sm" aria-label="Broadest permission mode">
-              <SelectValue>
-                {(mode: string) =>
-                  runtimeOptions.find((option) => (option.value ?? "unset") === mode)?.label ?? mode
-                }
-              </SelectValue>
-            </SelectTrigger>
-            <SelectPopup align="end" alignItemWithTrigger={false}>
-              {runtimeOptions.map((option) => (
-                <SelectItem key={option.value ?? "unset"} value={option.value ?? "unset"}>
-                  {option.label}
-                </SelectItem>
-              ))}
-            </SelectPopup>
-          </Select>
+          <>
+            <StateToggle
+              label="Broadest permission mode policy state"
+              value={limits.maxRuntimeMode === undefined ? "unset" : "set"}
+              states={["unset", "set"] as const}
+              labels={{ unset: "Not set", set: "Capped" }}
+              onChange={(next) =>
+                setLimit(
+                  ["maxRuntimeMode"],
+                  next === "unset" ? undefined : (RUNTIME_MODES.at(-1)?.value ?? "full-access"),
+                )
+              }
+            />
+            <div
+              inert={limits.maxRuntimeMode === undefined}
+              className={limits.maxRuntimeMode === undefined ? "opacity-70" : undefined}
+            >
+              <Select
+                // "any" only labels the unset state; it is never written.
+                value={limits.maxRuntimeMode === undefined ? "any" : String(limits.maxRuntimeMode)}
+                onValueChange={(mode) => {
+                  if (mode !== null) setLimit(["maxRuntimeMode"], mode);
+                }}
+              >
+                <SelectTrigger size="sm" aria-label="Broadest permission mode">
+                  <SelectValue>
+                    {(mode: string) =>
+                      mode === "any"
+                        ? "Any mode"
+                        : (RUNTIME_MODES.find((option) => option.value === mode)?.label ?? mode)
+                    }
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectPopup align="end" alignItemWithTrigger={false}>
+                  {RUNTIME_MODES.map((option) => (
+                    <SelectItem key={String(option.value)} value={String(option.value)}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectPopup>
+              </Select>
+            </div>
+          </>
         }
       >
         <ProblemList problems={problemsFor("maxRuntimeMode")} />

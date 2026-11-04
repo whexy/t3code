@@ -44,11 +44,14 @@
    `--focus-ring`, resolved on :root, so the override does not reach it. */
 :root {
   --focus-ring: var(--color-highlight);
+  /* Menus and select popups open over the glass sidebar; keep what is behind them out of the way. */
+  --glass-opacity: 96%;
 }
 
 [data-slot="button"],
 [data-slot="select-trigger"],
 [data-slot="select-item"],
+[data-slot="menu-item"],
 [data-slot="number-field-decrement"],
 [data-slot="number-field-increment"] {
   --color-highlight: var(--color-wash);
