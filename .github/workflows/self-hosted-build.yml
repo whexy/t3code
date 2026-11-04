@@ -293,6 +293,51 @@ jobs:
           promote policy-editor "$POLICY_EDITOR"
           echo "images: 1.2.$GITHUB_RUN_NUMBER sha-${GITHUB_SHA::12}" >> "$GITHUB_STEP_SUMMARY"
 
+  # ArgoCD Image Updater is the fallback for these images, not the trigger.
+  # GHCR delivers a digest event for a promoted tag, not always a tag event,
+  # and the updater's 30m poll can still reuse the tag list it read before the
+  # tag existed, so the hub has sat a build behind for up to an hour. This run
+  # already knows the tag it just promoted, so write it into clusters-work
+  # here: one writer, immediately after the images exist.
+  deploy:
+    needs: [gate, promote-images]
+    if: needs.gate.outputs.current == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - id: token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+          owner: whexy
+          repositories: clusters-work
+
+      - uses: actions/checkout@v6
+        with:
+          repository: whexy/clusters-work
+          ref: master
+          token: ${{ steps.token.outputs.token }}
+          sparse-checkout: gitops/apps
+          sparse-checkout-cone-mode: false
+
+      - name: Bump the t3code images
+        env:
+          TAG: 1.2.${{ github.run_number }}
+        run: |
+          git config user.name "whexy-bot[bot]"
+          git config user.email "315421218+whexy-bot[bot]@users.noreply.github.com"
+          for app in t3code-hub t3code-mcp t3code-policy-editor; do
+            sed -i "0,/^\( *\)newTag: .*/s//\1newTag: $TAG/" "gitops/apps/$app/kustomization.yaml"
+          done
+          git diff --stat
+          if git diff --quiet; then
+            echo "clusters-work already at $TAG"
+            exit 0
+          fi
+          git commit -am "build: t3code images $TAG"
+          git push origin master
+
   # Hosts fetch the flake by commit; the tag keeps it fetchable after the next
   # rebase force-pushes the branch.
   promote-pin:
@@ -349,6 +394,7 @@ jobs:
         gate,
         promote-images,
         promote-pin,
+        deploy,
         notify,
       ]
     if: always() && github.event_name != 'pull_request' && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))
