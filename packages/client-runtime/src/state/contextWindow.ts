@@ -42,6 +42,21 @@ export type ContextWindowSnapshot = NullableContextWindowUsage & {
   readonly updatedAt: string;
 };
 
+/** Changes whenever a turn reports its usage, so priced session usage knows to refetch. */
+export function threadUsageRevision(
+  turns: ReadonlyArray<Pick<OrchestrationV2ProviderTurn, "turnTokenUsage" | "completedAt">>,
+): string {
+  let reported = 0;
+  let latest = 0;
+  for (const turn of turns) {
+    if (turn.turnTokenUsage === undefined) continue;
+    reported += 1;
+    if (turn.completedAt !== null)
+      latest = Math.max(latest, DateTime.toEpochMillis(turn.completedAt));
+  }
+  return `${reported}:${latest}`;
+}
+
 /** Newest report by timestamp; snapshots order turns by provider thread. */
 export function latestProviderTurnTokenUsage(
   turns: ReadonlyArray<Pick<OrchestrationV2ProviderTurn, "tokenUsage">>,
