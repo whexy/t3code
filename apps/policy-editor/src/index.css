@@ -4,6 +4,7 @@
 @import "./styles/frost/tokens.css";
 @import "./styles/frost/components.css";
 @import "./styles/web-controls.css";
+@import "./styles/editor.css";
 
 @source "../../web/src/components/ui";
 @source "./";
