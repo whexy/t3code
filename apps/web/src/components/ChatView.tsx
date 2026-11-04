@@ -323,6 +323,7 @@ import {
 import {
   deriveLatestContextWindowSnapshot,
   latestProviderTurnTokenUsage,
+  threadUsageRevision,
 } from "../lib/contextWindow";
 import {
   MOBILE_COMPOSER_VIEW_TRANSITION_NAME,
@@ -3919,6 +3920,7 @@ export default function ChatView(props: ChatViewProps) {
                     providers: providerStatuses,
                     sources: serverConfig?.usageLimitSources ?? EMPTY_USAGE_LIMIT_SOURCES,
                     contextWindow: activeContextWindow,
+                    usageRevision: threadUsageRevision(serverProjection?.providerTurns ?? []),
                   }}
                 />
 
