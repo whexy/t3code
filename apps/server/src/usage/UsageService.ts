@@ -3,6 +3,8 @@ import {
   ProviderInstanceId,
   USAGE_CONTRACT_VERSION,
   type ServerSettings as ServerSettingsValue,
+  type ThreadId,
+  type ThreadUsage,
   type UsageProviderKind,
   type UsageSource,
   type UsagePricing,
@@ -31,6 +33,7 @@ import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
 import { formatMalformedUsageWarning } from "@t3tools/shared/usageFormat";
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { ProjectionStoreV2 } from "../orchestration-v2/ProjectionStore.ts";
 import { BUILT_IN_USAGE_DRIVERS, type BuiltInUsageReadersEnv } from "../provider/builtInDrivers.ts";
 import type { ProviderDriver } from "@t3tools/provider-core/server/driver";
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
@@ -41,6 +44,7 @@ import type {
 } from "@t3tools/provider-core/server/usage";
 import { canonicalModelFilter, resolveModelAliases, UsageAggregator } from "./usageAggregation.ts";
 import { createOverrideRateTable, parseRateTable, type RateTable } from "./usagePricing.ts";
+import { summarizeThreadUsage } from "./threadUsage.ts";
 import {
   listTranscriptFiles,
   readDirectoryVolumeId,
@@ -144,6 +148,9 @@ export class UsageService extends Context.Service<
   {
     readonly readSummary: (input: UsageSummaryInput) => Effect.Effect<UsageSummary, UsageReadError>;
     readonly refreshRates: Effect.Effect<UsagePricing>;
+    readonly readThreadUsage: (
+      threadId: ThreadId,
+    ) => Effect.Effect<ThreadUsage | null, UsageReadError>;
   }
 >()("t3/usage/UsageService") {}
 
@@ -156,6 +163,7 @@ export const make = Effect.gen(function* () {
   const hostEnvironment = yield* HostProcess.Environment;
   const hostname = yield* HostProcess.Hostname;
   const readerContext = yield* Effect.context<BuiltInUsageReadersEnv>();
+  const projectionStore = yield* ProjectionStoreV2;
 
   const fileCache: ScanCache = new Map();
   // Reads from concurrent windows can still hold the original record after it is corrected.
@@ -940,7 +948,31 @@ export const make = Effect.gen(function* () {
     return yield* Deferred.await(deferred);
   });
 
-  return { readSummary, refreshRates, awaitPersisted } as const;
+  const readThreadUsage = Effect.fn("UsageService.readThreadUsage")(function* (threadId: ThreadId) {
+    const { providerTurns } = yield* projectionStore
+      .getThreadRecords(threadId, ["providerTurns"])
+      .pipe(
+        Effect.mapError(
+          (cause) =>
+            new UsageReadError({
+              reason: "scanFailed",
+              detail: "The thread's turns could not be read.",
+              cause,
+            }),
+        ),
+      );
+    if (!providerTurns.some((turn) => turn.turnTokenUsage !== undefined)) return null;
+    const settings = yield* readSettings;
+    yield* ensureRates(false);
+    return summarizeThreadUsage(providerTurns, {
+      rates,
+      priceOverrides: createOverrideRateTable(settings.usagePriceOverrides),
+      modelAliases: resolveModelAliases(settings.usageModelAliases),
+      status: ratesStatus,
+    });
+  });
+
+  return { readSummary, refreshRates, readThreadUsage, awaitPersisted } as const;
 });
 
 export const layer = Layer.effect(UsageService, make);
