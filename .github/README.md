@@ -16,20 +16,11 @@ self-hosted fleet. For T3 Code itself (install, docs, issues), go to
 
 ## How it stays current
 
-```mermaid
-flowchart LR
-  up[upstream nightly] --> n8n[n8n watcher]
-  n8n -->|repository_dispatch| rebase[self-hosted-rebase]
-  rebase -->|push| build[self-hosted-build]
-  build --> ghcr[images on GHCR] --> argo[Argo CD Image Updater] --> cluster
-  build --> cachix[t3-server on Cachix] --> pin[dotfiles pin lane] --> fleet[hosts]
-  rebase & build & pin -.->|failure| repair[T3 repair task]
-  repair -.->|unreachable| wechat[WeChat alert]
-```
+![The rebase and build pipeline](assets/self-hosted-pipeline.svg)
 
-A failed check tags and deploys nothing, so the last good build keeps serving.
-Every failure is reported to a scheduled T3 Code task, which repairs the
-branch or retries the build. The steps are in
+These two are the only workflows enabled on the fork. Upstream's workflow
+files come back with every rebase, so they stay in the repository and are
+disabled in GitHub instead. The steps are in
 [`self-hosted-rebase.yml`](workflows/self-hosted-rebase.yml),
 [`self-hosted-build.yml`](workflows/self-hosted-build.yml) and
 [`scripts/self-hosted`](../scripts/self-hosted).
