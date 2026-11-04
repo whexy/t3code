@@ -301,6 +301,7 @@ const layerUsage = UsageService.layer.pipe(
     ).pipe(Layer.provide(ProviderHostLive.layer.pipe(Layer.provide(ServerSecretStore.layer)))),
   ),
   Layer.provide(layerServerSettings),
+  Layer.provide(ProjectionStoreV2.layer),
 );
 
 const layerResourceDiagnostics = Layer.mergeAll(

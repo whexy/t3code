@@ -15,6 +15,7 @@ import {
   deriveLatestContextWindowSnapshot,
   latestProviderTurnTokenUsage,
   shouldOfferResumeCompaction,
+  threadUsageRevision,
 } from "@t3tools/client-runtime/state/context-window";
 
 const decodeTokenUsage = Schema.decodeSync(OrchestrationV2ProviderTurnTokenUsage);
@@ -205,5 +206,30 @@ describe("latestProviderTurnTokenUsage", () => {
     ]) {
       expect(latestProviderTurnTokenUsage([], { ...projection, contextTransfers })).toBeNull();
     }
+  });
+});
+
+describe("threadUsageRevision", () => {
+  it("changes only when a turn reports usage", () => {
+    const usage = {
+      usageScope: "main_agent",
+      usageStatus: "complete",
+      inputTokens: 1,
+      outputTokens: 1,
+      hasSubagents: false,
+    } as const;
+    const at = (ms: number) => DateTime.makeUnsafe(ms);
+    const running = { turnTokenUsage: undefined, completedAt: null };
+    const first = { turnTokenUsage: usage, completedAt: at(1_000) };
+    const base = threadUsageRevision([first, running]);
+
+    expect(threadUsageRevision([first, { ...running, completedAt: at(2_000) }])).toBe(base);
+    expect(
+      threadUsageRevision([first, { turnTokenUsage: usage, completedAt: at(2_000) }]),
+    ).not.toBe(base);
+    // A turn that reports usage before its completion time lands still counts.
+    expect(threadUsageRevision([first, { turnTokenUsage: usage, completedAt: null }])).not.toBe(
+      base,
+    );
   });
 });
