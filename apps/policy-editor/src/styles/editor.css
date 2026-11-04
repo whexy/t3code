@@ -1,0 +1,39 @@
+/* The editor's own components, built from Frost tokens. */
+
+@layer components {
+  /* A section link in the sidebar card; the current section is raised. */
+  .tab {
+    @apply font-title focus-visible:outline-accent text-ink-soft hover:text-ink-strong flex h-9 items-center gap-3 rounded-xl px-2 text-left text-sm transition-colors duration-150 hover:bg-white/40 focus-visible:outline-2 focus-visible:outline-offset-2;
+  }
+
+  .tab-active {
+    @apply text-ink-strong bg-white/60 font-semibold shadow-sm shadow-black/5;
+  }
+
+  .tab-badge {
+    @apply text-ink-soft flex size-6 shrink-0 items-center justify-center rounded-lg bg-white/40 transition-colors duration-150;
+  }
+
+  .tab-active .tab-badge {
+    @apply bg-gradient-to-br from-blue-500 to-blue-600 text-white shadow-sm;
+  }
+
+  /* Not set / Default / Locked: a segmented track whose idle choices stay quieter than row titles. */
+  .state-toggle {
+    @apply flex h-7 w-full gap-0.5 rounded-lg bg-black/5 p-0.5;
+  }
+
+  .state-toggle-item {
+    @apply font-title focus-visible:outline-accent text-ink-subtle hover:text-ink-strong flex flex-1 items-center justify-center gap-1 rounded-md px-2 text-sm font-normal transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 data-[pressed]:text-ink-strong data-[pressed]:bg-white data-[pressed]:font-semibold data-[pressed]:shadow-sm data-[pressed]:shadow-black/5;
+  }
+
+  /* Rows of a section, divided by inset hairlines. */
+  .settings-rows > [data-slot="settings-row"] + [data-slot="settings-row"] {
+    @apply border-t border-black/5;
+  }
+
+  /* A JSON value, drawn as the same white field as the row's other inputs. */
+  .code-field {
+    @apply text-ink focus-visible:outline-accent block w-full resize-none rounded-lg border border-black/5 bg-white px-3 py-2 font-mono text-xs leading-relaxed focus-visible:outline-2 focus-visible:outline-offset-2;
+  }
+}
