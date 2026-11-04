@@ -1,6 +1,6 @@
 // Bounded exhaustive check of summarizeThreadUsage. Procedure and scope: .agents/skills/verify-thread-usage/SKILL.md
 import { describe, expect, it } from "@effect/vitest";
-import type { ThreadUsage, TurnTokenUsage } from "@t3tools/contracts";
+import { ProviderDriverKind, type ThreadUsage, type TurnTokenUsage } from "@t3tools/contracts";
 
 import { summarizeThreadUsage, type ThreadUsagePricing } from "./threadUsage.ts";
 import { createOverrideRateTable, parseRateTable } from "./usagePricing.ts";
@@ -49,139 +49,153 @@ const base = { usageScope: "main_agent", hasSubagents: false } as const;
  * The turn alphabet. Distinct counts per kind expose misattribution; the two unpriced kinds tie
  * on cost and tokens so the sort's model tiebreak is exercised.
  */
-const KINDS: ReadonlyArray<{ readonly name: string; readonly usage: TurnTokenUsage | undefined }> =
-  [
-    { name: "no usage reported", usage: undefined },
-    {
-      name: "claude complete with cache",
-      usage: {
-        ...base,
-        usageStatus: "complete",
-        models: [CLAUDE],
-        inputTokens: 1000,
-        cachedInputTokens: 300,
-        cacheCreationTokens: 200,
-        outputTokens: 50,
-        reasoningTokens: 20,
-      },
+const KINDS: ReadonlyArray<{
+  readonly name: string;
+  readonly usage: TurnTokenUsage | undefined;
+  readonly driver?: string;
+}> = [
+  { name: "no usage reported", usage: undefined },
+  {
+    name: "claude complete with cache",
+    usage: {
+      ...base,
+      usageStatus: "complete",
+      models: [CLAUDE],
+      inputTokens: 1000,
+      cachedInputTokens: 300,
+      cacheCreationTokens: 200,
+      outputTokens: 50,
+      reasoningTokens: 20,
     },
-    {
-      name: "codex complete, reasoning above output",
-      usage: {
-        ...base,
-        usageStatus: "complete",
-        models: [CODEX],
-        inputTokens: 700,
-        cachedInputTokens: 100,
-        outputTokens: 30,
-        reasoningTokens: 40,
-      },
+  },
+  {
+    name: "codex complete, reasoning above output",
+    usage: {
+      ...base,
+      usageStatus: "complete",
+      models: [CODEX],
+      inputTokens: 700,
+      cachedInputTokens: 100,
+      outputTokens: 30,
+      reasoningTokens: 40,
     },
-    {
-      name: "aliased model with subagent usage",
-      usage: {
-        ...base,
-        hasSubagents: true,
-        usageStatus: "complete",
-        models: [ALIASED],
-        inputTokens: 90,
-        outputTokens: 9,
-        otherUsage: { inputTokens: 400, outputTokens: 40 },
-      },
+  },
+  {
+    name: "aliased model with subagent usage",
+    usage: {
+      ...base,
+      hasSubagents: true,
+      usageStatus: "complete",
+      models: [ALIASED],
+      inputTokens: 90,
+      outputTokens: 9,
+      otherUsage: { inputTokens: 400, outputTokens: 40 },
     },
-    {
-      name: "claude partial, input and output absent",
-      usage: { ...base, usageStatus: "partial", models: [CLAUDE], cachedInputTokens: 60 },
+  },
+  {
+    name: "claude partial, input and output absent",
+    usage: { ...base, usageStatus: "partial", models: [CLAUDE], cachedInputTokens: 60 },
+  },
+  { name: "unavailable, no model", usage: { ...base, usageStatus: "unavailable" } },
+  {
+    name: "unpriced model with other usage",
+    usage: {
+      ...base,
+      usageStatus: "complete",
+      models: [UNPRICED],
+      inputTokens: 55,
+      outputTokens: 5,
+      otherUsage: { inputTokens: 11, outputTokens: 1 },
     },
-    { name: "unavailable, no model", usage: { ...base, usageStatus: "unavailable" } },
-    {
-      name: "unpriced model with other usage",
-      usage: {
-        ...base,
-        usageStatus: "complete",
-        models: [UNPRICED],
-        inputTokens: 55,
-        outputTokens: 5,
-        otherUsage: { inputTokens: 11, outputTokens: 1 },
-      },
+  },
+  {
+    name: "two models in one turn",
+    usage: {
+      ...base,
+      usageStatus: "complete",
+      models: [CLAUDE, CODEX],
+      inputTokens: 33,
+      outputTokens: 3,
     },
-    {
-      name: "two models in one turn",
-      usage: {
-        ...base,
-        usageStatus: "complete",
-        models: [CLAUDE, CODEX],
-        inputTokens: 33,
-        outputTokens: 3,
-      },
+  },
+  {
+    name: "claude local command with compaction usage",
+    usage: {
+      ...base,
+      usageStatus: "complete",
+      models: [CLAUDE],
+      localCommand: true,
+      inputTokens: 500,
+      outputTokens: 5,
+      otherUsage: { inputTokens: 70, outputTokens: 7 },
     },
-    {
-      name: "claude local command with compaction usage",
-      usage: {
-        ...base,
-        usageStatus: "complete",
-        models: [CLAUDE],
-        localCommand: true,
-        inputTokens: 500,
-        outputTokens: 5,
-        otherUsage: { inputTokens: 70, outputTokens: 7 },
-      },
+  },
+  {
+    name: "codex partial, input below cached plus creation",
+    usage: {
+      ...base,
+      usageStatus: "partial",
+      models: [CODEX],
+      inputTokens: 20,
+      cachedInputTokens: 50,
+      cacheCreationTokens: 10,
+      outputTokens: 2,
     },
-    {
-      name: "codex partial, input below cached plus creation",
-      usage: {
-        ...base,
-        usageStatus: "partial",
-        models: [CODEX],
-        inputTokens: 20,
-        cachedInputTokens: 50,
-        cacheCreationTokens: 10,
-        outputTokens: 2,
-      },
+  },
+  {
+    name: "no model, zero other usage",
+    usage: {
+      ...base,
+      usageStatus: "complete",
+      models: [],
+      inputTokens: 13,
+      outputTokens: 1,
+      otherUsage: { inputTokens: 0, outputTokens: 0 },
     },
-    {
-      name: "no model, zero other usage",
-      usage: {
-        ...base,
-        usageStatus: "complete",
-        models: [],
-        inputTokens: 13,
-        outputTokens: 1,
-        otherUsage: { inputTokens: 0, outputTokens: 0 },
-      },
+  },
+  {
+    name: "claude complete, all counters zero",
+    usage: {
+      ...base,
+      usageStatus: "complete",
+      models: [CLAUDE],
+      inputTokens: 0,
+      outputTokens: 0,
     },
-    {
-      name: "claude complete, all counters zero",
-      usage: {
-        ...base,
-        usageStatus: "complete",
-        models: [CLAUDE],
-        inputTokens: 0,
-        outputTokens: 0,
-      },
+  },
+  {
+    name: "codex id with surrounding whitespace",
+    usage: {
+      ...base,
+      usageStatus: "complete",
+      models: [` ${CODEX} `],
+      inputTokens: 7,
+      outputTokens: 1,
     },
-    {
-      name: "codex id with surrounding whitespace",
-      usage: {
-        ...base,
-        usageStatus: "complete",
-        models: [` ${CODEX} `],
-        inputTokens: 7,
-        outputTokens: 1,
-      },
+  },
+  {
+    name: "second unpriced model tying the first",
+    usage: {
+      ...base,
+      usageStatus: "complete",
+      models: [UNPRICED_TWIN],
+      inputTokens: 55,
+      outputTokens: 5,
+      otherUsage: { inputTokens: 11, outputTokens: 1 },
     },
-    {
-      name: "second unpriced model tying the first",
-      usage: {
-        ...base,
-        usageStatus: "complete",
-        models: [UNPRICED_TWIN],
-        inputTokens: 55,
-        outputTokens: 5,
-        otherUsage: { inputTokens: 11, outputTokens: 1 },
-      },
+  },
+  {
+    name: "opencode turn naming claude behind its provider id",
+    driver: "opencode",
+    usage: {
+      ...base,
+      usageStatus: "complete",
+      models: [`gateway/${CLAUDE}`],
+      inputTokens: 21,
+      outputTokens: 2,
     },
-  ];
+  },
+];
 
 const MAX_TURNS = 5;
 const MAX_PERMUTED_TURNS = 4;
@@ -197,18 +211,24 @@ interface OracleRow {
   turns: number;
 }
 
-function oracleKey(usage: TurnTokenUsage): string | null {
+function oracleKey(usage: TurnTokenUsage, driver: string | undefined): string | null {
   const models = usage.models ?? [];
   if (models.length !== 1) return null;
-  const model = models[0]!.trim();
-  if (model === "") return null;
+  const reported = models[0]!.trim();
+  if (reported === "") return null;
+  // OpenCode provider ids hold no slash, so the model id is everything after the first one.
+  const slash = reported.indexOf("/");
+  const model =
+    driver === "opencode" && slash > 0 && slash < reported.length - 1
+      ? reported.slice(slash + 1)
+      : reported;
   return ALIASES[model] ?? model;
 }
 
-function oracle(turns: ReadonlyArray<TurnTokenUsage | undefined>) {
+function oracle(kinds: ReadonlyArray<(typeof KINDS)[number]>) {
   const rows = new Map<string | null, OracleRow>();
   let incomplete = 0;
-  for (const usage of turns) {
+  for (const { usage, driver } of kinds) {
     if (usage === undefined) continue;
     if (usage.usageStatus !== "complete") incomplete += 1;
     const local = usage.localCommand === true;
@@ -220,7 +240,7 @@ function oracle(turns: ReadonlyArray<TurnTokenUsage | undefined>) {
     const otherInput = usage.otherUsage?.inputTokens ?? 0;
     const otherOutput = usage.otherUsage?.outputTokens ?? 0;
     if (uncached + cached + creation + output + otherInput + otherOutput === 0) continue;
-    const key = oracleKey(usage);
+    const key = oracleKey(usage, driver);
     const row = rows.get(key) ?? {
       uncached: 0,
       cached: 0,
@@ -287,7 +307,17 @@ const describeSequence = (sequence: readonly number[]) =>
 
 function summarize(sequence: readonly number[]): ThreadUsage | null {
   return summarizeThreadUsage(
-    sequence.map((kind) => ({ turnTokenUsage: KINDS[kind]!.usage })),
+    sequence.map((kind) => {
+      const { usage, driver = "claudeAgent" } = KINDS[kind]!;
+      return {
+        turnTokenUsage: usage,
+        nativeTurnRef: {
+          driver: ProviderDriverKind.make(driver),
+          nativeId: null,
+          strength: "none",
+        },
+      };
+    }),
     pricing,
   );
 }
@@ -295,7 +325,7 @@ function summarize(sequence: readonly number[]): ThreadUsage | null {
 /** Returns the first broken property for a sequence, or null when every property holds. */
 function violation(sequence: readonly number[]): string | null {
   const result = summarize(sequence);
-  const expected = oracle(sequence.map((kind) => KINDS[kind]!.usage));
+  const expected = oracle(sequence.map((kind) => KINDS[kind]!));
 
   // status: hidden exactly when no turn contributes a token.
   if ((result === null) !== (expected.rows.size === 0)) {
