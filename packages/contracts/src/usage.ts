@@ -1,6 +1,11 @@
 import * as Schema from "effect/Schema";
 
-import { ForwardCompatibleArray, NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  ForwardCompatibleArray,
+  NonNegativeInt,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
 
 /** Bump for incompatible UsageSummary changes; skipped unknown array variants need no bump. */
 export const USAGE_CONTRACT_VERSION = 6 as const;
@@ -155,6 +160,40 @@ export const UsageSummary = Schema.Struct({
   modelFilter: Schema.optional(UsageModelFilter),
 });
 export type UsageSummary = typeof UsageSummary.Type;
+
+export const ThreadUsageInput = Schema.Struct({ threadId: ThreadId });
+export type ThreadUsageInput = typeof ThreadUsageInput.Type;
+
+/** Subagent and compaction tokens a provider reported without a model or cache split. */
+export const ThreadOtherUsage = Schema.Struct({
+  inputTokens: NonNegativeInt,
+  outputTokens: NonNegativeInt,
+});
+export type ThreadOtherUsage = typeof ThreadOtherUsage.Type;
+
+/** One model's share of a thread. A null model is a turn whose provider reported none, or several. */
+export const ThreadModelUsage = Schema.Struct({
+  model: Schema.NullOr(TrimmedNonEmptyString),
+  totals: UsageTokenTotals,
+  /** Attributed to the turn's main model and priced as its uncached input and output. */
+  otherUsage: Schema.NullOr(ThreadOtherUsage),
+  costUsd: Schema.Number,
+  /** False when the rate table has no price for this model; its cost then counts as 0. */
+  priced: Schema.Boolean,
+  turns: NonNegativeInt,
+});
+export type ThreadModelUsage = typeof ThreadModelUsage.Type;
+
+/** A thread's own provider turns across every harness it ran on; forks exclude the parent's turns. */
+export const ThreadUsage = Schema.Struct({
+  models: ForwardCompatibleArray(ThreadModelUsage),
+  totalTokens: NonNegativeInt,
+  costUsd: Schema.Number,
+  /** Turns whose provider reported only part of their usage, or none of it. */
+  incompleteTurns: NonNegativeInt,
+  pricing: UsagePricingStatus,
+});
+export type ThreadUsage = typeof ThreadUsage.Type;
 
 export class UsageReadError extends Schema.TaggedError<UsageReadError>()("UsageReadError", {
   reason: Schema.Literals(["scanFailed", "invalidWindow"]),
