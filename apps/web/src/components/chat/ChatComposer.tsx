@@ -3404,9 +3404,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     />
                   ) : showProviderUnavailable ? (
                     "Enable a provider in Settings"
-                  ) : (
-                    "Ask anything..."
-                  )}
+                  ) : null}
                 </button>
                 {collapsedComposerImagePreviews}
                 <CollapsedComposerStopAction
@@ -3586,7 +3584,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                               ? "Type your answer"
                               : "Type your own answer, or leave this blank to use the selected option"
                           : projectSelectionRequired
-                            ? "Choose a project above to start a thread"
+                            ? "Choose a project below to start a thread"
                             : showProviderUnavailable
                               ? "Enable a provider in Settings to send a message"
                               : (offeredPromptSuggestion ?? DEFAULT_COMPOSER_PLACEHOLDER)
