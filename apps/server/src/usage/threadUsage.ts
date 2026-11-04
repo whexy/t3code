@@ -1,12 +1,14 @@
-import type {
-  OrchestrationV2ProviderTurn,
-  ThreadModelUsage,
-  ThreadOtherUsage,
-  ThreadUsage,
-  UsagePricingStatus,
-  UsageTokenTotals,
+import {
+  ProviderDriverKind,
+  type OrchestrationV2ProviderTurn,
+  type ThreadModelUsage,
+  type ThreadOtherUsage,
+  type ThreadUsage,
+  type UsagePricingStatus,
+  type UsageTokenTotals,
 } from "@t3tools/contracts";
 import { EMPTY_TOTALS, totalTokens } from "@t3tools/provider-core/server/usage";
+import { parseOpenCodeModelSlug } from "@t3tools/provider-opencode/server/OpenCodeRuntime";
 
 import { priceUsage, type RateTable } from "./usagePricing.ts";
 
@@ -17,13 +19,24 @@ export interface ThreadUsagePricing {
   readonly status: UsagePricingStatus;
 }
 
+type ProviderTurnUsage = Pick<OrchestrationV2ProviderTurn, "turnTokenUsage" | "nativeTurnRef">;
 type TurnTokenUsage = NonNullable<OrchestrationV2ProviderTurn["turnTokenUsage"]>;
 
+const OPENCODE_DRIVER = ProviderDriverKind.make("opencode");
+
 /** Tokens split across several models cannot be priced per model, so they stay unattributed. */
-function turnModel(usage: TurnTokenUsage, aliases: ReadonlyMap<string, string>): string | null {
+function turnModel(
+  usage: TurnTokenUsage,
+  driver: ProviderDriverKind | undefined,
+  aliases: ReadonlyMap<string, string>,
+): string | null {
   const models = usage.models ?? [];
-  const model = models.length === 1 ? models[0]!.trim() : "";
-  return model.length === 0 ? null : (aliases.get(model) ?? model);
+  const reported = models.length === 1 ? models[0]!.trim() : "";
+  if (reported.length === 0) return null;
+  // OpenCode turns record `providerID/modelID`; the Usage page prices OpenCode's own `modelID`.
+  const model =
+    driver === OPENCODE_DRIVER ? (parseOpenCodeModelSlug(reported)?.modelID ?? reported) : reported;
+  return aliases.get(model) ?? model;
 }
 
 // Provider input counts include cache reads and writes; pricing needs them apart.
@@ -100,7 +113,7 @@ function priceRow(
  * `otherUsage` empty, so adding both never counts a token twice. Null when nothing was reported.
  */
 export function summarizeThreadUsage(
-  turns: ReadonlyArray<Pick<OrchestrationV2ProviderTurn, "turnTokenUsage">>,
+  turns: ReadonlyArray<ProviderTurnUsage>,
   pricing: ThreadUsagePricing,
 ): ThreadUsage | null {
   const byModel = new Map<
@@ -109,7 +122,8 @@ export function summarizeThreadUsage(
   >();
   let incompleteTurns = 0;
 
-  for (const { turnTokenUsage: usage } of turns) {
+  for (const turn of turns) {
+    const usage = turn.turnTokenUsage;
     if (usage === undefined) continue;
     if (usage.usageStatus !== "complete") incompleteTurns += 1;
     const totals = turnTotals(usage);
@@ -119,7 +133,7 @@ export function summarizeThreadUsage(
         ? { inputTokens: reported.inputTokens, outputTokens: reported.outputTokens }
         : null;
     if (totalTokens(totals) + otherTokens(other) === 0) continue;
-    const model = turnModel(usage, pricing.modelAliases);
+    const model = turnModel(usage, turn.nativeTurnRef?.driver, pricing.modelAliases);
     const entry = byModel.get(model);
     byModel.set(model, {
       totals: entry === undefined ? totals : addTotals(entry.totals, totals),
