@@ -2,22 +2,8 @@ import type { ComponentPropsWithoutRef, ReactNode } from "react";
 
 import { cn } from "../shims/cn.ts";
 
-// The markup of SettingsSection, SettingsGroup and SettingsRow in
-// apps/web/src/components/settings/, which read environment and router state the editor lacks.
-
-export function SettingsGroup({ className, ...props }: ComponentPropsWithoutRef<"div">) {
-  return (
-    <div
-      data-slot="settings-group"
-      {...props}
-      className={cn(
-        "panel relative overflow-visible text-ink",
-        "[&>*+*]:border-t [&>*+*]:border-black/5 [&>[data-slot=settings-row]]:rounded-none",
-        className,
-      )}
-    />
-  );
-}
+// The roles of SettingsSection, SettingsGroup and SettingsRow in apps/web/src/components/settings/,
+// which read environment and router state the editor lacks, drawn as Frost panels.
 
 export function SettingsSection({
   title,
@@ -30,23 +16,19 @@ export function SettingsSection({
   readonly children: ReactNode;
 }) {
   return (
-    <section {...props} className="scroll-mt-20 space-y-3">
-      <div className="space-y-1 px-4 sm:px-6">
-        <h2 className="flex min-h-7 items-center font-title text-lg font-bold tracking-tight text-ink">
-          {title}
-        </h2>
-        {description ? (
-          <p className="text-xs leading-normal text-ink-muted">{description}</p>
-        ) : null}
+    <section {...props} className="panel scroll-mt-10 pb-4 text-ink">
+      <div className="space-y-1 px-4 pt-6 pb-2 sm:px-8 sm:pt-8">
+        <h2 className="font-title text-lg font-semibold tracking-tight">{title}</h2>
+        {description ? <p className="font-article text-sm text-ink-muted">{description}</p> : null}
       </div>
-      <SettingsGroup>{children}</SettingsGroup>
+      <div className="settings-rows px-4 sm:px-8">{children}</div>
     </section>
   );
 }
 
 export function SettingsGroupHeading({ children }: { readonly children: ReactNode }) {
   return (
-    <div className="px-4 pt-4 pb-2 text-xs font-semibold tracking-wide text-ink-muted uppercase sm:px-6">
+    <div className="pt-4 pb-1 font-title text-base font-semibold text-ink first:pt-2">
       {children}
     </div>
   );
@@ -60,6 +42,7 @@ export function SettingsRow({
   control,
   children,
   invalid = false,
+  stacked = false,
   ...props
 }: Omit<ComponentPropsWithoutRef<"div">, "title"> & {
   readonly title: ReactNode;
@@ -69,33 +52,54 @@ export function SettingsRow({
   readonly control?: ReactNode;
   readonly children?: ReactNode;
   readonly invalid?: boolean;
+  /** The value sits below the row at full width, so the text need not leave room for it. */
+  readonly stacked?: boolean;
 }) {
+  const heading = (
+    <div className="flex min-h-5 flex-wrap items-center gap-1.5">
+      <h3 className="font-title text-sm font-semibold text-ink">{title}</h3>
+      {badge}
+    </div>
+  );
+  const text = (
+    <>
+      {description ? (
+        <p className="font-article text-sm leading-snug text-ink-muted">{description}</p>
+      ) : null}
+      {status ? <div className="pt-0.5 text-xs text-ink-muted">{status}</div> : null}
+    </>
+  );
+  const controls = control ? (
+    <div className="flex w-full min-w-0 shrink-0 flex-col items-stretch gap-2 @lg/settings-row:w-60">
+      {control}
+    </div>
+  ) : null;
   return (
     <div
       {...props}
       data-slot="settings-row"
       className={cn(
-        "group/settings-row @container/settings-row scroll-mt-20 px-4 py-4 sm:px-6",
-        invalid && "bg-wash",
+        "group/settings-row @container/settings-row scroll-mt-10 py-4",
+        invalid && "-mx-3 rounded-xl bg-wash px-3",
       )}
     >
-      <div className="flex flex-col gap-3 @lg/settings-row:flex-row @lg/settings-row:items-center @lg/settings-row:gap-8">
-        <div className="min-w-0 flex-1 space-y-1">
-          <div className="flex min-h-5 flex-wrap items-center gap-1.5">
-            <h3 className="font-title text-sm font-bold text-ink">{title}</h3>
-            {badge}
+      {stacked ? (
+        <div className="space-y-1">
+          <div className="flex flex-col gap-3 @lg/settings-row:flex-row @lg/settings-row:items-center @lg/settings-row:justify-between @lg/settings-row:gap-8">
+            {heading}
+            {controls}
           </div>
-          {description ? (
-            <p className="text-balance text-xs leading-normal text-ink-muted">{description}</p>
-          ) : null}
-          {status ? <div className="pt-0.5 text-xs text-ink-muted">{status}</div> : null}
+          {text}
         </div>
-        {control ? (
-          <div className="flex w-full min-w-0 shrink-0 flex-wrap items-center gap-2 @lg/settings-row:w-auto @lg/settings-row:justify-end">
-            {control}
+      ) : (
+        <div className="flex flex-col gap-3 @lg/settings-row:flex-row @lg/settings-row:items-start @lg/settings-row:gap-8">
+          <div className="min-w-0 flex-1 space-y-1">
+            {heading}
+            {text}
           </div>
-        ) : null}
-      </div>
+          {controls}
+        </div>
+      )}
       {children}
     </div>
   );
