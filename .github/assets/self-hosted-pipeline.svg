@@ -1,0 +1,107 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="700" height="574" viewBox="0 0 700 574" role="img" aria-label="Pipeline from n8n through self-hosted-rebase and self-hosted-build to the cluster and the hosts">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path class="head" d="M0,0 L10,5 L0,10 z"/>
+    </marker>
+  </defs>
+  <style>
+    svg { --fg: #1f2328; --muted: #59636e; --border: #d1d9e0; --card: #f6f8fa;
+          --wf-fill: #ddf4ff; --wf-stroke: #54aeff; --bad-fill: #ffebe9; --bad-stroke: #ff8182; }
+    @media (prefers-color-scheme: dark) {
+      svg { --fg: #f0f6fc; --muted: #9198a1; --border: #3d444d; --card: #151b23;
+            --wf-fill: #0f2540; --wf-stroke: #1f6feb; --bad-fill: #2d1214; --bad-stroke: #f85149; }
+    }
+    text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; fill: var(--fg); }
+    .t { font-size: 12.5px; font-weight: 600; }
+    .s { font-size: 11px; fill: var(--muted); }
+    .lbl { font-size: 10.5px; fill: var(--muted); }
+    .m { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .box { fill: var(--card); stroke: var(--border); stroke-width: 1; }
+    .wf { fill: var(--wf-fill); stroke: var(--wf-stroke); }
+    .ext { fill: none; stroke: var(--border); stroke-dasharray: 4 3; }
+    .frame { fill: none; stroke: var(--wf-stroke); stroke-dasharray: 5 4; }
+    .bad { fill: var(--bad-fill); stroke: var(--bad-stroke); stroke-dasharray: 5 4; }
+    .ln { stroke: var(--muted); stroke-width: 1.2; fill: none; }
+    .head { fill: var(--muted); }
+  </style>
+
+  <rect class="box ext" x="10" y="10" width="170" height="60" rx="8"/>
+  <text class="t" x="22" y="32">n8n watcher</text>
+  <text class="s" x="22" y="48">every 10 min: new nightly?</text>
+  <text class="s" x="22" y="62">(or “Run workflow” by hand)</text>
+
+  <rect class="box wf" x="240" y="10" width="220" height="60" rx="8"/>
+  <text class="t m" x="252" y="32">self-hosted-rebase</text>
+  <text class="s" x="252" y="48">rebase the fork onto the new tag</text>
+  <text class="s" x="252" y="62">add one chore(nix) pin commit</text>
+
+  <rect class="box" x="520" y="10" width="170" height="60" rx="8"/>
+  <text class="t" x="532" y="32">push to branch</text>
+  <text class="s m" x="532" y="48">self-hosted-nightly</text>
+  <text class="s" x="532" y="62">whexy-bot or a merged PR</text>
+
+  <path class="ln" d="M180,40 H238" marker-end="url(#a)"/>
+  <text class="lbl" x="185" y="34">dispatch</text>
+  <path class="ln" d="M460,40 H518" marker-end="url(#a)"/>
+  <path class="ln" d="M605,70 V108" marker-end="url(#a)"/>
+
+  <rect class="frame" x="10" y="110" width="680" height="118" rx="10"/>
+  <text class="t m" x="22" y="130">self-hosted-build</text>
+  <text class="s" x="160" y="130">checks, all in parallel</text>
+  <rect class="box" x="20" y="142" width="124" height="74" rx="7"/>
+  <rect class="box" x="154" y="142" width="124" height="74" rx="7"/>
+  <rect class="box" x="288" y="142" width="124" height="74" rx="7"/>
+  <rect class="box" x="422" y="142" width="124" height="74" rx="7"/>
+  <rect class="box" x="556" y="142" width="124" height="74" rx="7"/>
+  <text class="t m" x="30" y="164">web-hub</text><text class="s" x="30" y="182">test, typecheck,</text><text class="s" x="30" y="197">build hub image</text>
+  <text class="t m" x="164" y="164">mcp</text><text class="s" x="164" y="182">test, bundle,</text><text class="s" x="164" y="197">build mcp image</text>
+  <text class="t m" x="298" y="164">policy-editor</text><text class="s" x="298" y="182">test, build,</text><text class="s" x="298" y="197">build editor image</text>
+  <text class="t m" x="432" y="164">nix-linux</text><text class="s" x="432" y="182">build t3-server,</text><text class="s" x="432" y="197">push to Cachix</text>
+  <text class="t m" x="566" y="164">nix-darwin</text><text class="s" x="566" y="182">same on macOS</text><text class="s" x="566" y="197">(skipped on PRs)</text>
+
+  <path class="ln" d="M350,228 V258" marker-end="url(#a)"/>
+  <rect class="box wf" x="240" y="260" width="220" height="56" rx="8"/>
+  <text class="t m" x="252" y="282">gate</text>
+  <text class="s" x="252" y="300">is this commit still the branch head?</text>
+
+  <path class="ln" d="M460,288 H518" marker-end="url(#a)"/>
+  <text class="lbl" x="482" y="282">no</text>
+  <rect class="box ext" x="520" y="260" width="170" height="56" rx="8"/>
+  <text class="t" x="532" y="282">SUPERSEDED</text>
+  <text class="s" x="532" y="300">stop; a newer push builds</text>
+
+  <rect class="box ext" x="10" y="260" width="200" height="56" rx="8"/>
+  <text class="t" x="22" y="282">Pull requests stop here</text>
+  <text class="s" x="22" y="300">checks only; nothing is published</text>
+
+  <path class="ln" d="M350,316 V336"/>
+  <text class="lbl" x="356" y="331">yes</text>
+  <path class="ln" d="M90,336 H436"/>
+  <path class="ln" d="M90,336 V358" marker-end="url(#a)"/>
+  <path class="ln" d="M436,336 V358" marker-end="url(#a)"/>
+
+  <rect class="box wf" x="10" y="360" width="160" height="66" rx="8"/>
+  <rect class="box wf" x="183" y="360" width="160" height="66" rx="8"/>
+  <rect class="box wf" x="356" y="360" width="160" height="66" rx="8"/>
+  <rect class="box wf" x="529" y="360" width="160" height="66" rx="8"/>
+  <text class="t m" x="20" y="382">promote-images</text><text class="s" x="20" y="400">tag images</text><text class="s m" x="20" y="414">1.2.N + sha-…</text>
+  <text class="t m" x="193" y="382">deploy</text><text class="s" x="193" y="400">bump the 3 tags in</text><text class="s m" x="193" y="414">clusters-work</text>
+  <text class="t m" x="366" y="382">promote-pin</text><text class="s" x="366" y="400">git tag pin/&lt;sha&gt;</text><text class="s" x="366" y="414">survives force-push</text>
+  <text class="t m" x="539" y="382">notify</text><text class="s" x="539" y="400">start the dotfiles</text><text class="s" x="539" y="414">pin lane (Woodpecker)</text>
+  <path class="ln" d="M170,393 H181" marker-end="url(#a)"/>
+  <path class="ln" d="M516,393 H527" marker-end="url(#a)"/>
+
+  <path class="ln" d="M263,426 V448" marker-end="url(#a)"/>
+  <path class="ln" d="M609,426 V448" marker-end="url(#a)"/>
+  <rect class="box ext" x="100" y="450" width="326" height="46" rx="8"/>
+  <text class="t" x="112" y="469">Cluster (Argo CD)</text>
+  <text class="s m" x="112" y="486">t3code-hub · t3code-mcp · t3code-policy-editor</text>
+  <rect class="box ext" x="440" y="450" width="250" height="46" rx="8"/>
+  <text class="t" x="452" y="469">Your hosts</text>
+  <text class="s" x="452" y="486">dotfiles pins it; t3-server via Cachix</text>
+
+  <rect class="bad" x="10" y="508" width="680" height="60" rx="8"/>
+  <text class="t" x="22" y="527">Any failure in rebase or build (not PRs)</text>
+  <text class="s" x="22" y="543">report-failure → T3 starts a repair agent run (fallback: WeChat alert).</text>
+  <text class="s" x="22" y="558">Nothing is tagged or pushed, so the last good build keeps serving.</text>
+</svg>
