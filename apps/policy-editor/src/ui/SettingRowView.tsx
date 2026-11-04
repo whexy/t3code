@@ -77,7 +77,7 @@ function EntryEditor({
   return (
     <div
       id={settingAnchor(item.key)}
-      className="scroll-mt-20 space-y-2 rounded-xl border border-black/5 p-3"
+      className="scroll-mt-10 space-y-2 rounded-xl border border-black/5 p-3"
     >
       <KeyHeader policyKey={item.key} onRemove={() => setSetting(item.key, undefined)}>
         <StateToggle
@@ -180,7 +180,9 @@ export function SettingRowView({
       <div
         inert={state === "unset"}
         className={
-          state === "unset" ? "flex items-center gap-2 opacity-50" : "flex items-center gap-2"
+          state === "unset"
+            ? "flex items-center justify-end gap-2 opacity-70"
+            : "flex items-center justify-end gap-2"
         }
       >
         <ValueControl control={control} value={value} onChange={setValue} label={row.title} />
@@ -191,23 +193,25 @@ export function SettingRowView({
     <SettingsRow
       id={settingAnchor(row.path)}
       invalid={allProblems.some((problem) => problem.severity === "error")}
+      stacked={control.kind === "json"}
       title={row.title}
       description={row.description}
       status={
-        <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-          <code className="font-mono text-xs text-ink-muted">{row.path}</code>
-          <span>Built-in default: {describeValue(control, row.builtIn)}</span>
+        <span className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+          <code className="font-mono">{row.path}</code>
+          <span aria-hidden>·</span>
+          <span>Built-in: {describeValue(control, row.builtIn)}</span>
         </span>
       }
       control={
         <>
-          {inline}
           <StateToggle
             label={`${row.title} policy state`}
             value={state}
             states={["unset", "default", "locked"] as const}
             onChange={changeState}
           />
+          {inline}
         </>
       }
     >
@@ -238,7 +242,7 @@ export function SettingRowView({
             <div
               key={item.key}
               id={settingAnchor(item.key)}
-              className="scroll-mt-20 space-y-2 rounded-xl border border-black/10 p-3"
+              className="scroll-mt-10 space-y-2 rounded-xl border border-black/10 p-3"
             >
               <KeyHeader policyKey={item.key} onRemove={() => setSetting(item.key, undefined)} />
               <JsonEditor label={`${item.key} as written`} value={item.entry} readOnly />
