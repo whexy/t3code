@@ -1,6 +1,7 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 import { createRemoteJWKSet, jwtVerify, type JWTVerifyGetKey } from "jose";
 
@@ -20,6 +21,11 @@ export class CloudflareAccess extends Context.Service<
   }
 >()("@t3tools/mcp/cloudflareAccess") {}
 
+class AccessAssertionRejected extends Schema.TaggedError<AccessAssertionRejected>()(
+  "AccessAssertionRejected",
+  { cause: Schema.Defect() },
+) {}
+
 /** `keys` defaults to the team's published signing keys. */
 export const make = (application: AccessApplication, keys?: JWTVerifyGetKey) => {
   const issuer = `https://${application.teamDomain}`;
@@ -28,13 +34,15 @@ export const make = (application: AccessApplication, keys?: JWTVerifyGetKey) => 
   const getKey = keys ?? createRemoteJWKSet(new URL(`${issuer}/cdn-cgi/access/certs`));
   return CloudflareAccess.of({
     verify: Effect.fn("CloudflareAccess.verify")(function (assertion) {
-      return Effect.tryPromise(() =>
-        jwtVerify(assertion, getKey, {
-          issuer,
-          audience: application.audience,
-          algorithms: ["RS256"],
-        }),
-      ).pipe(
+      return Effect.tryPromise({
+        try: () =>
+          jwtVerify(assertion, getKey, {
+            issuer,
+            audience: application.audience,
+            algorithms: ["RS256"],
+          }),
+        catch: (cause) => new AccessAssertionRejected({ cause }),
+      }).pipe(
         Effect.as(true),
         Effect.catch((error) =>
           Effect.logWarning(`Rejected a Cloudflare Access assertion: ${error.cause}`).pipe(
