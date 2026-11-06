@@ -221,7 +221,10 @@ stdenv.mkDerivation (finalAttrs: {
     mkdir -p "$nodeCache"
     tar -xJf ${nodeDist} -O node-v${nodeVersion}-${platform.name}/bin/node > "$nodeCache/node"
     chmod +x "$nodeCache/node"
-    (cd apps/server && T3CODE_PACK_EXE=1 T3CODE_PACK_EXE_TARGET=${platform.name} ../../node_modules/.bin/vp pack)
+    # scripts/cli.ts build-exe's two passes: the CLI, then the bootstrap that embeds it.
+    export T3CODE_CLI_ASSET_DIR="$TMPDIR/cli-asset" T3CODE_PACK_EXE_TARGET=${platform.name}
+    (cd apps/server && T3CODE_PACK_EXE=bundle ../../node_modules/.bin/vp pack)
+    (cd apps/server && T3CODE_PACK_EXE=1 ../../node_modules/.bin/vp pack)
 
     runHook postBuild
   '';
