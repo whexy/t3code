@@ -7,6 +7,7 @@
   nodejs-slim,
   rustPlatform,
   autoPatchelfHook,
+  vulkan-loader,
   darwin,
   jq,
   writableTmpDirAsHomeHook,
@@ -169,8 +170,12 @@ stdenv.mkDerivation (finalAttrs: {
   # tsdown signs the executable it builds with whichever codesign it finds.
   ++ lib.optional isDarwin darwin.sigtool;
 
-  # The libraries the Node runtime and the native addons link.
-  buildInputs = lib.optionals isLinux [ stdenv.cc.cc.lib ];
+  # The libraries the Node runtime and the native addons link. transcribe-cpp's
+  # Vulkan backend links the loader, which finds the host's GPU drivers at runtime.
+  buildInputs = lib.optionals isLinux [
+    stdenv.cc.cc.lib
+    vulkan-loader
+  ];
 
   # Addons ship musl builds beside the glibc ones and load them only on musl.
   autoPatchelfIgnoreMissingDeps = lib.optionals isLinux [ "libc.musl-*.so.1" ];
