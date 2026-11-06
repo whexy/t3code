@@ -1,13 +1,13 @@
 {
-  "version": "0.1.7-nightly.20261102.4093",
+  "version": "0.1.8-nightly.20261106.4288",
   "x86_64-linux": {
     "nodeHash": "sha256-YXCy1HThxib0PP863BGN+f47VzJYpPw9hQyNvGsHm70=",
     "pnpmHash": "sha512-F6K8e/jWxiuEYJaQtRRUG9ynBSTEHa+t7Lf86MKuOO5UA7WVVMbi+oB8nY6iKW++ncWS2yG6T9faXZGxqNsfoQ==",
-    "pnpmDepsHash": "sha256-ecH6iObb37GXD4BL2ILSwRtzp+RVmeeHHQilKMtA6Pw="
+    "pnpmDepsHash": "sha256-K6YVe97haqqJ9zHoUCaTcq01yks/vafSjeewleXQCjk="
   },
   "aarch64-darwin": {
     "nodeHash": "sha256-GIML9Ej+GHxlDcKMmKqMlo7R1Att0DLAgecKOEob9mA=",
     "pnpmHash": "sha512-tnrdUB8ecJoehuKKqi1YHCBVl61xtJ9XVGcx5EviC6fWO4DeGI8GtXrjvJxDBM3nuVjJeWistgsUp/N142x4sw==",
-    "pnpmDepsHash": "sha256-ASadqnonZ9svVyguKytgbDyO0Zq7xz+W8E7qfYxMhco="
+    "pnpmDepsHash": "sha256-wCq7Ivy/4YsLzM2OqOJQFQ8udHZYgc/hAaFkug8xLRo="
   }
 }
