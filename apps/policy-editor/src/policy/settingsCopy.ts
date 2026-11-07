@@ -64,15 +64,6 @@ export const SETTINGS_COPY: ReadonlyArray<SettingCopy> = [
     control: "json",
   },
   {
-    path: "cursorKeychainUsageEnabled",
-    section: "/settings/providers",
-    group: "Usage providers",
-    title: "Cursor account usage",
-    description:
-      "Read your existing Cursor CLI login from macOS Keychain to show account history and monthly limits. macOS may ask you to allow access.",
-    control: "switch",
-  },
-  {
     path: "usageLimitSources",
     section: "/settings/providers",
     group: "Usage providers",
