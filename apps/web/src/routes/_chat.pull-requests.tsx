@@ -69,6 +69,7 @@ export const Route = createFileRoute("/_chat/pull-requests")({
       ? { review: raw.review }
       : {}),
     ...(raw.checks === "passing" || raw.checks === "failing" ? { checks: raw.checks } : {}),
+    ...(raw.upstream === "only" || raw.upstream === "hide" ? { upstream: raw.upstream } : {}),
     author:
       typeof raw.author === "string" && raw.author.trim()
         ? raw.author.trim().slice(0, 200)
