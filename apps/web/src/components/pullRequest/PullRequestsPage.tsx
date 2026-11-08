@@ -241,6 +241,7 @@ export function PullRequestsPage() {
           ...(next.draft ? { draft: next.draft } : {}),
           ...(next.review ? { review: next.review } : {}),
           ...(next.checks ? { checks: next.checks } : {}),
+          ...(next.upstream ? { upstream: next.upstream } : {}),
           ...(next.author ? { author: next.author } : {}),
           ...(next.labels && next.labels.length > 0 ? { labels: next.labels } : {}),
         };
@@ -287,7 +288,7 @@ export function PullRequestsPage() {
   const turnRefreshToken = turnRefreshes
     .map(([environmentId, revision]) => `${environmentId}:${revision}`)
     .join("|");
-  const scopeKey = `${environmentKey}:${assignmentKey}:${search.state}:${search.involvement}:${scopedProjectId ?? ""}:${search.host ?? ""}:${search.draft ?? ""}:${search.review ?? ""}:${search.checks ?? ""}:${search.author ?? ""}:${search.labels?.join("\u0000") ?? ""}`;
+  const scopeKey = `${environmentKey}:${assignmentKey}:${search.state}:${search.involvement}:${scopedProjectId ?? ""}:${search.host ?? ""}:${search.draft ?? ""}:${search.review ?? ""}:${search.checks ?? ""}:${search.upstream ?? ""}:${search.author ?? ""}:${search.labels?.join("\u0000") ?? ""}`;
   const filterKey = `${scopeKey}:${sentQuery}`;
   const statsScope: PullRequestStatsScope = { key: filterKey, policy: statsPolicy };
   const [page, setPage] = useState<{
@@ -1322,12 +1323,17 @@ export function PullRequestsPage() {
           draft: next.draft,
           review: next.review,
           checks: next.checks,
+          upstream: next.upstream,
           author: next.author,
           labels: next.labels?.flatMap((group) => group),
         });
       }}
       authorOptions={facets.authors}
       labelOptions={facets.labels}
+      upstreamAvailable={
+        search.upstream !== undefined ||
+        (facetQuery.data?.entries.some((entry) => entry.upstream === true) ?? false)
+      }
       optionScope={filterOptionScope}
       host={search.host}
       hostOptions={hostMenuOptions}

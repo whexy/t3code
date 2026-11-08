@@ -72,6 +72,7 @@ import {
   type PullRequestThreadCommentsInput,
   type PullRequestThreadCommentsResult,
   type PullRequestUpdateInput,
+  type RepositoryIdentity,
   type SourceControlProviderInfo,
   SourceControlProviderKind,
   type ThreadPullRequestKey,
@@ -335,6 +336,7 @@ export interface SupportedProject {
   /** Unlike Azure repository names, remotes are unique across an organization. */
   readonly remote: string;
   readonly repositoryKey: string | null;
+  readonly upstream: boolean;
 }
 
 interface WorkspaceProjects {
@@ -701,6 +703,46 @@ function rankFilterOptions<A>(
 const remoteHostKey = (recognized: SourceControlProviderInfo, remoteUrl: string) =>
   `${recognized.baseUrl}\n${isSshRemoteUrl(remoteUrl) ? "ssh" : "web"}`;
 
+// A fork's identity is its upstream; its own pull requests are on origin. Only a fork on the
+// upstream's host is read, because it shares the upstream's provider and credentials.
+function forkIdentityOf(
+  identity: RepositoryIdentity | null | undefined,
+): RepositoryIdentity | null {
+  const fork = identity?.origin;
+  if (!identity || fork?.remoteUrl === undefined) return null;
+  const upstreamHost = sourceControlDefinitions.recognizeRemote(identity.locator.remoteUrl);
+  const forkHost = sourceControlDefinitions.recognizeRemote(fork.remoteUrl);
+  if (upstreamHost === null || forkHost?.baseUrl !== upstreamHost.baseUrl) return null;
+  const segments = (fork.displayName ?? "").split("/").filter((segment) => segment.length > 0);
+  const [owner] = segments;
+  const name = segments.at(-1);
+  return {
+    canonicalKey: fork.canonicalKey,
+    locator: { source: "git-remote", remoteName: "origin", remoteUrl: fork.remoteUrl },
+    ...(identity.rootPath ? { rootPath: identity.rootPath } : {}),
+    ...(fork.displayName ? { displayName: fork.displayName } : {}),
+    ...(identity.provider ? { provider: identity.provider } : {}),
+    ...(owner ? { owner } : {}),
+    ...(name ? { name } : {}),
+  };
+}
+
+interface RepositoryView {
+  readonly project: OrchestrationProjectShell;
+  readonly upstream: boolean;
+}
+
+// The fork's own view comes first, so a project reading both repositories is listed by its fork.
+const repositoryViewsOf = (project: OrchestrationProjectShell): ReadonlyArray<RepositoryView> => {
+  const fork = forkIdentityOf(project.repositoryIdentity);
+  return fork === null
+    ? [{ project, upstream: false }]
+    : [
+        { project: { ...project, repositoryIdentity: fork }, upstream: false },
+        { project, upstream: true },
+      ];
+};
+
 /** An HTTP remote names its server's web host, port included. */
 function httpRemoteHost(remoteUrl: string): string | null {
   try {
@@ -919,12 +961,14 @@ export const make = Effect.gen(function* () {
           { concurrency: REPOSITORY_CONCURRENCY },
         ),
       ),
-      Effect.flatMap((projects) =>
-        resolveRemoteHosts(projects, filter).pipe(
-          Effect.map((remoteHosts) => ({ remoteHosts, projects })),
-        ),
+      Effect.map((projects) => projects.flatMap(repositoryViewsOf)),
+      Effect.flatMap((views) =>
+        resolveRemoteHosts(
+          views.map((view) => view.project),
+          filter,
+        ).pipe(Effect.map((remoteHosts) => ({ remoteHosts, views }))),
       ),
-      Effect.map(({ remoteHosts, projects }) => {
+      Effect.map(({ remoteHosts, views }) => {
         const supported: SupportedProject[] = [];
         const unimplemented = new Map<
           string,
@@ -932,8 +976,8 @@ export const make = Effect.gen(function* () {
         >();
         const viewerRoots = new Map<string, string[]>();
         const refinedProjectIdsByHost = new Map<string, ProjectId[]>();
-        const seen = new Set<string>();
-        for (const project of projects) {
+        const seen = new Map<string, number>();
+        for (const { project, upstream } of views) {
           if (filter.projectId !== undefined && project.id !== filter.projectId) continue;
           if (filter.projectIds !== undefined && !filter.projectIds.includes(project.id)) continue;
           const identity = project.repositoryIdentity;
@@ -955,7 +999,7 @@ export const make = Effect.gen(function* () {
           if (host !== sourceControlDefinitions.changeRequestHost(identity, identity.provider)) {
             const projectIds = refinedProjectIdsByHost.get(host);
             if (projectIds === undefined) refinedProjectIdsByHost.set(host, [project.id]);
-            else projectIds.push(project.id);
+            else if (!projectIds.includes(project.id)) projectIds.push(project.id);
           }
           const registered = registry.get(kind);
           const api = registered?.servesHost?.(host) === false ? null : registered;
@@ -967,9 +1011,17 @@ export const make = Effect.gen(function* () {
           const repositoryKey =
             api?.repositoryKey?.({ canonicalKey: identity.canonicalKey }) ?? null;
           const key = listCursorKey(host, repositoryKey ?? repository);
-          if (seen.has(key)) continue;
-          seen.add(key);
+          const seenAt = seen.get(key);
+          if (seenAt !== undefined) {
+            // A repository some project reads as its own is not anyone's upstream.
+            const held = supported[seenAt];
+            if (held?.upstream && !upstream) supported[seenAt] = { ...held, upstream: false };
+            continue;
+          }
+          seen.set(key, api === null ? -1 : supported.length);
           if (api === null) {
+            // A fork's upstream view is the same project its fork view counted.
+            if (upstream) continue;
             const counted = unimplemented.get(host);
             if (counted === undefined) unimplemented.set(host, { kind, projectCount: 1 });
             else counted.projectCount += 1;
@@ -988,6 +1040,7 @@ export const make = Effect.gen(function* () {
               repositoryKey === null
                 ? null
                 : sourceControlDefinitions.canonicalRepositoryKey(repositoryKey.toLowerCase()),
+            upstream,
           });
         }
         return { supported, unimplemented, viewerRoots, refinedProjectIdsByHost };
@@ -998,14 +1051,16 @@ export const make = Effect.gen(function* () {
   const requireProject = (ref: PullRequestRef): Effect.Effect<SupportedProject, PullRequestError> =>
     listWorkspaceProjects({ projectId: ref.projectId }).pipe(
       Effect.flatMap(({ supported }): Effect.Effect<SupportedProject, PullRequestError> => {
-        const own = supported[0];
         const repository = ref.repository.trim();
         const host = ref.host?.trim().toLowerCase();
-        if (own !== undefined && own.repository.toLowerCase() === repository.toLowerCase()) {
-          if (host === undefined || host === own.host) return Effect.succeed(own);
-        }
+        const own = supported.find(
+          (candidate) =>
+            candidate.repository.toLowerCase() === repository.toLowerCase() &&
+            (host === undefined || host === candidate.host),
+        );
+        if (own !== undefined) return Effect.succeed(own);
         if (host === undefined) {
-          if (own === undefined) {
+          if (supported.length === 0) {
             return Effect.fail(new PullRequestUnavailableError({ reason: "provider-unsupported" }));
           }
           return Effect.fail(
@@ -1062,6 +1117,7 @@ export const make = Effect.gen(function* () {
                         `https://${host}/${repository}`,
                       ),
                       repositoryKey: null,
+                      upstream: false,
                     };
                   }
                 }
@@ -1281,6 +1337,7 @@ export const make = Effect.gen(function* () {
       projectId: input.project.project.id,
       projectTitle: input.project.project.title,
       repository: input.project.repository,
+      ...(input.project.upstream ? { upstream: true } : {}),
       number: input.item.number,
       title: input.item.title,
       url: input.item.url,
@@ -1314,15 +1371,22 @@ export const make = Effect.gen(function* () {
     const involvement = input.involvement ?? "all";
     const epochAtStart = epochCounter;
     const continuation = yield* decodeCursors(input.cursors);
+    const { upstream: upstreamFilter, ...rowFilters } = input.filters ?? {};
+    // Upstream rows are chosen by repository, so they never thin a host's pages.
+    const filters = Object.values(rowFilters).some((value) => value !== undefined)
+      ? rowFilters
+      : undefined;
     const {
       supported: projects,
       unimplemented,
       viewerRoots,
       refinedProjectIdsByHost,
     } = yield* listWorkspaceProjects(input);
-    const projectCounts = new Map<string, number>();
-    for (const { host } of projects) {
-      projectCounts.set(host, (projectCounts.get(host) ?? 0) + 1);
+    const hostProjectIds = new Map<string, Set<ProjectId>>();
+    for (const { host, project } of projects) {
+      const ids = hostProjectIds.get(host);
+      if (ids === undefined) hostProjectIds.set(host, new Set([project.id]));
+      else ids.add(project.id);
     }
 
     const viewerResults = yield* resolveViewers(projects, viewerRoots);
@@ -1340,7 +1404,7 @@ export const make = Effect.gen(function* () {
           kind: result.kind,
           searchesOnHost: capabilities?.search ?? false,
           actions: capabilities?.actions ?? [],
-          projectCount: projectCounts.get(result.host) ?? 1,
+          projectCount: hostProjectIds.get(result.host)?.size ?? 1,
           projectIds: refinedProjectIdsByHost.get(result.host),
           configured: result.viewer !== null,
           detail: result.error === null ? null : providerDetail(requirementOf, result.error),
@@ -1358,10 +1422,11 @@ export const make = Effect.gen(function* () {
       })),
     ];
 
-    const selected =
-      continuation === null
-        ? projects
-        : projects.filter(({ cursorKey }) => continuation.has(cursorKey));
+    const selected = projects.filter(
+      ({ cursorKey, upstream }) =>
+        (continuation === null || continuation.has(cursorKey)) &&
+        (upstreamFilter === undefined || upstream === (upstreamFilter === "only")),
+    );
     const readable = selected.filter(({ host }) => viewers[host] !== undefined);
     const unreadable = selected
       .filter(({ host }) => viewers[host] === undefined)
@@ -1416,7 +1481,7 @@ export const make = Effect.gen(function* () {
             viewer,
             limit,
             query: input.query,
-            filters: input.filters,
+            filters,
             ...(cursor === undefined
               ? {}
               : {
@@ -1445,7 +1510,7 @@ export const make = Effect.gen(function* () {
               return {
                 key,
                 entries: items
-                  .filter((item) => matchesRowFilters(item, input.filters, viewer))
+                  .filter((item) => matchesRowFilters(item, filters, viewer))
                   .map((item) => toEntry({ project, item, viewer, observedAt })),
                 errors: [],
                 truncated: page.truncated,
@@ -1490,7 +1555,7 @@ export const make = Effect.gen(function* () {
       const fill = (batch: RepositoryBatch, reads: number): Effect.Effect<RepositoryBatch> => {
         const cursor = batch.nextCursor === null ? null : parseListCursor(batch.nextCursor);
         if (
-          input.filters === undefined ||
+          filters === undefined ||
           cursor === null ||
           batch.entries.length >= limit ||
           reads >= FILTERED_LIST_READS
@@ -1528,7 +1593,7 @@ export const make = Effect.gen(function* () {
         viewer,
         limit,
         query: input.query,
-        filters: input.filters,
+        filters,
         ...(cursor === undefined
           ? {}
           : { cursor: { updatedBefore: cursor.updatedBefore, delivered: cursor.delivered } }),
@@ -1568,7 +1633,7 @@ export const make = Effect.gen(function* () {
               return Effect.succeed({
                 key: project.cursorKey,
                 entries: items
-                  .filter((item) => matchesRowFilters(item, input.filters, viewer))
+                  .filter((item) => matchesRowFilters(item, filters, viewer))
                   .map((item) => toEntry({ project, item, viewer, observedAt })),
                 errors: [],
                 truncated: page.truncated,
@@ -2738,21 +2803,20 @@ export const make = Effect.gen(function* () {
   )(function* (input) {
     if (input.refs.length === 0) return { stats: [] };
     const { supported } = yield* listWorkspaceProjects({});
-    const byProject = new Map(supported.map((project) => [project.project.id, project]));
+    const repositoryOf = (projectId: ProjectId, repository: string) =>
+      `${projectId} ${repository.trim().toLowerCase()}`;
+    const byRepository = new Map(
+      supported.map((project) => [repositoryOf(project.project.id, project.repository), project]),
+    );
     const wanted = new Map<
       string,
       { readonly project: SupportedProject; readonly number: number }
     >();
     for (const ref of input.refs) {
-      const project = byProject.get(ref.projectId);
-      if (
-        project === undefined ||
-        project.api.listChangeRequestStats === undefined ||
-        project.repository.toLowerCase() !== ref.repository.trim().toLowerCase()
-      ) {
-        continue;
-      }
-      wanted.set(`${project.project.id} ${ref.number}`, { project, number: ref.number });
+      const key = repositoryOf(ref.projectId, ref.repository);
+      const project = byRepository.get(key);
+      if (project === undefined || project.api.listChangeRequestStats === undefined) continue;
+      wanted.set(`${key} ${ref.number}`, { project, number: ref.number });
     }
     const byHost = new Map<string, Array<{ project: SupportedProject; number: number }>>();
     for (const entry of wanted.values()) {
@@ -2995,7 +3059,7 @@ export const make = Effect.gen(function* () {
       string | ReadonlyArray<string> | ReadonlyArray<ReadonlyArray<string>> | null
     >,
   ): PullRequestListFilters => {
-    const [draft, review, checks, author, labels, excludedLabels] = slots;
+    const [draft, review, checks, author, labels, excludedLabels, upstream] = slots;
     return {
       ...(typeof draft === "string" ? { draft: draft as "only" | "hide" } : {}),
       ...(typeof review === "string" ? { review: review as PullRequestListFilters["review"] } : {}),
@@ -3003,6 +3067,7 @@ export const make = Effect.gen(function* () {
       ...(typeof author === "string" ? { author } : {}),
       ...(Array.isArray(labels) ? { labels: labels as ReadonlyArray<ReadonlyArray<string>> } : {}),
       ...(Array.isArray(excludedLabels) ? { excludedLabels } : {}),
+      ...(typeof upstream === "string" ? { upstream: upstream as "only" | "hide" } : {}),
     };
   };
 
@@ -3130,6 +3195,7 @@ export const make = Effect.gen(function* () {
             input.filters.author ?? null,
             input.filters.labels ?? null,
             input.filters.excludedLabels ?? null,
+            input.filters.upstream ?? null,
           ],
       input.projectId ?? null,
       input.projectIds === undefined ? null : [...input.projectIds].sort(),
