@@ -13,6 +13,7 @@ self-hosted fleet. For T3 Code itself (install, docs, issues), go to
 | Policy Editor  | Edits the fleet's named managed policies and serves each read-only at `/<name>.json`, which following hosts pick up within about 2 minutes. [`apps/policy-editor`](../apps/policy-editor) | `ghcr.io/whexy/t3code-policy-editor` (private)                |
 | Web Hub        | The web client, with connections kept in a shared catalog instead of one browser. [`scripts/self-hosted`](../scripts/self-hosted)                                                         | `ghcr.io/whexy/t3code-hub`                                    |
 | Server changes | `T3CODE_DEV_MANAGED_POLICY_PATH` gives each user their own managed policy file, and the `t3` server builds as a Nix package. [`nix`](../nix)                                              | `packages.{x86_64-linux,aarch64-darwin}.t3-server`, on Cachix |
+| iOS app        | The preview app built from the same commit as the fleet's server and signed for Wenxuan's Apple team. [`apps/mobile/forkIosIdentity.ts`](../apps/mobile/forkIosIdentity.ts)               | TestFlight, `dev.whexy.t3code` `1.2.<run>`                    |
 
 ## How it stays current
 
@@ -52,3 +53,28 @@ input, do not make it follow your `nixpkgs`: the cache holds only the paths
 built from the fork's own lock.
 
 The hub and MCP images are public on GHCR; take a `1.2.<run>` tag.
+
+## The iOS app
+
+Each published build also uploads the app to TestFlight, on GitHub's
+`xcode-27` runner. It talks to T3 servers over the local network, the
+tailnet or a public URL. T3 Connect sign-in, push notifications, Live
+Activities and `app.t3.codes` links need upstream's hosted services and
+Apple team, so they do not work in this build. Over-the-air updates are off.
+
+The job skips until these repository secrets exist:
+
+| Secret                 | Value                                                                  |
+| ---------------------- | ---------------------------------------------------------------------- |
+| `IOS_DEVELOPMENT_P12`  | An Apple Development identity of team `26DMRHRW6Z`, as a base64 `.p12` |
+| `IOS_DISTRIBUTION_P12` | An Apple Distribution identity of the same team, as a base64 `.p12`    |
+| `IOS_P12_PASSWORD`     | The password of both `.p12` files                                      |
+| `ASC_KEY_ID`           | An App Store Connect API key with the App Manager role                 |
+| `ASC_ISSUER_ID`        | That key's issuer ID                                                   |
+| `ASC_PRIVATE_KEY`      | That key's `.p8` contents                                              |
+
+The bundle ID `dev.whexy.t3code` and its App Store Connect app record are
+created once by hand, since Apple's public API cannot create apps. Xcode
+creates the extensions' bundle IDs, the App Group and the provisioning
+profiles through the API key. A build reaches internal testers without
+review.
