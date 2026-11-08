@@ -422,6 +422,16 @@ describe("settings catalog", () => {
     for (const copy of SETTINGS_COPY) assert.isTrue(SETTING_ROWS.has(copy.path), copy.path);
   });
 
+  it("offers the Settings page's choices for a setting that takes any string", () => {
+    for (const path of ["speechModelId", "speechAcceleration"]) {
+      const row = SETTING_ROWS.get(path);
+      assert.strictEqual(row?.control.kind, "select", path);
+      if (row?.control.kind !== "select") continue;
+      const values = row.control.options.map((option) => option.value);
+      assert.include(values, row.builtIn, `${path} does not offer its built-in default`);
+    }
+  });
+
   it("offers the drivers, and the fields per driver, the server accepts", () => {
     for (const driver of KNOWN_DRIVERS) {
       const accepts = (pin: Record<string, string>) =>
