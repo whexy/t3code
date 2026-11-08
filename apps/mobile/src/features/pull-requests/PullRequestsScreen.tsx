@@ -248,6 +248,9 @@ export function PullRequestsScreen(
     labels: knownFacets.environmentId === environmentId ? knownFacets.labels : facets.labels,
     labelColors,
     projects,
+    upstreamAvailable:
+      controls.filters.upstream !== undefined ||
+      result.entries.some((entry) => entry.upstream === true),
     onSearch: (kind) =>
       navigation.navigate("PullRequestFilterSearch", {
         kind,
