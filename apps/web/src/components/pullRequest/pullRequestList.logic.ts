@@ -262,6 +262,8 @@ export function matchesPullRequestFilters(
   const holds = (label: string) => labels.includes(label.trim().toLowerCase());
   return (
     (filters.draft === undefined || entry.isDraft === (filters.draft === "only")) &&
+    (filters.upstream === undefined ||
+      (entry.upstream === true) === (filters.upstream === "only")) &&
     (filters.review === undefined ||
       (filters.review === "none"
         ? entry.reviewDecision === undefined
