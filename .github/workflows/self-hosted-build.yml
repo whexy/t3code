@@ -362,10 +362,12 @@ jobs:
             [[ "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --jq .object.sha)" == "$GITHUB_SHA" ]]
           fi
 
-  # The preview app signed for the fork's Apple team, uploaded to TestFlight as
-  # 1.2.<run_number>. Archiving signs with the Development identity and the
-  # export re-signs with Distribution; Xcode makes the profiles through the API
-  # key. Without the signing secrets the job only says so and succeeds.
+  # The preview app signed for the fork's Apple team (apps/mobile/forkIos.ts),
+  # uploaded to TestFlight as 1.2.<run_number>. Archiving signs with the
+  # Development identity and profiles Xcode makes through the API key; the
+  # export re-signs with Distribution and the App Store profiles that
+  # scripts/self-hosted/ios-profiles.ts installs. Without the signing secrets
+  # the job only says so and succeeds.
   ios-testflight:
     needs: gate
     if: needs.gate.outputs.current == 'true'
@@ -374,12 +376,13 @@ jobs:
     env:
       APP_VARIANT: preview
       EXPO_NO_GIT_STATUS: "1"
+      # scripts/self-hosted/ios-ota-publish.sh resolves the runtime version the
+      # same way; a build that computes another one never receives an update.
+      EXPO_UPDATES_WORKFLOW_OVERRIDE: managed
       NODE_OPTIONS: --max-old-space-size=8192
-      T3CODE_MOBILE_UPDATES_ENABLED: "0"
-      T3CODE_MOBILE_VERSION: 1.2.${{ github.run_number }}
+      T3CODE_FORK_IOS: "1"
       T3CODE_FORK_IOS_BUILD_NUMBER: ${{ github.run_number }}
-      T3CODE_FORK_IOS_BUNDLE_ID: dev.whexy.t3code
-      T3CODE_FORK_IOS_TEAM_ID: 26DMRHRW6Z
+      T3CODE_MOBILE_VERSION: 1.2.${{ github.run_number }}
     steps:
       - id: secrets
         env:
@@ -447,6 +450,10 @@ jobs:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
         run: |
+          runtime="$(./node_modules/.bin/expo-updates runtimeversion:resolve --platform ios --workflow managed | tail -1 | jq -r .runtimeVersion)"
+          team="$(./node_modules/.bin/expo config --json | jq -r .ios.appleTeamId)"
+          echo "IOS_TEAM_ID=$team" >> "$GITHUB_ENV"
+          echo "IOS_RUNTIME_VERSION=$runtime" >> "$GITHUB_ENV"
           ./node_modules/.bin/expo prebuild --platform ios --clean
           workspace="$(echo ios/*.xcworkspace)"
           # The share extension's target carries no team of its own.
@@ -454,10 +461,15 @@ jobs:
             -workspace "$workspace" -scheme "$(basename "$workspace" .xcworkspace)" \
             -configuration Release -destination generic/platform=iOS \
             -archivePath "$RUNNER_TEMP/T3Code.xcarchive" \
-            DEVELOPMENT_TEAM="$T3CODE_FORK_IOS_TEAM_ID" \
+            DEVELOPMENT_TEAM="$team" \
             -allowProvisioningUpdates \
             -authenticationKeyPath "$RUNNER_TEMP/AuthKey_$ASC_KEY_ID.p8" \
             -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+          built="$(cat "$RUNNER_TEMP"/T3Code.xcarchive/Products/Applications/*.app/EXUpdates.bundle/fingerprint)"
+          if [[ "$built" != "$runtime" ]]; then
+            echo "::error::The archive's runtime version is $built, not $runtime; no over-the-air update would reach it."
+            exit 1
+          fi
 
       - id: current
         if: steps.secrets.outputs.present == 'true'
@@ -469,27 +481,15 @@ jobs:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
         run: |
-          cat > "$RUNNER_TEMP/ExportOptions.plist" <<EOF
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>method</key><string>app-store-connect</string>
-            <key>destination</key><string>upload</string>
-            <key>signingStyle</key><string>automatic</string>
-            <key>teamID</key><string>$T3CODE_FORK_IOS_TEAM_ID</string>
-            <key>manageAppVersionAndBuildNumber</key><false/>
-          </dict>
-          </plist>
-          EOF
+          ASC_KEY_PATH="$RUNNER_TEMP/AuthKey_$ASC_KEY_ID.p8" \
+            node scripts/self-hosted/ios-profiles.ts "$RUNNER_TEMP/T3Code.xcarchive" "$RUNNER_TEMP/ExportOptions.plist"
           xcodebuild -exportArchive \
             -archivePath "$RUNNER_TEMP/T3Code.xcarchive" \
             -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
             -exportPath "$RUNNER_TEMP/export" \
-            -allowProvisioningUpdates \
             -authenticationKeyPath "$RUNNER_TEMP/AuthKey_$ASC_KEY_ID.p8" \
             -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID"
-          echo "testflight: $T3CODE_FORK_IOS_BUNDLE_ID $T3CODE_MOBILE_VERSION ($T3CODE_FORK_IOS_BUILD_NUMBER)" >> "$GITHUB_STEP_SUMMARY"
+          echo "testflight: $T3CODE_MOBILE_VERSION ($T3CODE_FORK_IOS_BUILD_NUMBER) runtime $IOS_RUNTIME_VERSION" >> "$GITHUB_STEP_SUMMARY"
 
   notify:
     needs: [promote-images, promote-pin]
