@@ -16,6 +16,7 @@ import {
   KeyRoundIcon,
   type LucideIcon,
   MessagesSquareIcon,
+  MicIcon,
   PanelsTopLeftIcon,
   RefreshCwIcon,
   SaveIcon,
@@ -92,6 +93,7 @@ import { type PolicyKey, settingAnchor, SettingRowView } from "./ui/SettingRowVi
 import { SettingsGroupHeading, SettingsRow, SettingsSection } from "./ui/settingsLayout.tsx";
 
 const SECTION_ICONS: Record<string, LucideIcon> = {
+  "/settings/voice": MicIcon,
   "/settings/providers": BotIcon,
   "/settings/threads": MessagesSquareIcon,
   "/settings/browser": GlobeIcon,
