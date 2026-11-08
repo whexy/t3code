@@ -1,6 +1,8 @@
 // Copied from the web app's Settings page (apps/web/src/components/settings), in its order.
 // A path missing here still shows, under "Other settings", with a control from its schema.
 
+import { SPEECH_MODELS } from "../../../server/src/speech/model.ts";
+
 export interface SettingCopyOption {
   readonly value: string | null;
   readonly label: string;
@@ -25,6 +27,7 @@ export interface SettingCopy {
 }
 
 export const SETTINGS_SECTIONS: ReadonlyArray<{ readonly id: string; readonly label: string }> = [
+  { id: "/settings/voice", label: "Voice" },
   { id: "/settings/providers", label: "Providers" },
   { id: "/settings/threads", label: "Threads" },
   { id: "/settings/browser", label: "Browser" },
@@ -39,6 +42,75 @@ export const SETTINGS_SECTIONS: ReadonlyArray<{ readonly id: string; readonly la
 ];
 
 export const SETTINGS_COPY: ReadonlyArray<SettingCopy> = [
+  {
+    path: "cloudSpeechCredentials",
+    section: "/settings/voice",
+    group: "Transcription",
+    title: "Cloud API keys",
+    description:
+      "Keys for transcribing with OpenAI, xAI, or OpenRouter on this environment. Anyone with dictation access to it can bill these keys. Hosts fetch policies from a public URL, so name a secret instead of writing a key here.",
+    control: "json",
+  },
+  {
+    path: "speechModelId",
+    section: "/settings/voice",
+    group: "Transcription",
+    title: "Transcription model",
+    description: "The model this environment downloads and transcribes with.",
+    control: "select",
+    options: SPEECH_MODELS.map((model) => ({
+      value: model.id,
+      label: model.name,
+      description: model.description,
+    })),
+  },
+  {
+    path: "speechAcceleration",
+    section: "/settings/voice",
+    group: "Transcription",
+    title: "Hardware",
+    description: "Auto uses the environment’s GPU when it has one.",
+    control: "select",
+    options: [
+      { value: "auto", label: "Auto" },
+      { value: "cpu", label: "CPU" },
+    ],
+  },
+  {
+    path: "speechModelUnloadTimeout",
+    section: "/settings/voice",
+    group: "Transcription",
+    title: "Unload model",
+    description: "Release the model’s memory on the environment after it sits idle.",
+    control: "select",
+    options: [
+      { value: "never", label: "Never" },
+      { value: "immediately", label: "Immediately" },
+      { value: "min_2", label: "After 2 minutes" },
+      { value: "min_5", label: "After 5 minutes" },
+      { value: "min_10", label: "After 10 minutes" },
+      { value: "min_15", label: "After 15 minutes" },
+      { value: "hour_1", label: "After 1 hour" },
+    ],
+  },
+  {
+    path: "speechProjectCustomWords",
+    section: "/settings/voice",
+    group: "Transcription options",
+    title: "Shared dictionary",
+    description:
+      "Saved on the environment and used in every project there, along with each person’s own dictionary. Projects can override it.",
+    control: "json",
+  },
+  {
+    path: "speechPostProcessingModelSelection",
+    section: "/settings/voice",
+    group: "Cleanup",
+    title: "Cleanup model",
+    description:
+      "Model that cleans up transcripts on this environment. None uses the environment’s text generation model; pick another for a cheaper or faster one.",
+    control: "json",
+  },
   {
     path: "providerInstances",
     section: "/settings/providers",
@@ -104,6 +176,14 @@ export const SETTINGS_COPY: ReadonlyArray<SettingCopy> = [
     title: "Add project starts in",
     description: 'Leave empty to use "~/" when the Add Project browser opens.',
     control: "text",
+  },
+  {
+    path: "ghqCloneLayout",
+    section: "/settings/threads",
+    group: "New projects",
+    title: "Clone into host folders",
+    description: "Clones go to github.com/owner/repo under the folder above, like ghq.",
+    control: "switch",
   },
   {
     path: "defaultModelSelection",
