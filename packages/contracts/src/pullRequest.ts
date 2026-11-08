@@ -45,6 +45,8 @@ export const PullRequestListFilters = Schema.Struct({
   labels: Schema.optional(Schema.Array(PullRequestQualifierValues).check(Schema.isMaxLength(10))),
   excludedLabels: Schema.optional(PullRequestQualifierValues),
   author: Schema.optional(PullRequestQualifierValue),
+  /** Rows from the upstream repository a fork project's origin was forked from. */
+  upstream: Schema.optional(Schema.Literals(["only", "hide"])),
 });
 export type PullRequestListFilters = typeof PullRequestListFilters.Type;
 
@@ -335,6 +337,8 @@ export const PullRequestListEntry = Schema.Struct({
   projectId: ProjectId,
   projectTitle: TrimmedNonEmptyString,
   repository: TrimmedNonEmptyString,
+  /** True when `repository` is the upstream of a project whose origin is a fork. */
+  upstream: Schema.optional(Schema.Boolean),
   number: PositiveInt,
   title: TrimmedNonEmptyString,
   url: TrimmedNonEmptyString,
