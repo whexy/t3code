@@ -7,13 +7,13 @@ self-hosted fleet. For T3 Code itself (install, docs, issues), go to
 
 ## What the fork adds
 
-| Feature        | What it does                                                                                                                                                                              | Ships as                                                      |
-| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
-| Client MCP     | An MCP server that works as a T3 Code client, so an MCP client can start and follow sessions on paired T3 servers. [`apps/mcp`](../apps/mcp)                                              | `ghcr.io/whexy/t3code-mcp`                                    |
-| Policy Editor  | Edits the fleet's named managed policies and serves each read-only at `/<name>.json`, which following hosts pick up within about 2 minutes. [`apps/policy-editor`](../apps/policy-editor) | `ghcr.io/whexy/t3code-policy-editor` (private)                |
-| Web Hub        | The web client, with connections kept in a shared catalog instead of one browser. [`scripts/self-hosted`](../scripts/self-hosted)                                                         | `ghcr.io/whexy/t3code-hub`                                    |
-| Server changes | `T3CODE_DEV_MANAGED_POLICY_PATH` gives each user their own managed policy file, and the `t3` server builds as a Nix package. [`nix`](../nix)                                              | `packages.{x86_64-linux,aarch64-darwin}.t3-server`, on Cachix |
-| iOS app        | The preview app built from the same commit as the fleet's server and signed for Wenxuan's Apple team. [`apps/mobile/forkIosIdentity.ts`](../apps/mobile/forkIosIdentity.ts)               | TestFlight, `dev.whexy.t3code` `1.2.<run>`                    |
+| Feature        | What it does                                                                                                                                                                              | Ships as                                                                     |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| Client MCP     | An MCP server that works as a T3 Code client, so an MCP client can start and follow sessions on paired T3 servers. [`apps/mcp`](../apps/mcp)                                              | `ghcr.io/whexy/t3code-mcp`                                                   |
+| Policy Editor  | Edits the fleet's named managed policies and serves each read-only at `/<name>.json`, which following hosts pick up within about 2 minutes. [`apps/policy-editor`](../apps/policy-editor) | `ghcr.io/whexy/t3code-policy-editor` (private)                               |
+| Web Hub        | The web client, with connections kept in a shared catalog instead of one browser. [`scripts/self-hosted`](../scripts/self-hosted)                                                         | `ghcr.io/whexy/t3code-hub`                                                   |
+| Server changes | `T3CODE_DEV_MANAGED_POLICY_PATH` gives each user their own managed policy file, and the `t3` server builds as a Nix package. [`nix`](../nix)                                              | `packages.{x86_64-linux,aarch64-darwin}.t3-server`, on Cachix                |
+| iOS app        | The preview app built from the same commit as the fleet's server and signed for Wenxuan's Apple team. [`apps/mobile/forkIos.ts`](../apps/mobile/forkIos.ts)                               | TestFlight, `dev.whexy.t3code` `1.2.<run>`; updates from `ota.clusters.work` |
 
 ## How it stays current
 
@@ -60,7 +60,27 @@ Each published build also uploads the app to TestFlight, on GitHub's
 `xcode-27` runner. It talks to T3 servers over the local network, the
 tailnet or a public URL. T3 Connect sign-in, push notifications, Live
 Activities and `app.t3.codes` links need upstream's hosted services and
-Apple team, so they do not work in this build. Over-the-air updates are off.
+Apple team, so they do not work in this build.
+
+### Over-the-air updates
+
+The app takes JavaScript updates from `ota.clusters.work` (app `t3code`,
+channel `production`; operating the server is clusters-work's `docs/ota.md`).
+To ship a change without a new build, run this from a tailnet machine with
+dependencies installed and the publish token in `~/.config/ota/publish-token`:
+
+```sh
+scripts/self-hosted/ios-ota-publish.sh
+```
+
+The phone downloads the update at its next launch and runs it at the one
+after; Settings → About then shows `1.2-ota.<commit>`. An update reaches only
+builds with the same runtime version, the fingerprint of the native side, which
+the script prints and each build's run summary records. When upstream changes
+a native dependency, patch, plugin or the app config, the next TestFlight build
+carries it, and updates for the older builds stop matching.
+
+### Signing
 
 The job skips until these repository secrets exist:
 
@@ -73,8 +93,16 @@ The job skips until these repository secrets exist:
 | `ASC_ISSUER_ID`        | That key's issuer ID                                                   |
 | `ASC_PRIVATE_KEY`      | That key's `.p8` contents                                              |
 
-The bundle ID `dev.whexy.t3code` and its App Store Connect app record are
-created once by hand, since Apple's public API cannot create apps. Xcode
-creates the extensions' bundle IDs, the App Group and the provisioning
-profiles through the API key. A build reaches internal testers without
-review.
+Xcode makes the development profiles for the archive through the API key. An
+App Manager key cannot use Xcode's cloud-managed distribution signing, so the
+export signs with one `IOS_APP_STORE` profile per bundle, made with the
+distribution certificate (`asc profiles create`), which
+[`ios-profiles.ts`](../scripts/self-hosted/ios-profiles.ts) installs. Those
+profiles expire with the certificate, and an extension upstream adds later
+fails the export until it has one.
+
+These were made once by hand, because the public App Store Connect API cannot:
+the app record for `dev.whexy.t3code`, and the App Group
+`group.dev.whexy.t3code`, assigned to `dev.whexy.t3code` and its `.widgets` and
+`.sharing` IDs in the Developer Portal. Without the group, every target fails
+to provision. A build reaches internal testers without review.
