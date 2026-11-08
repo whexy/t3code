@@ -39,6 +39,11 @@ const CHECKS = {
   failing: msg("Failing", { $context: "CI checks filter" }),
 };
 const CHECKS_TITLES = { passing: msg("Passing checks"), failing: msg("Failing checks") };
+const UPSTREAM = {
+  all: msg("All repositories"),
+  hide: msg("Hide upstream"),
+  only: msg("Upstream only"),
+};
 const SORTS = {
   updated: msg("Recently updated"),
   created: msg("Newest created"),
@@ -135,6 +140,8 @@ export function usePullRequestListFilters(props: {
   /** Dot colors by lowercased label name, for the labels that have one. */
   readonly labelColors: Readonly<Record<string, string>>;
   readonly projects: readonly { id: string; title: string; environmentId: string }[];
+  /** Some project's origin is a fork, so the list holds its upstream's rows too. */
+  readonly upstreamAvailable: boolean;
   /** Opens a picker that searches the host, for a label or author no loaded row carries. */
   readonly onSearch: (kind: "labels" | "authors") => void;
 }) {
@@ -242,6 +249,15 @@ export function usePullRequestListFilters(props: {
           },
         });
         break;
+      case "upstream":
+        props.onChange({
+          ...value,
+          filters: {
+            ...value.filters,
+            upstream: next === "all" ? undefined : (next as "only" | "hide"),
+          },
+        });
+        break;
     }
   };
   const count =
@@ -252,6 +268,7 @@ export function usePullRequestListFilters(props: {
     Number(Boolean(value.filters.draft)) +
     Number(Boolean(value.filters.review)) +
     Number(Boolean(value.filters.checks)) +
+    Number(Boolean(value.filters.upstream)) +
     Number(Boolean(value.projectId));
   const more: MenuProps["actions"] = [
     {
@@ -275,6 +292,21 @@ export function usePullRequestListFilters(props: {
         : m(msg("Checks", { $context: "filter menu" })),
       subactions: choices("checks", resolveOptions(CHECKS, m), value.filters.checks ?? "all"),
     },
+    ...(props.upstreamAvailable
+      ? [
+          {
+            id: "upstream",
+            title: value.filters.upstream
+              ? m(UPSTREAM[value.filters.upstream])
+              : m(msg("Upstream", { $context: "filter menu" })),
+            subactions: choices(
+              "upstream",
+              resolveOptions(UPSTREAM, m),
+              value.filters.upstream ?? "all",
+            ),
+          },
+        ]
+      : []),
     {
       id: "projects",
       title:
