@@ -425,6 +425,11 @@ export function filterPullRequestList<
       return false;
     if ((filters.draft === "only" && !entry.isDraft) || (filters.draft === "hide" && entry.isDraft))
       return false;
+    if (
+      filters.upstream !== undefined &&
+      (entry.upstream === true) !== (filters.upstream === "only")
+    )
+      return false;
     if (filters.author) {
       const author = resolvePullRequestAuthorFilter(filters.author, viewer);
       if (normalize(entry.author?.login ?? "") !== normalize(author)) return false;

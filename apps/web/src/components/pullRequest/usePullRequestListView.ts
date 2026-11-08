@@ -205,6 +205,7 @@ export function usePullRequestQueryFilters(search: PullRequestsSearch, typedQuer
     ...(search.draft ? { draft: search.draft } : {}),
     ...(search.review ? { review: search.review } : {}),
     ...(search.checks ? { checks: search.checks } : {}),
+    ...(search.upstream ? { upstream: search.upstream } : {}),
     ...(search.author ? { author: search.author } : {}),
     ...(search.labels ? { labels: search.labels.map((label) => [label]) } : {}),
   };
