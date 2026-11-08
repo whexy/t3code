@@ -49,6 +49,8 @@ function project(input: {
   readonly provider?: string;
   readonly host?: string;
   readonly remoteUrl?: string;
+  /** The repository origin names when `repository` is its upstream. */
+  readonly fork?: string;
 }): OrchestrationProjectShell {
   const host = input.host ?? (input.provider === "gitlab" ? "gitlab.com" : "github.com");
   return {
@@ -66,6 +68,15 @@ function project(input: {
             },
             provider: SourceControlProviderKind.make(input.provider ?? "github"),
             displayName: input.repository,
+            ...(input.fork
+              ? {
+                  origin: {
+                    canonicalKey: `${host}/${input.fork}`,
+                    remoteUrl: `git@${host}:${input.fork}.git`,
+                    displayName: input.fork,
+                  },
+                }
+              : {}),
           },
         }
       : {}),
@@ -1104,6 +1115,136 @@ it.effect("reads a repository once when several worktrees share it", () =>
     assert.strictEqual(calls, 1);
     assert.strictEqual(result.entries.length, 1);
     assert.isUndefined(result.providers[0]?.projectIds);
+  }),
+);
+
+it.effect(
+  "lists a fork's own pull requests beside its upstream's, and reads only the side asked for",
+  () =>
+    Effect.gen(function* () {
+      const reads: Array<string> = [];
+      const numbers: Record<string, number> = {
+        "pingdotgg/t3code": 1,
+        "whexy/t3code": 2,
+        "acme/web": 3,
+      };
+      const service = yield* makeService({
+        projects: [
+          project({
+            id: "p1",
+            title: "t3code",
+            workspaceRoot: "/a",
+            repository: "pingdotgg/t3code",
+            fork: "whexy/t3code",
+          }),
+          project({ id: "p2", title: "web", workspaceRoot: "/b", repository: "acme/web" }),
+        ],
+        providers: [
+          fakePullRequestProvider(SourceControlProviderKind.make("github"), {
+            listChangeRequests: (input) => {
+              reads.push(input.repository);
+              const number = numbers[input.repository]!;
+              return Effect.succeed({
+                items: [changeRequest(number, `2026-07-0${number}T00:00:00Z`)],
+                truncated: false,
+                continues: true,
+              });
+            },
+            listChangeRequestStats: (input) =>
+              Effect.succeed(
+                input.changeRequests.map(({ repository, number }) => ({
+                  repository,
+                  number,
+                  additions: repository === "whexy/t3code" ? 10 : 20,
+                  deletions: 0,
+                })),
+              ),
+          }),
+        ],
+      });
+      const listed = (filters?: { readonly upstream: "only" | "hide" }) =>
+        service
+          .list({ state: "open", ...(filters ? { filters } : {}) })
+          .pipe(
+            Effect.map((result) =>
+              result.entries.map((entry) => [entry.projectId, entry.repository, entry.upstream]),
+            ),
+          );
+
+      assert.deepStrictEqual(yield* listed(), [
+        ["p2", "acme/web", undefined],
+        ["p1", "whexy/t3code", undefined],
+        ["p1", "pingdotgg/t3code", true],
+      ]);
+      reads.length = 0;
+      assert.deepStrictEqual(yield* listed({ upstream: "hide" }), [
+        ["p2", "acme/web", undefined],
+        ["p1", "whexy/t3code", undefined],
+      ]);
+      assert.deepStrictEqual(reads.toSorted(), ["acme/web", "whexy/t3code"]);
+      assert.deepStrictEqual(yield* listed({ upstream: "only" }), [
+        ["p1", "pingdotgg/t3code", true],
+      ]);
+
+      const { stats } = yield* service.listStats({
+        refs: [
+          { projectId: "p1" as ProjectId, repository: "whexy/t3code", number: 7 },
+          { projectId: "p1" as ProjectId, repository: "pingdotgg/t3code", number: 7 },
+        ],
+      });
+      assert.deepStrictEqual(
+        stats
+          .map((stat) => [stat.repository, stat.number, stat.additions])
+          .toSorted(([left], [right]) => String(left).localeCompare(String(right))),
+        [
+          ["pingdotgg/t3code", 7, 20],
+          ["whexy/t3code", 7, 10],
+        ],
+      );
+    }),
+);
+
+it.effect("does not call a repository an upstream when another project reads it as its own", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: [
+        project({
+          id: "p1",
+          title: "fork",
+          workspaceRoot: "/a",
+          repository: "pingdotgg/t3code",
+          fork: "whexy/t3code",
+        }),
+        project({ id: "p2", title: "clone", workspaceRoot: "/b", repository: "pingdotgg/t3code" }),
+      ],
+      providers: [
+        fakePullRequestProvider(SourceControlProviderKind.make("github"), {
+          listChangeRequests: (input) =>
+            Effect.succeed({
+              items: [
+                changeRequest(
+                  input.repository === "whexy/t3code" ? 2 : 1,
+                  input.repository === "whexy/t3code"
+                    ? "2026-07-02T00:00:00Z"
+                    : "2026-07-01T00:00:00Z",
+                ),
+              ],
+              truncated: false,
+              continues: true,
+            }),
+        }),
+      ],
+    });
+
+    const result = yield* service.list({ state: "open", filters: { upstream: "hide" } });
+
+    assert.deepStrictEqual(
+      result.entries.map((entry) => [entry.repository, entry.upstream]),
+      [
+        ["whexy/t3code", undefined],
+        ["pingdotgg/t3code", undefined],
+      ],
+    );
   }),
 );
 
