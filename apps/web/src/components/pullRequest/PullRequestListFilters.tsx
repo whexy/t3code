@@ -15,6 +15,7 @@ import {
   CircleXIcon,
   EyeOffIcon,
   FolderGit2Icon,
+  GitForkIcon,
   LayersIcon,
   ListFilterIcon,
   SearchIcon,
@@ -193,6 +194,12 @@ const CHECKS_OPTIONS = [
   },
   { value: "passing", label: msg("Passing", { $context: "checks filter" }), Icon: CircleCheckIcon },
   { value: "failing", label: msg("Failing", { $context: "checks filter" }), Icon: CircleXIcon },
+] as const satisfies ReadonlyArray<PullRequestFilterOption<string>>;
+
+const UPSTREAM_OPTIONS = [
+  { value: UNFILTERED_VALUE, label: "All", Icon: LayersIcon },
+  { value: "hide", label: "Hide upstream", Icon: EyeOffIcon },
+  { value: "only", label: "Upstream only", Icon: GitForkIcon },
 ] as const satisfies ReadonlyArray<PullRequestFilterOption<string>>;
 
 function PullRequestFilterRadioGroup<Value extends string>({
@@ -528,6 +535,7 @@ export function PullRequestFiltersMenu({
   onFilters,
   authorOptions = [],
   labelOptions = [],
+  upstreamAvailable = false,
   optionScope,
   host,
   hostOptions,
@@ -552,6 +560,8 @@ export function PullRequestFiltersMenu({
   onFilters: (filters: PullRequestListFilters) => void;
   authorOptions?: ReadonlyArray<PullRequestAuthorFacet>;
   labelOptions?: ReadonlyArray<PullRequestLabelFacet>;
+  /** Some project's origin is a fork, so the list holds its upstream's rows too. */
+  upstreamAvailable?: boolean;
   optionScope: ReadonlyArray<PullRequestFilterOptionScope>;
   host: string | undefined;
   hostOptions: ReadonlyArray<PullRequestFilterOption<string>>;
@@ -577,6 +587,7 @@ export function PullRequestFiltersMenu({
     filters.draft,
     filters.review,
     filters.checks,
+    filters.upstream,
     filters.author,
     ...selectedLabels,
   ].filter(Boolean).length;
@@ -673,6 +684,14 @@ export function PullRequestFiltersMenu({
           options={resolveFilterOptions(CHECKS_OPTIONS, resolve)}
           onChange={(checks) => updateFilter("checks", checks)}
         />
+        {upstreamAvailable ? (
+          <PullRequestFilterRadioSubmenu
+            label="Upstream"
+            value={filters.upstream ?? UNFILTERED_VALUE}
+            options={UPSTREAM_OPTIONS}
+            onChange={(upstream) => updateFilter("upstream", upstream)}
+          />
+        ) : null}
         {hostOptions.length > 2 ? (
           <>
             <MenuSeparator />
