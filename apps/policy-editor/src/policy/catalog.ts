@@ -147,12 +147,18 @@ function controlFor(shape: Shape, copy: SettingCopy | undefined): SettingControl
   if (wanted === "switch" && (onlyKind(shape, "Boolean") || unknown) && !shape.nullable) {
     return { kind: "switch" };
   }
-  if (wanted === "select" && (onlyKind(shape, "literal") || unknown)) {
-    const copied = copy?.options ?? [];
+  const copied = copy?.options ?? [];
+  // Any string is valid, so the copy's choices are what is offered, as the Settings page lists them.
+  const openString =
+    copied.length > 0 &&
+    shape.kinds.has("String") &&
+    [...shape.kinds].every((kind) => kind === "String" || kind === "literal");
+  if (wanted === "select" && (onlyKind(shape, "literal") || unknown || openString)) {
     // The schema's values decide what is offered; the Settings page supplies their labels.
-    const values: ControlOptionValue[] = unknown
-      ? copied.map((option) => option.value)
-      : [...(shape.nullable ? [null] : []), ...shape.literals];
+    const values: ControlOptionValue[] =
+      unknown || openString
+        ? copied.map((option) => option.value)
+        : [...(shape.nullable ? [null] : []), ...shape.literals];
     return {
       kind: "select",
       options: values.map((value) => {
