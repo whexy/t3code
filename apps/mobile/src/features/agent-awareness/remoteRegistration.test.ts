@@ -26,6 +26,7 @@ import { makeRelayDeviceRegistrationRequest } from "./registrationPayload";
 import {
   __resetAgentAwarenessRemoteRegistrationForTest,
   getAgentAwarenessRegistrationStatus,
+  installSelfHostedPushRegistration,
   refreshAgentAwarenessRegistration,
   registerLiveActivityPushToken,
   releaseAgentAwarenessRelayTokenProvider,
@@ -70,6 +71,15 @@ const registrationRecordStore = vi.hoisted(() => ({
     readonly signature: string;
     readonly pushToStartToken?: string;
   } | null,
+}));
+
+const nativePushConfig = vi.hoisted(() => ({
+  current: null as { readonly url: string; readonly token: string } | null,
+}));
+
+vi.mock("expo", () => ({
+  requireOptionalNativeModule: (name: string) =>
+    name === "T3PushConfig" ? nativePushConfig.current : null,
 }));
 
 vi.mock("expo-constants", () => ({
@@ -242,6 +252,7 @@ describe("makeRelayDeviceRegistrationRequest", () => {
     secureStore.clear();
     backgroundRuntime.pending.length = 0;
     Constants.expoConfig!.extra = {};
+    nativePushConfig.current = null;
     __resetAgentAwarenessRemoteRegistrationForTest();
     appStateMock.listeners.length = 0;
     registrationRecordStore.current = null;
@@ -547,6 +558,43 @@ describe("makeRelayDeviceRegistrationRequest", () => {
       ).toMatchObject({ ok: true });
       expect(getAgentAwarenessRegistrationStatus()).toBe("registered");
     }).pipe(Effect.provide(layerRelayTest));
+  });
+
+  it.effect("registers the APNs device with the build's push service without Connect", () => {
+    const fetchMock = vi.fn((_input: RequestInfo | URL, _init?: RequestInit) =>
+      Promise.resolve(Response.json({ ok: true })),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    Constants.expoConfig!.extra = { relay: { url: "https://relay.example.test/" } };
+    nativePushConfig.current = { url: "https://push.example.test/", token: "phone-token" };
+
+    installSelfHostedPushRegistration();
+    // Builds without a Connect account deactivate it at startup.
+    setAgentAwarenessRelayTokenProvider(null);
+
+    return Effect.gen(function* () {
+      yield* runBackgroundOperations();
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const request = new Request(...(fetchMock.mock.calls[0] as [RequestInfo | URL, RequestInit]));
+      expect(request.method).toBe("POST");
+      expect(request.url).toBe("https://push.example.test/v1/mobile/devices");
+      expect(request.headers.get("authorization")).toBe("Bearer phone-token");
+      expect(request.headers.get("dpop")).toBeNull();
+      expect(yield* Effect.promise(() => request.json())).toMatchObject({
+        deviceId: "device-1",
+        pushToken: "apns-token",
+        apsEnvironment: "production",
+      });
+      expect(getAgentAwarenessRegistrationStatus()).toBe("registered");
+    }).pipe(
+      Effect.provideService(FetchHttpClient.Fetch, globalThis.fetch),
+      Effect.provide(
+        ManagedRelayLayer.layer("https://relay.example.test", "https://push.example.test").pipe(
+          Layer.provide(Layer.mergeAll(FetchHttpClient.layer, Dpop.layer)),
+        ),
+      ),
+    );
   });
 
   it.effect("keeps a registered status when a later refresh fails", () => {
