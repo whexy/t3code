@@ -2,7 +2,9 @@
 // which loads Drizzle, Alchemy and Cloudflare queues at import time. Keep it in step; each
 // difference is a rule of .agents/skills/verify-self-hosted-push/SKILL.md and says so below.
 import type {
+  RelayAgentActivityAggregateRow,
   RelayAgentActivityAggregateState,
+  RelayAgentActivityState,
   RelayAgentAwarenessPreferences,
 } from "@t3tools/contracts/relay";
 import {
@@ -13,13 +15,18 @@ import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
+import { makeAggregateState } from "../../../infra/relay/src/agentActivity/agentActivityAggregate.ts";
 import {
-  alertForAttentionTransition,
-  alertForNewlyTerminal,
+  alertForActivityRows,
+  attentionTransitionRows,
   rowPhasesChanged,
   shouldAlertForActivity,
+  terminalTransitionRows,
 } from "../../../infra/relay/src/agentActivity/agentActivityAlerts.ts";
-import { notificationForActivity } from "../../../infra/relay/src/agentActivity/agentActivityPayloads.ts";
+import {
+  isTerminalPhase,
+  notificationForActivity,
+} from "../../../infra/relay/src/agentActivity/agentActivityPayloads.ts";
 import type * as Apns from "../../../infra/relay/src/agentActivity/ApnsClient.ts";
 import type {
   ApnsLiveActivityAlert,
@@ -49,21 +56,28 @@ export interface TargetRow {
   readonly last_live_activity_delivery_at: string | null;
   readonly sent_aggregate_json: string | null;
   readonly send_unsure: boolean;
+  /** An end was chosen and APNs has not yet accepted one. */
+  readonly end_pending: boolean;
 }
 
-export type ChosenDelivery =
+export type CardDelivery =
   | {
       readonly kind: "live_activity_update";
       readonly token: string;
       readonly aggregate: RelayAgentActivityAggregateState;
       readonly alert: ApnsLiveActivityAlert | null;
+      /** The rows the alert rings for. */
+      readonly alerted: ReadonlyArray<RelayAgentActivityAggregateRow>;
     }
   | {
       readonly kind: "live_activity_end";
       readonly token: string;
       readonly aggregate: null;
       readonly alert: null;
-    }
+    };
+
+export type ChosenDelivery =
+  | CardDelivery
   | {
       readonly kind: "push_notification";
       readonly token: string;
@@ -164,25 +178,43 @@ function isFreshlyArmed(target: TargetRow, nowMs: number): boolean {
   );
 }
 
+/** `alertForAttentionTransition ?? alertForNewlyTerminal`, as the rows the alert rings for. */
+function alertedRows(input: {
+  readonly previousAggregate: RelayAgentActivityAggregateState | null;
+  readonly nextAggregate: RelayAgentActivityAggregateState;
+  readonly preferences: RelayAgentAwarenessPreferences;
+  readonly nowMs: number;
+}): ReadonlyArray<RelayAgentActivityAggregateRow> {
+  const attention = attentionTransitionRows(input);
+  return attention.length > 0
+    ? attention
+    : terminalTransitionRows({ ...input, includeUnobserved: true });
+}
+
+const endDelivery = (token: string): CardDelivery => ({
+  kind: "live_activity_end",
+  token,
+  aggregate: null,
+  alert: null,
+});
+
 // Suppressed Live Activity updates must not fall back to alert pushes or unchanged replays would ring.
 function chooseLiveActivityDelivery(input: {
   readonly target: TargetRow;
   readonly aggregate: RelayAgentActivityAggregateState | null;
   readonly nowMs: number;
-  readonly replay: boolean;
-}): ChosenDelivery | "suppressed" | null {
+}): CardDelivery | "suppressed" | null {
+  const token = input.target.activity_push_token;
+  // Differs (EndIsFinal): an end that may have arrived is resent until APNs accepts one, so no
+  // update or alert goes to a card the phone may no longer show.
+  if (token && input.target.end_pending) {
+    return endDelivery(token);
+  }
   const preferences = parsePreferences(input.target.preferences_json);
   if (preferences?.liveActivitiesEnabled === false) {
-    return input.target.activity_push_token
-      ? {
-          kind: "live_activity_end",
-          token: input.target.activity_push_token,
-          aggregate: null,
-          alert: null,
-        }
-      : null;
+    return token ? endDelivery(token) : null;
   }
-  if (!input.target.activity_push_token) {
+  if (!token) {
     return null;
   }
   if (input.aggregate === null) {
@@ -190,17 +222,12 @@ function chooseLiveActivityDelivery(input: {
     if (isFreshlyArmed(input.target, input.nowMs)) {
       return null;
     }
-    return {
-      kind: "live_activity_end",
-      token: input.target.activity_push_token,
-      aggregate: null,
-      alert: null,
-    };
+    return endDelivery(token);
   }
   const nextAggregate = input.aggregate;
   const recordedAggregate = parseAggregate(input.target.last_aggregate_json);
   // Differs (WriteAheadSend): alerts compare with the last sent aggregate, which a crash or
-  // timeout may have left unrecorded. A missing recorded baseline is a replay: no alert.
+  // timeout may have left unrecorded. A card with no recorded baseline gets no alert.
   const alertBaseline =
     recordedAggregate === null
       ? null
@@ -217,48 +244,65 @@ function chooseLiveActivityDelivery(input: {
   if (!update) {
     return "suppressed";
   }
+  // Differs (ReplayAlertsFromBaseline): a replay alerts too. Upstream silences replays because it
+  // keeps no record of what it last sent; sent_aggregate_json is that record, so a replay cannot
+  // re-ring an alert that may already be on the phone.
+  const alerted = preferences?.notificationsEnabled
+    ? alertedRows({
+        previousAggregate: alertBaseline,
+        nextAggregate,
+        preferences,
+        nowMs: input.nowMs,
+      })
+    : [];
   return {
     kind: "live_activity_update",
-    token: input.target.activity_push_token,
+    token,
     aggregate: nextAggregate,
-    alert:
-      input.replay || !preferences?.notificationsEnabled
-        ? null
-        : (alertForAttentionTransition({
-            previousAggregate: alertBaseline,
-            nextAggregate,
-            preferences,
-          }) ??
-          alertForNewlyTerminal({
-            previousAggregate: alertBaseline,
-            nextAggregate,
-            preferences,
-            nowMs: input.nowMs,
-            includeUnobserved: true,
-          })),
+    alert: alertForActivityRows(alerted),
+    alerted,
   };
 }
 
+// Differs: never falls back to a notification. A phone without a card is notified per publish
+// by notificationForPublish, as upstream's notification-only path; upstream's fallback alerts
+// about the aggregate's first row, which may be another thread's.
 export function chooseDelivery(input: {
   readonly target: TargetRow;
   readonly aggregate: RelayAgentActivityAggregateState | null;
   readonly nowMs: number;
-  readonly replay: boolean;
-}): ChosenDelivery | null {
+}): CardDelivery | null {
   const liveActivityDelivery = chooseLiveActivityDelivery(input);
-  if (liveActivityDelivery === "suppressed") {
-    return null;
-  }
-  if (liveActivityDelivery) {
-    return liveActivityDelivery;
-  }
-  const notification = input.replay ? null : notificationForAggregate(input);
+  return liveActivityDelivery === "suppressed" ? null : liveActivityDelivery;
+}
+
+/** Alerts ride on the card; without one, or while it is ending, they go out as notifications. */
+export function hasCard(target: TargetRow): boolean {
+  return (
+    target.activity_push_token !== null &&
+    !target.end_pending &&
+    parsePreferences(target.preferences_json)?.liveActivitiesEnabled !== false
+  );
+}
+
+/** AgentActivityPublisher's `notificationOnlyAggregate`: built from the published state alone. */
+export function notificationForPublish(input: {
+  readonly target: TargetRow;
+  readonly state: RelayAgentActivityState;
+  readonly nowMs: number;
+}): ChosenDelivery | null {
+  const terminal = isTerminalPhase(input.state);
+  const notification = notificationForAggregate({
+    target: input.target,
+    aggregate: makeAggregateState({
+      activeStates: terminal ? [] : [input.state],
+      terminalState: terminal ? input.state : null,
+      nowMs: input.nowMs,
+    }),
+    nowMs: input.nowMs,
+  });
   return notification && input.target.push_token
-    ? {
-        kind: "push_notification",
-        token: input.target.push_token,
-        notification,
-      }
+    ? { kind: "push_notification", token: input.target.push_token, notification }
     : null;
 }
 
