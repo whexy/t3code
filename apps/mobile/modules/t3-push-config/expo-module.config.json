@@ -1,0 +1,7 @@
+{
+  "platforms": ["apple"],
+  "apple": {
+    "modules": ["T3PushConfigModule"],
+    "podspecPath": "ios/T3PushConfig.podspec"
+  }
+}
