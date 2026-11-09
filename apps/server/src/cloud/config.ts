@@ -2,6 +2,7 @@ import {
   RelayManagedEndpointOrigin,
   RelayManagedEndpointRuntimeConfig,
 } from "@t3tools/contracts/relay";
+import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -44,6 +45,15 @@ export function isAgentActivityPublishingEnabledValue(value: string | null): boo
   return value === "true";
 }
 
+/** The fork's self-hosted push service; when set it replaces the T3 Connect relay link. */
+export const readSelfHostedPushTarget = Config.all({
+  url: Config.NonEmptyString("T3CODE_PUSH_URL"),
+  environmentCredential: Config.NonEmptyString("T3CODE_PUSH_TOKEN"),
+}).pipe(
+  Effect.map(({ url, environmentCredential }) => ({ url, issuer: url, environmentCredential })),
+  Effect.orElseSucceed(() => null),
+);
+
 /**
  * Mirrors the per-publish gate in AgentAwarenessRelay, so the descriptor
     capability never advertises publishing that the publisher would skip.
@@ -52,6 +62,7 @@ export const readAgentActivityPublishingActive: (
   secrets: ServerSecretStore.ServerSecretStore["Service"],
 ) => Effect.Effect<boolean> = Effect.fn("config.readAgentActivityPublishingActive")(
   function* (secrets: ServerSecretStore.ServerSecretStore["Service"]) {
+    if ((yield* readSelfHostedPushTarget) !== null) return true;
     const readSecretString = (name: string) =>
       secrets
         .get(name)
