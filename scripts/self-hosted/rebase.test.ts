@@ -22,18 +22,18 @@ const gitEnv = {
   GIT_COMMITTER_EMAIL: "t@example.com",
 };
 
-// Pins like nix/update-sources.sh; RACE=once|always pushes to the fork meanwhile.
+// Pins like nix/update-sources.sh; RACE=once|always pushes to dev meanwhile.
 const updateSources = `#!/usr/bin/env bash
 set -euo pipefail
 printf '{"version":"%s","x86_64-linux":{}}\\n' "\${1#v}" > nix/sources.json
 if [[ "\${RACE:-}" == always || ( "\${RACE:-}" == once && ! -e "$STATE_DIR/raced" ) ]]; then
   touch "$STATE_DIR/raced"
   clone="$(mktemp -d)"
-  git clone -q -b self-hosted-nightly "$ORIGIN" "$clone"
+  git clone -q -b dev "$ORIGIN" "$clone"
   echo r >> "$clone/race.txt"
   git -C "$clone" add race.txt
   git -C "$clone" commit -qm race
-  git -C "$clone" push -q origin self-hosted-nightly
+  git -C "$clone" push -q origin dev
 fi
 `;
 
@@ -41,6 +41,11 @@ type Options = {
   readonly tag?: string;
   readonly forkCommits?: (git: (...args: string[]) => string, write: Write) => void;
   readonly forkOnNewer?: boolean;
+  /**
+   * Where self-hosted-nightly starts; `merged` is a promote pull request's merge commit,
+   * `rebased` the old dev after dev was rebased onto the newer release and pinned by hand.
+   */
+  readonly nightly?: "dev" | "behind" | "merged" | "stray" | "rebased";
   readonly race?: "once" | "always";
   readonly pushUrl?: string;
 };
@@ -79,7 +84,7 @@ function runRebase(options: Options = {}) {
     upGit("clone", "-q", up, fork);
     const git = at(fork);
     const write = writer(fork);
-    git("checkout", "-q", "-b", "self-hosted-nightly", older);
+    git("checkout", "-q", "-b", "dev", older);
     write("nix/update-sources.sh", updateSources);
     write("nix/sources.json", '{"version":"unpinned"}\n');
     write("fork.txt", "fork\n");
@@ -94,11 +99,41 @@ function runRebase(options: Options = {}) {
     if (options.forkOnNewer) {
       git("rebase", "-q", "--onto", newer, older);
     }
+    const nightly = options.nightly ?? "dev";
+    git(
+      "branch",
+      "self-hosted-nightly",
+      nightly === "behind" || nightly === "merged" ? "dev~1" : "dev",
+    );
+    if (nightly === "merged" || nightly === "stray") {
+      git("checkout", "-q", "self-hosted-nightly");
+      if (nightly === "merged") git("merge", "-q", "--no-ff", "-m", "Merge dev", "dev");
+      else {
+        write("stray.txt", "stray\n");
+        git("add", "stray.txt");
+        git("commit", "-qm", "fix: pushed straight to nightly");
+      }
+      git("checkout", "-q", "dev");
+    }
+    if (nightly === "rebased") {
+      const picks = git(
+        "rev-list",
+        "--reverse",
+        "--invert-grep",
+        "--grep=^chore(nix): pin sources ",
+        `${older}..dev`,
+      );
+      git("checkout", "-q", "-B", "dev", newer);
+      git("cherry-pick", ...picks.split("\n"));
+      write("nix/sources.json", `{"version":"${newer.slice(1)}"}\n`);
+      git("commit", "-qam", `chore(nix): pin sources for ${newer}`);
+    }
+    const nightlyBefore = git("rev-parse", "self-hosted-nightly");
     const origin = NodePath.join(root, "origin.git");
     git("clone", "-q", "--bare", ".", origin);
 
     const work = NodePath.join(root, "work");
-    git("clone", "-q", "-b", "self-hosted-nightly", origin, work);
+    git("clone", "-q", "-b", "dev", origin, work);
     const stateDir = NodePath.join(root, "state");
     const run = NodeChildProcess.spawnSync("bash", [script], {
       cwd: work,
@@ -117,12 +152,21 @@ function runRebase(options: Options = {}) {
       NodeFS.existsSync(NodePath.join(stateDir, name))
         ? NodeFS.readFileSync(NodePath.join(stateDir, name), "utf8")
         : "";
+    const remote = at(origin);
+    const nightlyAfter = remote("rev-parse", "self-hosted-nightly");
     return {
       status: run.status,
       state: /^state=(\S+)/m.exec(run.stdout)?.[1] ?? null,
+      promote: / promote=(\S+)/.exec(run.stdout)?.[1] ?? null,
       stage: read("stage"),
-      origin: at(origin)("log", "--format=%s", "self-hosted-nightly").split("\n"),
-      sources: at(origin)("show", "self-hosted-nightly:nix/sources.json"),
+      origin: remote("log", "--format=%s", "dev").split("\n"),
+      sources: remote("show", "dev:nix/sources.json"),
+      nightly:
+        nightlyAfter === nightlyBefore
+          ? "unchanged"
+          : nightlyAfter === remote("rev-parse", "dev")
+            ? "dev"
+            : "elsewhere",
     };
   } finally {
     NodeFS.rmSync(root, { recursive: true, force: true });
@@ -131,7 +175,7 @@ function runRebase(options: Options = {}) {
 
 it("rebases onto a newer release, drops the old pin and pins the new one", () => {
   const result = runRebase();
-  expect(result).toMatchObject({ status: 0, state: "PUSHED" });
+  expect(result).toMatchObject({ status: 0, state: "PUSHED", promote: "pushed", nightly: "dev" });
   expect(result.origin).toEqual([
     `chore(nix): pin sources for ${newer}`,
     "fix: later fork patch",
@@ -146,7 +190,7 @@ it.each([
   ["NOOP(older)", { tag: older, forkOnNewer: true }],
 ] as const)("stops at %s without pushing", (state, options) => {
   const result = runRebase(options);
-  expect(result).toMatchObject({ status: 0, state });
+  expect(result).toMatchObject({ status: 0, state, promote: "current", nightly: "unchanged" });
   expect(result.origin).not.toContain(`chore(nix): pin sources for ${newer}`);
 });
 
@@ -173,14 +217,42 @@ it("fails at rebase on any other conflict, pushing nothing", () => {
       git("commit", "-qm", "fix: conflicts");
     },
   });
-  expect(result).toMatchObject({ status: 1, state: null, stage: "rebase" });
+  expect(result).toMatchObject({ status: 1, state: null, stage: "rebase", nightly: "unchanged" });
   expect(result.origin[0]).toBe("fix: conflicts");
 });
 
 it("starts over once when the lease is rejected", () => {
   const result = runRebase({ race: "once" });
-  expect(result).toMatchObject({ status: 0, state: "PUSHED" });
+  expect(result).toMatchObject({ status: 0, state: "PUSHED", nightly: "dev" });
   expect(result.origin.slice(0, 2)).toEqual([`chore(nix): pin sources for ${newer}`, "race"]);
+});
+
+it.each([
+  ["a manual run promotes dev merges", "behind", older, "NOOP(current)", "pushed", "dev"],
+  [
+    "a merged promote pull request is current",
+    "merged",
+    older,
+    "NOOP(current)",
+    "current",
+    "unchanged",
+  ],
+  ["a release replaces a promote merge commit", "merged", newer, "PUSHED", "pushed", "dev"],
+  [
+    "a hand rebase replaces the nightly it rewrote",
+    "rebased",
+    newer,
+    "NOOP(current)",
+    "pushed",
+    "dev",
+  ],
+] as const)("%s", (_name, nightly, tag, state, promote, moved) => {
+  expect(runRebase({ nightly, tag })).toMatchObject({ status: 0, state, promote, nightly: moved });
+});
+
+it("stops at promote when nightly has a commit dev never had", () => {
+  const result = runRebase({ nightly: "stray", tag: older });
+  expect(result).toMatchObject({ status: 1, stage: "promote", nightly: "unchanged" });
 });
 
 it("fails as push-race when the lease is rejected twice", () => {
