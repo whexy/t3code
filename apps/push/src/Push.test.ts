@@ -402,6 +402,33 @@ describe("t3-push deliveries", () => {
     }),
   );
 
+  it.effect("alerts an ask and a completion delivered together once, naming both", () =>
+    Effect.gen(function* () {
+      const { apns, push } = yield* setup();
+      yield* registerPhone(push, { card: true });
+      yield* publish(push, "h2", "running");
+      const gate = yield* Deferred.make<void>();
+      apns.script.push({ _tag: "gate", gate });
+      const h1Runs = yield* startPublish(push, "h1", "running");
+      yield* Queue.take(apns.sent);
+
+      const together = [
+        yield* startPublish(push, "h1", "waiting_for_input"),
+        yield* startPublish(push, "h2", "completed"),
+      ];
+      yield* Deferred.succeed(gate, undefined);
+      yield* Fiber.join(h1Runs);
+      yield* Fiber.joinAll(together);
+      yield* registerPhone(push, { card: false, liveActivitiesEnabled: false });
+      // A title change, or a host retrying after its timeout.
+      yield* publish(push, "h2", "completed");
+      expect(yield* Queue.clear(apns.sent)).toMatchObject([
+        { event: "update", alert: "Thread on h1 needs input · Thread on h2 done" },
+        { event: "end", alert: null },
+      ]);
+    }),
+  );
+
   it.effect("notifies a thread that asks while an end of unknown outcome is pending", () =>
     Effect.gen(function* () {
       const { apns, push } = yield* setup();
