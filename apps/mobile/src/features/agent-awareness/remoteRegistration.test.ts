@@ -32,6 +32,7 @@ import {
   __resetAgentAwarenessRemoteRegistrationForTest,
   agentAwarenessNotificationsReady,
   getAgentAwarenessRegistrationStatus,
+  installSelfHostedPushRegistration,
   refreshActiveLiveActivityRemoteRegistration,
   refreshAgentAwarenessRegistration,
   registerLiveActivityPushToken,
@@ -79,6 +80,10 @@ const registrationRecordStore = vi.hoisted(() => ({
     readonly signature: string;
     readonly pushToStartToken?: string;
   } | null,
+}));
+
+const nativePushConfig = vi.hoisted(() => ({
+  current: null as { readonly url: string; readonly token: string } | null,
 }));
 
 vi.mock("expo-constants", () => ({
@@ -146,7 +151,11 @@ vi.mock("expo-crypto", () => ({
 vi.mock("expo", async () => {
   const { createNodeDpopKeysModule } = await import("../cloud/dpop.testing");
   const dpopKeys = createNodeDpopKeysModule();
-  return { requireNativeModule: () => dpopKeys };
+  return {
+    requireNativeModule: () => dpopKeys,
+    requireOptionalNativeModule: (name: string) =>
+      name === "T3PushConfig" ? nativePushConfig.current : null,
+  };
 });
 
 vi.mock("expo-secure-store", () => ({
@@ -268,6 +277,7 @@ describe("makeRelayDeviceRegistrationRequest", () => {
     secureStore.clear();
     backgroundRuntime.pending.length = 0;
     Constants.expoConfig!.extra = {};
+    nativePushConfig.current = null;
     __resetAgentAwarenessRemoteRegistrationForTest();
     appStateMock.listeners.length = 0;
     registrationRecordStore.current = null;
@@ -577,6 +587,49 @@ describe("makeRelayDeviceRegistrationRequest", () => {
       ).toMatchObject({ ok: true });
       expect(getAgentAwarenessRegistrationStatus()).toBe("registered");
     }).pipe(Effect.provide(layerRelayTest));
+  });
+
+  it.effect("registers the APNs device with the build's push service without Connect", () => {
+    const fetchMock = vi.fn((_input: RequestInfo | URL, _init?: RequestInit) =>
+      Promise.resolve(Response.json({ ok: true })),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    Constants.expoConfig!.extra = { relay: { url: "https://relay.example.test/" } };
+    nativePushConfig.current = { url: "https://push.example.test/", token: "phone-token" };
+
+    installSelfHostedPushRegistration();
+    // Builds without a Connect account deactivate it at startup.
+    setAgentAwarenessRelayTokenProvider(null);
+
+    return Effect.gen(function* () {
+      yield* runBackgroundOperations();
+
+      const requests = fetchMock.mock.calls.map((call) => new Request(...call));
+      expect(
+        requests.every((request) => request.url.startsWith("https://push.example.test/")),
+      ).toBe(true);
+      const deviceRequests = requests.filter((request) =>
+        request.url.endsWith("/v1/mobile/devices"),
+      );
+      expect(deviceRequests).toHaveLength(1);
+      const request = deviceRequests[0]!;
+      expect(request.method).toBe("POST");
+      expect(request.headers.get("authorization")).toBe("Bearer phone-token");
+      expect(request.headers.get("dpop")).toBeNull();
+      expect(yield* Effect.promise(() => request.json())).toMatchObject({
+        deviceId: "device-1",
+        pushToken: "apns-token",
+        apsEnvironment: "production",
+      });
+      expect(getAgentAwarenessRegistrationStatus()).toBe("registered");
+    }).pipe(
+      Effect.provideService(FetchHttpClient.Fetch, globalThis.fetch),
+      Effect.provide(
+        ManagedRelayLayer.layer("https://relay.example.test", "https://push.example.test").pipe(
+          Layer.provide(Layer.mergeAll(FetchHttpClient.layer, Dpop.layer)),
+        ),
+      ),
+    );
   });
 
   it.effect("keeps a registered status when a later refresh fails", () => {
