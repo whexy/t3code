@@ -131,17 +131,22 @@ const preferences = {
   notifyOnFailure: true,
 };
 
-const registerPhone = (push: Push.Push["Service"], options: { readonly card: boolean }) =>
+const phoneRegistration = (liveActivitiesEnabled: boolean) => ({
+  deviceId: "phone",
+  label: "iPhone",
+  platform: "ios" as const,
+  iosMajorVersion: 18,
+  apsEnvironment: "sandbox" as const,
+  pushToken: "push-token",
+  preferences: { ...preferences, liveActivitiesEnabled },
+});
+
+const registerPhone = (
+  push: Push.Push["Service"],
+  options: { readonly card: boolean; readonly liveActivitiesEnabled?: boolean },
+) =>
   Effect.gen(function* () {
-    yield* push.registerDevice({
-      deviceId: "phone",
-      label: "iPhone",
-      platform: "ios",
-      iosMajorVersion: 18,
-      apsEnvironment: "sandbox",
-      pushToken: "push-token",
-      preferences,
-    });
+    yield* push.registerDevice(phoneRegistration(options.liveActivitiesEnabled ?? true));
     if (options.card) {
       yield* push.registerLiveActivity({ deviceId: "phone", activityPushToken: "activity-token" });
     }
@@ -149,13 +154,10 @@ const registerPhone = (push: Push.Push["Service"], options: { readonly card: boo
 
 const decodeState = Schema.decodeUnknownSync(RelayAgentActivityState);
 
-const publish = (push: Push.Push["Service"], host: string, phase: RelayAgentAwarenessPhase) =>
-  Effect.gen(function* () {
-    const updatedAt = DateTime.formatIso(yield* DateTime.now);
-    return yield* push.publish({
-      environmentId: host,
-      threadId: "thread",
-      state: decodeState({
+const threadState = (host: string, phase: RelayAgentAwarenessPhase) =>
+  DateTime.now.pipe(
+    Effect.map((now) =>
+      decodeState({
         environmentId: host,
         threadId: "thread",
         projectTitle: "Project",
@@ -163,23 +165,35 @@ const publish = (push: Push.Push["Service"], host: string, phase: RelayAgentAwar
         phase,
         headline: phase,
         modelTitle: "Model",
-        updatedAt,
+        updatedAt: DateTime.formatIso(now),
         deepLink: "/threads/thread",
       }),
-    });
-  });
+    ),
+  );
+
+const publish = (push: Push.Push["Service"], host: string, phase: RelayAgentAwarenessPhase) =>
+  threadState(host, phase).pipe(
+    Effect.flatMap((state) => push.publish({ environmentId: host, threadId: "thread", state })),
+  );
 
 /** A host request in flight: started now, so its row is stored before this returns. */
 const startPublish = (push: Push.Push["Service"], host: string, phase: RelayAgentAwarenessPhase) =>
   publish(push, host, phase).pipe(Effect.forkChild({ startImmediately: true }));
 
+/** The host's thread is gone: an in-flight delete. */
+const startUnpublish = (push: Push.Push["Service"], host: string) =>
+  push
+    .publish({ environmentId: host, threadId: "thread", state: null })
+    .pipe(Effect.forkChild({ startImmediately: true }));
+
 const isPending = (fiber: Fiber.Fiber<unknown, unknown>) => fiber.pollUnsafe() === undefined;
 
 /**
  * A recorded card showing h1 running; then APNs accepts h1's move to `phase`
- * and the process dies before recording it. Returns the restarted process.
+ * and the process dies before recording it. Returns the restarted process,
+ * whose startup replay APNs answers with `replayReply`.
  */
-const crashAfterApnsAccepts = (phase: RelayAgentAwarenessPhase) =>
+const crashAfterApnsAccepts = (phase: RelayAgentAwarenessPhase, replayReply?: Reply) =>
   Effect.gen(function* () {
     const apns = yield* fakeApns;
     const store = yield* Layer.build(PushStore.layer(":memory:"));
@@ -193,6 +207,7 @@ const crashAfterApnsAccepts = (phase: RelayAgentAwarenessPhase) =>
     expect((yield* Queue.take(apns.sent)).alert).toBe("Thread on h1");
     yield* Scope.close(doomed, Exit.void);
     yield* Fiber.interrupt(lost);
+    if (replayReply !== undefined) apns.script.push(replayReply);
     return { apns, after: yield* startPush(store, apns.client, yield* Effect.scope) };
   });
 
@@ -253,20 +268,18 @@ describe("t3-push deliveries", () => {
   );
 
   it.effect(
-    "resends the card after a crash between APNs accepting and the record, without the alert",
+    "resends the card on restart after a crash between APNs accepting and the record, without ringing again",
     () =>
       Effect.gen(function* () {
         const { apns, after } = yield* crashAfterApnsAccepts("waiting_for_approval");
-        // The host retries the state its timed-out request carried.
-        const retried = yield* publish(after, "h1", "waiting_for_approval");
+        // The replay alerts against the write-ahead aggregate, which already holds the approval.
         expect(yield* Queue.take(apns.sent)).toEqual({
           pushType: "liveactivity",
           event: "update",
           alert: null,
           rows: ["thread:waiting_for_approval"],
         });
-        expect(retried.deliveries.map((delivery) => delivery.ok)).toEqual([true]);
-        // Recorded now, so the same state again is skipped.
+        // Recorded now, so the host's retry of the state its failed request carried is skipped.
         expect((yield* publish(after, "h1", "waiting_for_approval")).deliveries).toEqual([]);
         expect(yield* Queue.size(apns.sent)).toBe(0);
       }),
@@ -274,11 +287,48 @@ describe("t3-push deliveries", () => {
 
   it.effect("does not skip a state equal to the recorded one while a send is unrecorded", () =>
     Effect.gen(function* () {
-      const { apns, after } = yield* crashAfterApnsAccepts("waiting_for_approval");
+      const { apns, after } = yield* crashAfterApnsAccepts("waiting_for_approval", {
+        _tag: "status",
+        status: 500,
+        reason: "InternalServerError",
+      });
+      // The restart's replay is refused, so the send before the crash stays unrecorded.
+      expect((yield* Queue.take(apns.sent)).rows).toEqual(["thread:waiting_for_approval"]);
       // The approval is answered: the thread is back to the last recorded state,
       // but the phone may be showing the approval.
-      yield* publish(after, "h1", "running");
+      const runs = yield* startPublish(after, "h1", "running");
+      yield* TestClock.adjust("1 second");
       expect((yield* Queue.take(apns.sent)).rows).toEqual(["thread:running"]);
+      yield* Fiber.join(runs);
+    }),
+  );
+
+  it.effect("alerts once on the startup replay for a row stored just before a crash", () =>
+    Effect.gen(function* () {
+      const apns = yield* fakeApns;
+      const store = yield* Layer.build(PushStore.layer(":memory:"));
+      const doomed = yield* Scope.make();
+      const before = yield* startPush(store, apns.client, doomed);
+      yield* registerPhone(before, { card: true });
+      yield* publish(before, "h1", "running");
+      yield* publish(before, "h1", "waiting_for_approval");
+      expect((yield* Queue.clear(apns.sent)).map((sent) => sent.alert)).toEqual([
+        null,
+        "Thread on h1",
+      ]);
+      yield* Scope.close(doomed, Exit.void);
+      // The process stored h2's approval and died before a delivery read it.
+      const h2Asks = yield* threadState("h2", "waiting_for_approval");
+      yield* Effect.sync(() => Context.get(store, PushStore.PushStore).upsertRow(h2Asks));
+
+      const after = yield* startPush(store, apns.client, yield* Effect.scope);
+      expect(yield* Queue.take(apns.sent)).toMatchObject({
+        event: "update",
+        alert: "Thread on h2",
+      });
+      // The host retries the request the crash failed.
+      expect((yield* publish(after, "h2", "waiting_for_approval")).deliveries).toEqual([]);
+      expect(yield* Queue.size(apns.sent)).toBe(0);
     }),
   );
 
@@ -306,6 +356,99 @@ describe("t3-push deliveries", () => {
         rows: ["thread:waiting_for_approval"],
       });
       expect((yield* Fiber.join(asks)).deliveries.map((delivery) => delivery.ok)).toEqual([true]);
+
+      // Nor does the approval ring as a notification once the card is gone.
+      yield* registerPhone(push, { card: false, liveActivitiesEnabled: false });
+      yield* publish(push, "h1", "waiting_for_approval");
+      expect(yield* Queue.clear(apns.sent)).toMatchObject([{ event: "end", alert: null }]);
+    }),
+  );
+
+  it.effect("notifies a card alert APNs refused once the card is gone", () =>
+    Effect.gen(function* () {
+      const { apns, push } = yield* setup();
+      yield* registerPhone(push, { card: true });
+      yield* publish(push, "h1", "running");
+      yield* Queue.take(apns.sent);
+      apns.script.push({ _tag: "status", status: 500, reason: "InternalServerError" });
+
+      const asks = yield* startPublish(push, "h1", "waiting_for_approval");
+      expect((yield* Queue.take(apns.sent)).alert).toBe("Thread on h1");
+      // Before the retry, the phone turns Live Activities off.
+      yield* registerPhone(push, { card: false, liveActivitiesEnabled: false });
+      yield* TestClock.adjust("1 second");
+      yield* Fiber.join(asks);
+      expect(yield* Queue.clear(apns.sent)).toMatchObject([
+        { pushType: "liveactivity", event: "end", alert: null },
+        { pushType: "alert", alert: "Thread on h1" },
+      ]);
+    }),
+  );
+
+  it.effect("does not notify a phase the card alerted after Live Activities turn off", () =>
+    Effect.gen(function* () {
+      const { apns, push } = yield* setup();
+      yield* registerPhone(push, { card: true });
+      yield* publish(push, "h1", "running");
+      yield* publish(push, "h1", "waiting_for_approval");
+      yield* registerPhone(push, { card: false, liveActivitiesEnabled: false });
+      // A title change, or a host retrying after its timeout.
+      yield* publish(push, "h1", "waiting_for_approval");
+      expect(yield* Queue.clear(apns.sent)).toMatchObject([
+        { event: "update", alert: null },
+        { event: "update", alert: "Thread on h1" },
+        { event: "end", alert: null },
+      ]);
+    }),
+  );
+
+  it.effect("notifies a thread that asks while an end of unknown outcome is pending", () =>
+    Effect.gen(function* () {
+      const { apns, push } = yield* setup();
+      yield* registerPhone(push, { card: true });
+      yield* publish(push, "h1", "running");
+      yield* Queue.take(apns.sent);
+      apns.script.push({ _tag: "hang" });
+      const h1Gone = yield* startUnpublish(push, "h1");
+      expect((yield* Queue.take(apns.sent)).event).toBe("end");
+
+      // The end times out after reaching the phone, which no longer shows a card.
+      const h2Asks = yield* startPublish(push, "h2", "waiting_for_approval");
+      yield* TestClock.adjust("10 seconds");
+      yield* TestClock.adjust("2 seconds");
+      yield* Fiber.join(h1Gone);
+      yield* Fiber.join(h2Asks);
+      expect(yield* Queue.clear(apns.sent)).toMatchObject([
+        { pushType: "liveactivity", event: "end", alert: null },
+        { pushType: "alert", alert: "Thread on h2" },
+      ]);
+    }),
+  );
+
+  it.effect("resends an end of unknown outcome until APNs accepts one", () =>
+    Effect.gen(function* () {
+      const { apns, push } = yield* setup();
+      yield* registerPhone(push, { card: true });
+      yield* publish(push, "h1", "running");
+      yield* Queue.take(apns.sent);
+      apns.script.push(
+        { _tag: "hang" },
+        { _tag: "status", status: 500, reason: "InternalServerError" },
+      );
+      const h1Gone = yield* startUnpublish(push, "h1");
+      yield* Queue.take(apns.sent);
+
+      // The end may never have reached the phone, which still shows h1 running.
+      const h2Runs = yield* startPublish(push, "h2", "running");
+      yield* TestClock.adjust("10 seconds");
+      yield* TestClock.adjust("2 seconds");
+      yield* TestClock.adjust("2 seconds");
+      yield* Fiber.join(h1Gone);
+      yield* Fiber.join(h2Runs);
+      expect((yield* Queue.clear(apns.sent)).map((sent) => [sent.event, sent.alert])).toEqual([
+        ["end", null],
+        ["end", null],
+      ]);
     }),
   );
 
@@ -351,6 +494,149 @@ describe("t3-push deliveries", () => {
         alert: "Thread on h1",
       });
       expect(asks.deliveries.map((delivery) => delivery.kind)).toEqual(["push_notification"]);
+    }),
+  );
+
+  it.effect("does not re-notify a waiting thread when another thread publishes", () =>
+    Effect.gen(function* () {
+      const { apns, push } = yield* setup();
+      yield* registerPhone(push, { card: false, liveActivitiesEnabled: false });
+      yield* publish(push, "h1", "waiting_for_approval");
+      expect(yield* Queue.take(apns.sent)).toMatchObject({
+        pushType: "alert",
+        alert: "Thread on h1",
+      });
+      // h1's approval is still the first row of the card this phone does not have.
+      expect((yield* publish(push, "h2", "running")).deliveries).toEqual([]);
+      expect(yield* Queue.size(apns.sent)).toBe(0);
+    }),
+  );
+
+  it.effect("notifies a thread once per phase however often its host republishes it", () =>
+    Effect.gen(function* () {
+      const { apns, push } = yield* setup();
+      yield* registerPhone(push, { card: false, liveActivitiesEnabled: false });
+      apns.script.push({ _tag: "status", status: 500, reason: "InternalServerError" });
+      const asks = yield* startPublish(push, "h1", "waiting_for_approval");
+      expect((yield* Queue.take(apns.sent)).alert).toBe("Thread on h1");
+      yield* TestClock.adjust("1 second");
+      // The refusal reached nothing, so the retry still rings.
+      expect((yield* Queue.take(apns.sent)).alert).toBe("Thread on h1");
+      yield* Fiber.join(asks);
+
+      // A title change, or a host retrying after its timeout, publishes the same phase again.
+      expect((yield* publish(push, "h1", "waiting_for_approval")).deliveries).toEqual([]);
+      yield* publish(push, "h1", "running");
+      yield* publish(push, "h1", "waiting_for_approval");
+      expect(yield* Queue.clear(apns.sent)).toMatchObject([
+        { pushType: "alert", alert: "Thread on h1" },
+      ]);
+    }),
+  );
+
+  it.effect("does not repeat a notification APNs may have taken before a crash", () =>
+    Effect.gen(function* () {
+      const apns = yield* fakeApns;
+      const store = yield* Layer.build(PushStore.layer(":memory:"));
+      const doomed = yield* Scope.make();
+      const before = yield* startPush(store, apns.client, doomed);
+      yield* registerPhone(before, { card: false, liveActivitiesEnabled: false });
+      apns.script.push({ _tag: "hang" });
+      const lost = yield* startPublish(before, "h1", "waiting_for_approval");
+      expect((yield* Queue.take(apns.sent)).alert).toBe("Thread on h1");
+      yield* Scope.close(doomed, Exit.void);
+      yield* Fiber.interrupt(lost);
+
+      const after = yield* startPush(store, apns.client, yield* Effect.scope);
+      // The host retries the request the crash failed.
+      expect((yield* publish(after, "h1", "waiting_for_approval")).deliveries).toEqual([]);
+      expect(yield* Queue.size(apns.sent)).toBe(0);
+    }),
+  );
+
+  it.effect("notifies a thread's completion while another thread is running", () =>
+    Effect.gen(function* () {
+      const { apns, push } = yield* setup();
+      yield* registerPhone(push, { card: false, liveActivitiesEnabled: false });
+      yield* publish(push, "h1", "running");
+      yield* publish(push, "h2", "running");
+      // h1's running row sorts ahead of h2's finished one.
+      yield* publish(push, "h2", "completed");
+      expect(yield* Queue.clear(apns.sent)).toMatchObject([
+        { pushType: "alert", alert: "Thread on h2" },
+      ]);
+    }),
+  );
+
+  it.effect("notifies once per thread for publishes coalesced into one delivery", () =>
+    Effect.gen(function* () {
+      const { apns, push } = yield* setup();
+      yield* registerPhone(push, { card: false, liveActivitiesEnabled: false });
+      const gate = yield* Deferred.make<void>();
+      apns.script.push({ _tag: "gate", gate });
+      const h1Asks = yield* startPublish(push, "h1", "waiting_for_approval");
+      expect((yield* Queue.take(apns.sent)).alert).toBe("Thread on h1");
+
+      const coalesced = [
+        yield* startPublish(push, "h2", "waiting_for_input"),
+        yield* startPublish(push, "h3", "completed"),
+        yield* startPublish(push, "h4", "completed"),
+        // Supersedes h2's input request before any delivery read it.
+        yield* startPublish(push, "h2", "running"),
+      ];
+      yield* Deferred.succeed(gate, undefined);
+      yield* Fiber.join(h1Asks);
+      yield* Fiber.joinAll(coalesced);
+      expect((yield* Queue.clear(apns.sent)).map((sent) => sent.alert)).toEqual([
+        "Thread on h3",
+        "Thread on h4",
+      ]);
+    }),
+  );
+
+  it.effect("ends the card of a phone that turned Live Activities off and notifies instead", () =>
+    Effect.gen(function* () {
+      const { apns, push } = yield* setup();
+      yield* registerPhone(push, { card: true });
+      const gate = yield* Deferred.make<void>();
+      apns.script.push({ _tag: "gate", gate });
+      const h1Runs = yield* startPublish(push, "h1", "running");
+      expect((yield* Queue.take(apns.sent)).rows).toEqual(["thread:running"]);
+
+      yield* registerPhone(push, { card: false, liveActivitiesEnabled: false });
+      const h1Asks = yield* startPublish(push, "h1", "waiting_for_approval");
+      yield* Deferred.succeed(gate, undefined);
+      yield* Fiber.join(h1Runs);
+      yield* Fiber.join(h1Asks);
+      expect(yield* Queue.clear(apns.sent)).toMatchObject([
+        { pushType: "liveactivity", event: "end", alert: null },
+        { pushType: "alert", alert: "Thread on h1" },
+      ]);
+    }),
+  );
+
+  it.effect("ends the card of a phone that turned Live Activities off just before a crash", () =>
+    Effect.gen(function* () {
+      const apns = yield* fakeApns;
+      const store = yield* Layer.build(PushStore.layer(":memory:"));
+      const doomed = yield* Scope.make();
+      const before = yield* startPush(store, apns.client, doomed);
+      yield* registerPhone(before, { card: true });
+      yield* publish(before, "h1", "running");
+      expect((yield* Queue.take(apns.sent)).rows).toEqual(["thread:running"]);
+      yield* Scope.close(doomed, Exit.void);
+      // The process stored the switch and died before the replay that would end the card ran.
+      const now = DateTime.formatIso(yield* DateTime.now);
+      yield* Effect.sync(() =>
+        Context.get(store, PushStore.PushStore).registerDevice(phoneRegistration(false), now),
+      );
+
+      yield* startPush(store, apns.client, yield* Effect.scope);
+      expect(yield* Queue.take(apns.sent)).toMatchObject({
+        pushType: "liveactivity",
+        event: "end",
+        alert: null,
+      });
     }),
   );
 });
