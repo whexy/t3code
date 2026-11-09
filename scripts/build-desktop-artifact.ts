@@ -2838,7 +2838,11 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   if (platform === "mac") {
     const path = yield* Path.Path;
     const repoRoot = yield* RepoRoot;
+    // A pipeline that notarizes the packaged app itself turns this off, so the
+    // build never waits on Apple.
+    const notarize = yield* Config.String("T3CODE_MACOS_NOTARIZE").pipe(Config.option);
     buildConfig.mac = {
+      ...(Option.getOrUndefined(notarize)?.trim() === "false" ? { notarize: false } : {}),
       target: target === "dmg" ? [target, "zip"] : [target],
       icon: "icon.icns",
       category: "public.app-category.developer-tools",
