@@ -47,6 +47,7 @@ import {
 import { resolveCloudPublicConfig } from "../cloud/publicConfig";
 import { supportsAgentAwarenessPush } from "./capabilities";
 import { makeRelayDeviceRegistrationRequest, resolveApsEnvironment } from "./registrationPayload";
+import { resolveSelfHostedPushConfig } from "./selfHostedPush";
 
 const REMOTE_ACTIVITY_REGISTRATION_RETRY_MS = 15_000;
 
@@ -164,7 +165,7 @@ function mergeAgentAwarenessRegistrationPreferences(
 }
 
 function readRelayConfig(): { readonly url: string } | null {
-  const relayUrl = resolveCloudPublicConfig().relay.url;
+  const relayUrl = resolveSelfHostedPushConfig()?.url ?? resolveCloudPublicConfig().relay.url;
   if (!relayUrl) {
     return null;
   }
@@ -187,7 +188,29 @@ function shouldRegisterAgentAwarenessDeviceForProvider(
   return identity === undefined || identity !== previousIdentity;
 }
 
+// The build's phone token owns self-hosted push registration, so Connect sign-in and
+// sign-out leave it alone.
 export function setAgentAwarenessRelayTokenProvider(
+  provider: (() => Promise<string | null>) | null,
+  identity?: string,
+): void {
+  if (resolveSelfHostedPushConfig()) return;
+  installRelayTokenProvider(provider, identity);
+}
+
+export function releaseAgentAwarenessRelayTokenProvider(): void {
+  if (resolveSelfHostedPushConfig()) return;
+  releaseRelayTokenProvider();
+}
+
+export function installSelfHostedPushRegistration(): () => void {
+  const config = resolveSelfHostedPushConfig();
+  if (!config) return () => {};
+  installRelayTokenProvider(() => Promise.resolve(config.token), "t3-push");
+  return releaseRelayTokenProvider;
+}
+
+function installRelayTokenProvider(
   provider: (() => Promise<string | null>) | null,
   identity?: string,
 ): void {
@@ -245,7 +268,7 @@ export function setAgentAwarenessRelayTokenProvider(
 }
 
 // Provider remounts retain a valid relay registration; teardown must preserve it and lock-screen activities.
-export function releaseAgentAwarenessRelayTokenProvider(): void {
+function releaseRelayTokenProvider(): void {
   relayTokenProvider = null;
   relayTokenProviderIdentity = null;
   deviceRegistrationGeneration++;

@@ -23,6 +23,7 @@ import { deriveProjectGroupLabel } from "@t3tools/client-runtime/state/project-g
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { hasCloudPublicConfig } from "../cloud/publicConfig";
+import { resolveSelfHostedPushConfig } from "../agent-awareness/selfHostedPush";
 import { useAdaptiveWorkspaceLayout } from "../layout/adaptive-workspace-context";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
 import { SettingsRow } from "./components/SettingsRow";
@@ -164,7 +165,19 @@ function LocalSettingsRouteScreen() {
   const { savedConnectionsById } = useSavedRemoteConnections();
   return (
     <SettingsList
-      connections={[environmentsRow(gt("Environments"), Object.keys(savedConnectionsById).length)]}
+      connections={[
+        environmentsRow(gt("Environments"), Object.keys(savedConnectionsById).length),
+        ...(resolveSelfHostedPushConfig()
+          ? [
+              {
+                id: "SettingsNotifications",
+                icon: "bell.badge",
+                label: gt("Notifications"),
+                target: "SettingsNotifications",
+              } as const,
+            ]
+          : []),
+      ]}
     />
   );
 }

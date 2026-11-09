@@ -37,6 +37,7 @@ import {
   installAgentNotificationNavigation,
   setAgentNotificationPathname,
 } from "./features/agent-awareness/notificationNavigation";
+import { installSelfHostedPushRegistration } from "./features/agent-awareness/remoteRegistration";
 import {
   installAppShortcuts,
   recordAppShortcutNavigationState,
@@ -210,6 +211,7 @@ const appServiceDisposers = [
   installComposerAttachmentUploads(),
   startIncomingShareInbox(),
   installAgentNotificationNavigation(linkToAppPath),
+  installSelfHostedPushRegistration(),
   installAppShortcuts(linkToAppPath),
   installAppUpdateChecks(),
   installShowcaseCapture(rootPathnameFromState),
