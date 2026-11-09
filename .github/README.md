@@ -15,6 +15,7 @@ self-hosted fleet. For T3 Code itself (install, docs, issues), go to
 | Push relay     | t3-push sends the iOS app's notifications and Live Activity from the fleet's agent activity, replacing T3 Connect's relay. Hosts publish with `T3CODE_PUSH_URL` and `T3CODE_PUSH_TOKEN`; its design is model-checked in [`scripts/self-hosted/push-model`](../scripts/self-hosted/push-model). [`apps/push`](../apps/push) | `ghcr.io/whexy/t3code-push`, at `t3-push.clusters.work`                      |
 | Server changes | `T3CODE_DEV_MANAGED_POLICY_PATH` gives each user their own managed policy file, and the `t3` server builds as a Nix package. [`nix`](../nix)                                                                                                                                                                               | `packages.{x86_64-linux,aarch64-darwin}.t3-server`, on Cachix                |
 | iOS app        | The preview app built from the same commit as the fleet's server and signed for Wenxuan's Apple team. [`apps/mobile/forkIos.ts`](../apps/mobile/forkIos.ts)                                                                                                                                                                | TestFlight, `dev.whexy.t3code` `1.2.<run>`; updates from `ota.clusters.work` |
+| Desktop app    | The nightly desktop app built from the fork, updating from this repository's releases instead of upstream's.                                                                                                                                                                                                               | Prereleases: Linux AppImage, Windows installer, signed macOS app             |
 
 ## How it stays current
 
@@ -107,3 +108,40 @@ the app record for `dev.whexy.t3code`, and the App Group
 `group.dev.whexy.t3code`, assigned to `dev.whexy.t3code` and its `.widgets` and
 `.sharing` IDs in the Developer Portal. Without the group, every target fails
 to provision. A build reaches internal testers without review.
+
+## The desktop app
+
+Each published build whose upstream nightly has no release yet builds the
+desktop app through upstream's
+[`release-desktop.yml`](workflows/release-desktop.yml) and publishes a
+prerelease tagged with the bare version, such as `0.1.8-nightly.20261108.4380`.
+The app keeps upstream's version, because clients compare nightly build
+numbers with the servers' and the fleet's servers carry upstream's. Later
+commits on the same nightly ship with the next one. A build made here points
+its updater at this repository's releases, so an installed app updates from
+them with no configuration. The newest 10 releases are kept.
+
+It has no T3 Connect sign-in, like the rest of the fork. The Windows installer
+is unsigned: SmartScreen warns on the first install, and updates install
+without a signature check. It installs over upstream's nightly app, keeping its
+settings. Linux hosts take the AppImage from dotfiles, which pins it, with the
+app's own updater off.
+
+### Signing the macOS app
+
+A Mac app updates itself only when it is signed with a Developer ID, so the
+macOS job skips until the signing secrets and variables below exist. Until
+then a release carries Linux and Windows only.
+
+| Secret or variable                         | Value                                                                                         |
+| ------------------------------------------ | --------------------------------------------------------------------------------------------- |
+| `MACOS_DEVELOPER_ID_P12` (secret)          | A Developer ID Application identity of team `26DMRHRW6Z`, as a base64 `.p12`                  |
+| `MACOS_DEVELOPER_ID_P12_PASSWORD` (secret) | Its password                                                                                  |
+| `MACOS_PROVISIONING_PROFILE` (secret)      | A Developer ID provisioning profile for `MACOS_APP_ID` with Associated Domains, as base64     |
+| `APPLE_TEAM_ID` (variable)                 | `26DMRHRW6Z`                                                                                  |
+| `MACOS_APP_ID` (variable)                  | `dev.whexy.t3code.desktop`; a bundle id belongs to one team, so upstream's is not available   |
+| `CLERK_PASSKEY_RP_DOMAINS` (variable)      | The `webcredentials:` domain the signed entitlements name; nothing uses it without T3 Connect |
+
+Notarization uses the iOS job's `ASC_*` key. The app's signature differs from
+upstream's, so on a Mac the fork's app replaces upstream's instead of updating
+it, and anything upstream's app kept in the keychain has to be entered again.
