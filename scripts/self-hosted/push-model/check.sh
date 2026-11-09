@@ -93,21 +93,25 @@ NotifyOncePerPhase notes-touches NoDuplicateNotification
 StartupReconcile modes-crash CardEndsWhenLiveActivitiesOff
 EndIsFinal apns NoMissedNotification
 ReplayAlertsFromBaseline modes-crash NoMissedAlert
+AlertEveryEnteringRow apns NoMissedAlert
+AlertEveryEnteringRow apns NoMissedNotification
 EOF
 fi
 
-# Each open finding must still break its rule on the design. A finding with a
-# candidate fix must hold with that choice turned on. None is open; the list
-# below is empty until a run finds one.
+# Each open finding must still break its rule on the design, checked alone. A
+# finding with a candidate fix must hold with that choice turned on. None is open;
+# the list below is empty until a run finds one.
 # Format: config rule fix-choice-or-dash
 if [ "$mode" = all ] || [ "$mode" = findings ]; then
   while read -r config rule fix; do
-    run_tlc "$config" "$here/$config.cfg"
-    result=$(verdict "$config")
+    name="$config-$rule"
+    sed "s/^INVARIANTS .*$/INVARIANTS $rule/" "$here/$config.cfg" >"$out/$name.cfg"
+    run_tlc "$name" "$out/$name.cfg"
+    result=$(verdict "$name")
     if [ "$result" = "$rule" ]; then
       echo "open  $config: $rule breaks, as the finding says"
     else
-      echo "FAIL  $config: expected $rule to break, got $result: is the finding fixed? (see $out/$config.out)"
+      echo "FAIL  $config: expected $rule to break, got $result: is the finding fixed? (see $out/$name.out)"
       failed=1
     fi
     [ "$fix" = - ] && continue
