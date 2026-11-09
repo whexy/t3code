@@ -309,7 +309,7 @@ jobs:
         run: |
           version="$(jq -r .version nix/sources.json)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          if found="$(gh release view "v$version" --repo "$GITHUB_REPOSITORY" --json tagName 2>&1)"; then
+          if found="$(gh release view "$version" --repo "$GITHUB_REPOSITORY" --json tagName 2>&1)"; then
             echo "state=DESKTOP_PUBLISHED version=$version" | tee -a "$GITHUB_STEP_SUMMARY"
             echo build=false >> "$GITHUB_OUTPUT"
             exit 0
