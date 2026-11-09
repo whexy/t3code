@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="700" height="574" viewBox="0 0 700 574" role="img" aria-label="Pipeline from n8n through self-hosted-rebase and self-hosted-build to the cluster and the hosts">
+<svg xmlns="http://www.w3.org/2000/svg" width="780" height="612" viewBox="0 0 780 612" role="img" aria-label="An upstream nightly or a merged promote pull request pushes self-hosted-nightly; self-hosted-build checks it and, if the commit is still the branch head, publishes to the cluster, every dotfiles host, the iPhone, and the desktop apps">
   <defs>
     <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path class="head" d="M0,0 L10,5 L0,10 z"/>
@@ -25,83 +25,96 @@
     .head { fill: var(--muted); }
   </style>
 
-  <rect class="box ext" x="10" y="10" width="170" height="60" rx="8"/>
+  <!-- What pushes self-hosted-nightly -->
+  <rect class="box ext" x="10" y="10" width="200" height="60" rx="8"/>
   <text class="t" x="22" y="32">n8n watcher</text>
-  <text class="s" x="22" y="48">every 10 min: new nightly?</text>
-  <text class="s" x="22" y="62">(or “Run workflow” by hand)</text>
+  <text class="s" x="22" y="48">new upstream nightly? (10 min)</text>
+  <text class="s" x="22" y="62">or “Run workflow” by hand</text>
 
-  <rect class="box wf" x="240" y="10" width="220" height="60" rx="8"/>
-  <text class="t m" x="252" y="32">self-hosted-rebase</text>
-  <text class="s" x="252" y="48">rebase the fork onto the new tag</text>
-  <text class="s" x="252" y="62">add one chore(nix) pin commit</text>
+  <rect class="box wf" x="265" y="10" width="250" height="60" rx="8"/>
+  <text class="t m" x="277" y="32">self-hosted-rebase</text>
+  <text class="s" x="277" y="48">rebase dev onto the nightly, add</text>
+  <text class="s" x="277" y="62">the pin commit, promote it to nightly</text>
 
-  <rect class="box" x="520" y="10" width="170" height="60" rx="8"/>
-  <text class="t" x="532" y="32">push to branch</text>
-  <text class="s m" x="532" y="48">self-hosted-nightly</text>
-  <text class="s" x="532" y="62">whexy-bot or a merged PR</text>
+  <rect class="box ext" x="570" y="10" width="200" height="60" rx="8"/>
+  <text class="t" x="582" y="32">promote pull request</text>
+  <text class="s" x="582" y="48">dev → self-hosted-nightly;</text>
+  <text class="s" x="582" y="62">merge it to ship sooner</text>
 
-  <path class="ln" d="M180,40 H238" marker-end="url(#a)"/>
-  <text class="lbl" x="185" y="34">dispatch</text>
-  <path class="ln" d="M460,40 H518" marker-end="url(#a)"/>
-  <path class="ln" d="M605,70 V108" marker-end="url(#a)"/>
+  <path class="ln" d="M210,40 H263" marker-end="url(#a)"/>
+  <text class="lbl" x="215" y="34">dispatch</text>
 
-  <rect class="frame" x="10" y="110" width="680" height="118" rx="10"/>
-  <text class="t m" x="22" y="130">self-hosted-build</text>
-  <text class="s" x="160" y="130">checks, all in parallel</text>
-  <rect class="box" x="20" y="142" width="124" height="74" rx="7"/>
-  <rect class="box" x="154" y="142" width="124" height="74" rx="7"/>
-  <rect class="box" x="288" y="142" width="124" height="74" rx="7"/>
-  <rect class="box" x="422" y="142" width="124" height="74" rx="7"/>
-  <rect class="box" x="556" y="142" width="124" height="74" rx="7"/>
-  <text class="t m" x="30" y="164">web-hub</text><text class="s" x="30" y="182">test, typecheck,</text><text class="s" x="30" y="197">build hub image</text>
-  <text class="t m" x="164" y="164">mcp</text><text class="s" x="164" y="182">test, bundle,</text><text class="s" x="164" y="197">build mcp image</text>
-  <text class="t m" x="298" y="164">policy-editor</text><text class="s" x="298" y="182">test, build,</text><text class="s" x="298" y="197">build editor image</text>
-  <text class="t m" x="432" y="164">nix-linux</text><text class="s" x="432" y="182">build t3-server,</text><text class="s" x="432" y="197">push to Cachix</text>
-  <text class="t m" x="566" y="164">nix-darwin</text><text class="s" x="566" y="182">same on macOS</text><text class="s" x="566" y="197">(skipped on PRs)</text>
+  <rect class="box" x="265" y="100" width="250" height="40" rx="8"/>
+  <text class="t" x="277" y="124">push to <tspan class="m">self-hosted-nightly</tspan></text>
+  <path class="ln" d="M390,70 V98" marker-end="url(#a)"/>
+  <path class="ln" d="M670,70 V120 H517" marker-end="url(#a)"/>
 
-  <path class="ln" d="M350,228 V258" marker-end="url(#a)"/>
-  <rect class="box wf" x="240" y="260" width="220" height="56" rx="8"/>
-  <text class="t m" x="252" y="282">gate</text>
-  <text class="s" x="252" y="300">is this commit still the branch head?</text>
+  <path class="ln" d="M390,140 V168" marker-end="url(#a)"/>
 
-  <path class="ln" d="M460,288 H518" marker-end="url(#a)"/>
-  <text class="lbl" x="482" y="282">no</text>
-  <rect class="box ext" x="520" y="260" width="170" height="56" rx="8"/>
-  <text class="t" x="532" y="282">SUPERSEDED</text>
-  <text class="s" x="532" y="300">stop; a newer push builds</text>
+  <!-- self-hosted-build -->
+  <rect class="frame" x="10" y="170" width="760" height="270" rx="10"/>
+  <text class="t m" x="22" y="190">self-hosted-build</text>
+  <text class="s" x="160" y="190">checks in parallel; pull requests into dev stop after these and publish nothing</text>
 
-  <rect class="box ext" x="10" y="260" width="200" height="56" rx="8"/>
-  <text class="t" x="22" y="282">Pull requests stop here</text>
-  <text class="s" x="22" y="300">checks only; nothing is published</text>
+  <rect class="box" x="20" y="202" width="116" height="62" rx="7"/>
+  <rect class="box" x="144" y="202" width="116" height="62" rx="7"/>
+  <rect class="box" x="268" y="202" width="116" height="62" rx="7"/>
+  <rect class="box" x="392" y="202" width="116" height="62" rx="7"/>
+  <rect class="box" x="516" y="202" width="116" height="62" rx="7"/>
+  <rect class="box" x="640" y="202" width="120" height="62" rx="7"/>
+  <text class="t m" x="30" y="223">web-hub</text><text class="s" x="30" y="240">test, build</text><text class="s" x="30" y="254">the hub image</text>
+  <text class="t m" x="154" y="223">mcp</text><text class="s" x="154" y="240">test, build</text><text class="s" x="154" y="254">the mcp image</text>
+  <text class="t m" x="278" y="223">policy-editor</text><text class="s" x="278" y="240">test, build</text><text class="s" x="278" y="254">the editor image</text>
+  <text class="t m" x="402" y="223">push</text><text class="s" x="402" y="240">test, build</text><text class="s" x="402" y="254">the push image</text>
+  <text class="t m" x="526" y="223">nix-linux</text><text class="s" x="526" y="240">build t3-server,</text><text class="s" x="526" y="254">push to Cachix</text>
+  <text class="t m" x="650" y="223">nix-darwin</text><text class="s" x="650" y="240">same on macOS</text><text class="s" x="650" y="254">(not on PRs)</text>
 
-  <path class="ln" d="M350,316 V336"/>
-  <text class="lbl" x="356" y="331">yes</text>
-  <path class="ln" d="M90,336 H436"/>
-  <path class="ln" d="M90,336 V358" marker-end="url(#a)"/>
-  <path class="ln" d="M436,336 V358" marker-end="url(#a)"/>
+  <path class="ln" d="M200,264 V284" marker-end="url(#a)"/>
+  <rect class="box wf" x="20" y="286" width="364" height="50" rx="8"/>
+  <text class="t m" x="32" y="306">gate</text>
+  <text class="s" x="70" y="306">is this commit still the branch head?</text>
+  <text class="s" x="32" y="324">no: stop, the newer push publishes instead</text>
 
-  <rect class="box wf" x="10" y="360" width="160" height="66" rx="8"/>
-  <rect class="box wf" x="183" y="360" width="160" height="66" rx="8"/>
-  <rect class="box wf" x="356" y="360" width="160" height="66" rx="8"/>
-  <rect class="box wf" x="529" y="360" width="160" height="66" rx="8"/>
-  <text class="t m" x="20" y="382">promote-images</text><text class="s" x="20" y="400">tag images</text><text class="s m" x="20" y="414">1.2.N + sha-…</text>
-  <text class="t m" x="193" y="382">deploy</text><text class="s" x="193" y="400">bump the 3 tags in</text><text class="s m" x="193" y="414">clusters-work</text>
-  <text class="t m" x="366" y="382">promote-pin</text><text class="s" x="366" y="400">git tag pin/&lt;sha&gt;</text><text class="s" x="366" y="414">survives force-push</text>
-  <text class="t m" x="539" y="382">notify</text><text class="s" x="539" y="400">start the dotfiles</text><text class="s" x="539" y="414">pin lane (Woodpecker)</text>
-  <path class="ln" d="M170,393 H181" marker-end="url(#a)"/>
-  <path class="ln" d="M516,393 H527" marker-end="url(#a)"/>
+  <rect class="box" x="392" y="286" width="368" height="50" rx="8"/>
+  <text class="t m" x="404" y="306">desktop-*</text>
+  <text class="s" x="476" y="306">Linux, Windows, signed macOS</text>
+  <text class="s" x="404" y="324">first build of each upstream nightly; later ones skip</text>
 
-  <path class="ln" d="M263,426 V448" marker-end="url(#a)"/>
-  <path class="ln" d="M609,426 V448" marker-end="url(#a)"/>
-  <rect class="box ext" x="100" y="450" width="326" height="46" rx="8"/>
-  <text class="t" x="112" y="469">Cluster (Argo CD)</text>
-  <text class="s m" x="112" y="486">t3code-hub · t3code-mcp · t3code-policy-editor</text>
-  <rect class="box ext" x="440" y="450" width="250" height="46" rx="8"/>
-  <text class="t" x="452" y="469">Your hosts</text>
-  <text class="s" x="452" y="486">dotfiles pins it; t3-server via Cachix</text>
+  <path class="ln" d="M200,336 V352"/>
+  <text class="lbl" x="206" y="349">yes</text>
+  <path class="ln" d="M108,352 H640"/>
+  <path class="ln" d="M108,352 V368" marker-end="url(#a)"/>
+  <path class="ln" d="M295,352 V368" marker-end="url(#a)"/>
+  <path class="ln" d="M482,352 V368" marker-end="url(#a)"/>
+  <path class="ln" d="M640,352 V368" marker-end="url(#a)"/>
+  <path class="ln" d="M720,336 V368" marker-end="url(#a)"/>
 
-  <rect class="bad" x="10" y="508" width="680" height="60" rx="8"/>
-  <text class="t" x="22" y="527">Any failure in rebase or build (not PRs)</text>
-  <text class="s" x="22" y="543">report-failure → T3 starts a repair agent run (fallback: WeChat alert).</text>
-  <text class="s" x="22" y="558">Nothing is tagged or pushed, so the last good build keeps serving.</text>
+  <rect class="box wf" x="20" y="370" width="177" height="58" rx="8"/>
+  <rect class="box wf" x="207" y="370" width="177" height="58" rx="8"/>
+  <rect class="box wf" x="394" y="370" width="177" height="58" rx="8"/>
+  <rect class="box wf" x="581" y="370" width="179" height="58" rx="8"/>
+  <text class="t m" x="30" y="390">promote-images</text><text class="s" x="30" y="406">tag 1.2.N; deploy writes</text><text class="s" x="30" y="420">it into clusters-work</text>
+  <text class="t m" x="217" y="390">promote-pin</text><text class="s" x="217" y="406">tag pin/&lt;sha12&gt;, then notify</text><text class="s" x="217" y="420">starts the dotfiles pin lane</text>
+  <text class="t m" x="404" y="390">ios-testflight</text><text class="s" x="404" y="406">archive, sign, upload</text><text class="s m" x="404" y="420">dev.whexy.t3code 1.2.N</text>
+  <text class="t m" x="591" y="390">publish-desktop</text><text class="s" x="591" y="406">a prerelease named after</text><text class="s" x="591" y="420">the upstream nightly</text>
+
+  <!-- Devices -->
+  <path class="ln" d="M108,428 V458" marker-end="url(#a)"/>
+  <path class="ln" d="M295,428 V458" marker-end="url(#a)"/>
+  <path class="ln" d="M482,428 V458" marker-end="url(#a)"/>
+  <path class="ln" d="M670,428 V458" marker-end="url(#a)"/>
+
+  <rect class="box ext" x="20" y="460" width="177" height="62" rx="8"/>
+  <rect class="box ext" x="207" y="460" width="177" height="62" rx="8"/>
+  <rect class="box ext" x="394" y="460" width="177" height="62" rx="8"/>
+  <rect class="box ext" x="581" y="460" width="179" height="62" rx="8"/>
+  <text class="t" x="30" y="480">Cluster (Argo CD)</text><text class="s m" x="30" y="497">t3code-hub · -mcp ·</text><text class="s m" x="30" y="511">-policy-editor · -push</text>
+  <text class="t" x="217" y="480">Every dotfiles host</text><text class="s" x="217" y="497">t3-server from Cachix,</text><text class="s" x="217" y="511">Linux desktop AppImage</text>
+  <text class="t" x="404" y="480">iPhone</text><text class="s" x="404" y="497">TestFlight build; JS updates</text><text class="s" x="404" y="511">over the air, by hand</text>
+  <text class="t" x="591" y="480">Mac and Windows apps</text><text class="s" x="591" y="497">update themselves from</text><text class="s" x="591" y="511">this repo’s prereleases</text>
+
+  <rect class="bad" x="10" y="542" width="760" height="60" rx="8"/>
+  <text class="t" x="22" y="561">Any failure in the rebase or the build (not pull requests)</text>
+  <text class="s" x="22" y="577">report-failure → T3 Code starts an agent run that repairs dev (fallback: an alert to Wenxuan).</text>
+  <text class="s" x="22" y="592">Nothing is tagged or pushed, so the last good build keeps serving.</text>
 </svg>
