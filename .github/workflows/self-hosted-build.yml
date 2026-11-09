@@ -6,10 +6,12 @@
 # starts. A failure is reported to T3 Code, which starts an agent run to
 # repair the branch, and the last good build keeps serving.
 #
-# Pushes come from self-hosted-rebase.yml (as the whexy-bot App) and from
-# merged pull requests. Pull requests run the checks without the macOS leg and
-# the desktop builds, and push nothing. Desktop builds do not block the
-# images or the pin; a passing set becomes a prerelease once the gate does.
+# Pushes come from the promote in self-hosted-rebase.yml (as the whexy-bot
+# App) and from merged promote pull requests (self-hosted-promote-pr.yml).
+# Pull requests into dev run the checks without the macOS leg and the desktop
+# builds, and push nothing; pushes to dev build nothing. Desktop builds do not
+# block the images or the pin; a passing set becomes a prerelease once the gate
+# does.
 #
 # Images get `sha-<12 hex>` and `1.2.<run_number>`, so the version only grows.
 # Retry with workflow_dispatch on the branch head, never "Re-run": a re-run
@@ -22,7 +24,7 @@ on:
     branches: [self-hosted-nightly]
   workflow_dispatch:
   pull_request:
-    branches: [self-hosted-nightly]
+    branches: [dev]
 
 # A newer pending publish replaces an older one; pull requests and runs
 # dispatched on other branches get their own group so they never displace a
@@ -309,7 +311,7 @@ jobs:
         run: |
           version="$(jq -r .version nix/sources.json)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          if found="$(gh release view "v$version" --repo "$GITHUB_REPOSITORY" --json tagName 2>&1)"; then
+          if found="$(gh release view "$version" --repo "$GITHUB_REPOSITORY" --json tagName 2>&1)"; then
             echo "state=DESKTOP_PUBLISHED version=$version" | tee -a "$GITHUB_STEP_SUMMARY"
             echo build=false >> "$GITHUB_OUTPUT"
             exit 0
