@@ -21,19 +21,28 @@ self-hosted fleet. For T3 Code itself (install, docs, issues), go to
 
 ![The rebase and build pipeline](assets/self-hosted-pipeline.svg)
 
-These two are the only workflows enabled on the fork. Upstream's workflow
-files come back with every rebase, so they stay in the repository and are
-disabled in GitHub instead. The steps are in
-[`self-hosted-rebase.yml`](workflows/self-hosted-rebase.yml),
-[`self-hosted-build.yml`](workflows/self-hosted-build.yml) and
+Only these two and `self-hosted-promote-pr.yml`, which keeps the promote
+pull request below open, are enabled on the fork. Upstream's workflow files
+come back with every rebase, so they stay in the repository and are disabled
+in GitHub instead. The steps
+are in [`self-hosted-rebase.yml`](workflows/self-hosted-rebase.yml),
+[`self-hosted-build.yml`](workflows/self-hosted-build.yml),
+[`self-hosted-promote-pr.yml`](workflows/self-hosted-promote-pr.yml) and
 [`scripts/self-hosted`](../scripts/self-hosted).
 
 ## Branches and tags
 
-- `self-hosted-nightly`, the default branch, is an upstream nightly tag, then
-  the fork's commits, then one `chore(nix): pin sources for <tag>` commit.
-  Every rebase replaces the pin commit, keeps it on top, and force-pushes the
-  branch.
+- `dev`, the default branch, is an upstream nightly tag, then the fork's
+  commits, then one `chore(nix): pin sources for <tag>` commit, then any pull
+  requests merged since. Pull requests target `dev` and are rebase-merged;
+  merging builds nothing. Every rebase replaces the pin commit, keeps it on
+  top, and force-pushes the branch.
+- `self-hosted-nightly` is what the fleet runs, and every push to it builds
+  and publishes. Nobody commits to it: each rebase sets it to `dev`, so a
+  merged pull request ships with the next upstream nightly. To ship sooner,
+  merge the open "promote dev to self-hosted-nightly" pull request with a merge
+  commit, or run `self-hosted-rebase.yml` by hand. Fixes, including repairs of
+  a failed build, land on `dev` and ship the same way.
 - `pin/<sha12>` tags each commit the build handed to the fleet, so it stays
   fetchable after the next force-push.
 - Images are tagged `1.2.<run>` (the build workflow's run number, which only
