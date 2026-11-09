@@ -8,7 +8,8 @@
 #
 # Pushes come from self-hosted-rebase.yml (as the whexy-bot App) and from
 # merged pull requests. Pull requests run the checks without the macOS leg and
-# push nothing.
+# the desktop builds, and push nothing. Desktop builds do not block the
+# images or the pin; a passing set becomes a prerelease once the gate does.
 #
 # Images get `sha-<12 hex>` and `1.2.<run_number>`, so the version only grows.
 # Retry with workflow_dispatch on the branch head, never "Re-run": a re-run
@@ -23,10 +24,11 @@ on:
   pull_request:
     branches: [self-hosted-nightly]
 
-# A newer pending publish replaces an older one; pull requests get their own
-# group so they never displace a pending publish.
+# A newer pending publish replaces an older one; pull requests and runs
+# dispatched on other branches get their own group so they never displace a
+# pending publish.
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('build-pr-{0}', github.event.pull_request.number) || 'build-publish' }}
+  group: ${{ github.event_name == 'pull_request' && format('build-pr-{0}', github.event.pull_request.number) || github.ref != 'refs/heads/self-hosted-nightly' && format('build-{0}', github.ref_name) || 'build-publish' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -276,6 +278,183 @@ jobs:
       - env:
           OUT: ${{ steps.check.outputs.out }}
         run: cachix push whexy-t3code "$OUT"
+
+  # The desktop app keeps upstream's nightly version, since clients compare
+  # nightly build numbers with the servers' (apps/web/src/versionSkew.ts).
+  # So each upstream nightly gets one release, from the first commit on it
+  # whose desktop builds pass; later commits on that nightly ship with the next.
+  desktop-plan:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      build: ${{ steps.plan.outputs.build }}
+      mac: ${{ steps.plan.outputs.mac }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: nix/sources.json
+          sparse-checkout-cone-mode: false
+      - id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEVELOPER_ID_P12: ${{ secrets.MACOS_DEVELOPER_ID_P12 }}
+          DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
+          PROVISIONING_PROFILE: ${{ secrets.MACOS_PROVISIONING_PROFILE }}
+          ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+          MACOS_APP_ID: ${{ vars.MACOS_APP_ID }}
+          RP_DOMAINS: ${{ vars.CLERK_PASSKEY_RP_DOMAINS }}
+        run: |
+          version="$(jq -r .version nix/sources.json)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if found="$(gh release view "v$version" --repo "$GITHUB_REPOSITORY" --json tagName 2>&1)"; then
+            echo "state=DESKTOP_PUBLISHED version=$version" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo build=false >> "$GITHUB_OUTPUT"
+            exit 0
+          elif [[ "$found" != *"release not found"* ]]; then
+            echo "$found" >&2
+            exit 1
+          fi
+          echo build=true >> "$GITHUB_OUTPUT"
+          # An unsigned Mac build cannot update itself, so it is not built at all.
+          if [[ -n "$DEVELOPER_ID_P12" && -n "$DEVELOPER_ID_P12_PASSWORD" && -n "$PROVISIONING_PROFILE" && -n "$ASC_PRIVATE_KEY" && -n "$APPLE_TEAM_ID" && -n "$MACOS_APP_ID" && -n "$RP_DOMAINS" ]]; then
+            echo mac=true >> "$GITHUB_OUTPUT"
+          else
+            echo "state=MAC_SKIPPED reason=Developer ID signing not configured" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+  # What release.yml's build_bundle makes for release-desktop.yml: the server
+  # bundle with its web client, and the Electron main. No T3 Connect config,
+  # like the fork's server and hub.
+  desktop-bundle:
+    needs: desktop-plan
+    if: needs.desktop-plan.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            /*
+            !/.repos/
+            !/apps/mobile/modules/t3-terminal/Vendor/**/*.a
+          sparse-checkout-cone-mode: false
+
+      - uses: ./.github/actions/setup-ci-deps
+        with:
+          install: "false"
+
+      - name: Install
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
+        run: |
+          vp install --lockfile-only
+          vp install --frozen-lockfile --filter=t3... --filter=@t3tools/web... --filter=@t3tools/desktop... --filter=@t3tools/scripts...
+
+      - name: Build
+        env:
+          VERSION: ${{ needs.desktop-plan.outputs.version }}
+          T3CODE_TELEMETRY_CHANNEL: dev
+        run: |
+          node scripts/update-release-package-versions.ts "$VERSION"
+          vp run build:desktop:bundle
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: js-bundle
+          path: |
+            apps/server/dist
+            apps/desktop/dist-electron
+          if-no-files-found: error
+          retention-days: 1
+
+  # The Windows build embeds this job's CLI archive as its WSL runtime.
+  desktop-linux:
+    needs: [desktop-plan, desktop-bundle]
+    permissions:
+      actions: read
+      contents: read
+    uses: ./.github/workflows/release-desktop.yml
+    with:
+      label: Linux x64
+      runner: ubuntu-latest
+      platform: linux
+      target: AppImage
+      arch: x64
+      rust_target: x86_64-unknown-linux-gnu
+      resource_key: linux-x64
+      cli_archive: true
+      launch_check: true
+      relay_client_tracing: false
+      version: ${{ needs.desktop-plan.outputs.version }}
+      ref: ${{ github.sha }}
+      release_channel: nightly
+      clerk_publishable_key: ""
+      clerk_jwt_template: ""
+      clerk_cli_oauth_client_id: ""
+      relay_url: ""
+
+  # Unsigned: electron-updater checks an update's signature only when the
+  # build names a publisher, and only signing names one.
+  desktop-windows:
+    needs: [desktop-plan, desktop-bundle]
+    permissions:
+      actions: read
+      contents: read
+    uses: ./.github/workflows/release-desktop.yml
+    with:
+      label: Windows x64
+      runner: ubuntu-latest
+      verify_runner: windows-2025
+      platform: win
+      target: nsis
+      arch: x64
+      rust_target: x86_64-pc-windows-msvc
+      resource_key: win32-x64
+      relay_client_tracing: false
+      version: ${{ needs.desktop-plan.outputs.version }}
+      ref: ${{ github.sha }}
+      release_channel: nightly
+      clerk_publishable_key: ""
+      clerk_jwt_template: ""
+      clerk_cli_oauth_client_id: ""
+      relay_url: ""
+
+  # Signed with the team's Developer ID under its own bundle id (MACOS_APP_ID),
+  # and notarized with the App Store Connect key the iOS job uses.
+  desktop-mac:
+    needs: [desktop-plan, desktop-bundle]
+    if: needs.desktop-plan.outputs.mac == 'true'
+    permissions:
+      actions: read
+      contents: read
+    uses: ./.github/workflows/release-desktop.yml
+    secrets:
+      CSC_LINK: ${{ secrets.MACOS_DEVELOPER_ID_P12 }}
+      CSC_KEY_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
+      APPLE_API_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+      APPLE_API_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      APPLE_API_ISSUER: ${{ secrets.ASC_ISSUER_ID }}
+      MACOS_PROVISIONING_PROFILE: ${{ secrets.MACOS_PROVISIONING_PROFILE }}
+    with:
+      label: macOS arm64
+      runner: macos-15
+      platform: mac
+      target: dmg
+      arch: arm64
+      rust_target: aarch64-apple-darwin
+      resource_key: darwin-arm64
+      launch_check: true
+      relay_client_tracing: false
+      version: ${{ needs.desktop-plan.outputs.version }}
+      ref: ${{ github.sha }}
+      release_channel: nightly
+      clerk_publishable_key: ""
+      clerk_jwt_template: ""
+      clerk_cli_oauth_client_id: ""
+      relay_url: ""
 
   # A newer push builds itself, so a superseded commit is never tagged.
   gate:
@@ -542,8 +721,60 @@ jobs:
             -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID"
           echo "testflight: $T3CODE_MOBILE_VERSION ($T3CODE_FORK_IOS_BUILD_NUMBER) runtime $IOS_RUNTIME_VERSION" >> "$GITHUB_STEP_SUMMARY"
 
+  # The prerelease is the feed the desktop updater follows: a build made in
+  # this repository points at its releases (resolveGitHubPublishConfig in
+  # scripts/build-desktop-artifact.ts). Tags are the bare version, which
+  # electron-updater accepts and which cannot clash with upstream's v<version>
+  # tags in a clone that fetches both.
+  publish-desktop:
+    needs: [gate, desktop-plan, desktop-linux, desktop-windows, desktop-mac]
+    if: >-
+      !cancelled() && needs.gate.outputs.current == 'true' &&
+      needs.desktop-linux.result == 'success' && needs.desktop-windows.result == 'success' &&
+      contains(fromJSON('["success","skipped"]'), needs.desktop-mac.result)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: .github/actions
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: desktop-*
+          path: release-assets
+          merge-multiple: true
+      - id: current
+        uses: ./.github/actions/self-hosted-current
+      - if: steps.current.outputs.current == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.desktop-plan.outputs.version }}
+        working-directory: release-assets
+        run: |
+          rm -f builder-debug.yml
+          # release-desktop.yml suffixes Windows manifests by arch for merging;
+          # with x64 alone, the feed name is the plain one.
+          mv nightly-win-x64.yml nightly.yml
+          ls -l
+          gh release create "$VERSION" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease \
+            --title "T3 Code $VERSION" \
+            --notes "The desktop app built from $GITHUB_SHA, on upstream's v$VERSION." ./*
+          echo "desktop: $VERSION" >> "$GITHUB_STEP_SUMMARY"
+          # dotfiles pins one of the newest; older ones only serve rollbacks.
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 200 --json tagName,createdAt \
+            --jq '[.[] | select(.tagName | test("^[0-9]+\\.[0-9]+\\.[0-9]+-nightly\\."))] | sort_by(.createdAt) | reverse | .[10:][].tagName' |
+            while read -r tag; do
+              gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag
+            done
+
+  # Waits for the desktop release, which the dotfiles pin lane pins on Linux,
+  # but not on its success.
   notify:
-    needs: [promote-images, promote-pin]
+    needs: [promote-images, promote-pin, publish-desktop]
+    if: >-
+      !cancelled() && needs.promote-images.result == 'success' && needs.promote-pin.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -577,9 +808,15 @@ jobs:
         promote-pin,
         deploy,
         ios-testflight,
+        desktop-plan,
+        desktop-bundle,
+        desktop-linux,
+        desktop-windows,
+        desktop-mac,
+        publish-desktop,
         notify,
       ]
-    if: always() && github.event_name != 'pull_request' && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))
+    if: always() && github.ref == 'refs/heads/self-hosted-nightly' && github.event_name != 'pull_request' && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
