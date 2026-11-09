@@ -58,6 +58,7 @@ import {
 } from "../cloud/linkEnvironment";
 import { refreshManagedRelayEnvironments } from "../cloud/managedRelayState";
 import { hasCloudPublicConfig, resolveRelayClerkTokenOptions } from "../cloud/publicConfig";
+import { resolveSelfHostedPushConfig } from "../agent-awareness/selfHostedPush";
 import { makePermissionStatusAtom } from "../../lib/permissionStatusAtom";
 import { runtime } from "../../lib/runtime";
 import { mobilePreferencesAtom, saveMobilePreferences } from "../../state/preferences";
@@ -187,8 +188,24 @@ function useNotificationsReady(): boolean {
   );
 }
 
+interface NotificationsAuth {
+  readonly isLoaded: boolean;
+  readonly isSignedIn: boolean | undefined;
+  // Null when the build's own push service replaces T3 Connect.
+  readonly readClerkToken: (() => Promise<string | null>) | null;
+}
+
+const SELF_HOSTED_PUSH_AUTH: NotificationsAuth = {
+  isLoaded: true,
+  isSignedIn: true,
+  readClerkToken: null,
+};
+
 export function SettingsNotificationsRouteScreen() {
   const gt = useGT();
+  if (resolveSelfHostedPushConfig()) {
+    return <ConfiguredSettingsNotificationsRouteScreen auth={SELF_HOSTED_PUSH_AUTH} />;
+  }
   if (!hasCloudPublicConfig()) {
     return (
       <SettingsScreen title={gt("Notifications")}>
@@ -204,10 +221,23 @@ export function SettingsNotificationsRouteScreen() {
     );
   }
 
-  return <ConfiguredSettingsNotificationsRouteScreen />;
+  return <ConnectSettingsNotificationsRouteScreen />;
 }
 
-function ConfiguredSettingsNotificationsRouteScreen() {
+function ConnectSettingsNotificationsRouteScreen() {
+  const { getToken, isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
+  return (
+    <ConfiguredSettingsNotificationsRouteScreen
+      auth={{
+        isLoaded,
+        isSignedIn,
+        readClerkToken: () => getToken(resolveRelayClerkTokenOptions()),
+      }}
+    />
+  );
+}
+
+function ConfiguredSettingsNotificationsRouteScreen(props: { readonly auth: NotificationsAuth }) {
   const gt = useGT();
   const m = useMessages();
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
@@ -219,7 +249,7 @@ function ConfiguredSettingsNotificationsRouteScreen() {
       : agentAwarenessPlatform.subtitle;
   const insets = useSafeAreaInsets();
   const navigation = useNavigation();
-  const { getToken, isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
+  const { isLoaded, isSignedIn, readClerkToken } = props.auth;
   const { savedConnectionsById } = useSavedRemoteConnections();
   const notificationStatus = useAtomValue(notificationStatusAtom);
   const setNotificationStatus = useAtomSet(notificationStatusAtom);
@@ -362,7 +392,7 @@ function ConfiguredSettingsNotificationsRouteScreen() {
       }
       setNotificationStatus("enabled");
     }
-    const tokenResult = await settlePromise(() => getToken(resolveRelayClerkTokenOptions()));
+    const tokenResult = await settlePromise(() => readClerkToken?.() ?? Promise.resolve(null));
     if (tokenResult._tag === "Failure") {
       setLiveActivityStatus("disabled");
       const error = squashAtomCommandFailure(tokenResult);
@@ -376,7 +406,7 @@ function ConfiguredSettingsNotificationsRouteScreen() {
       );
       return;
     }
-    if (!tokenResult.value) {
+    if (!tokenResult.value && readClerkToken) {
       promptSignIn();
       setLiveActivityStatus("signed-out");
       return;
@@ -469,7 +499,7 @@ function ConfiguredSettingsNotificationsRouteScreen() {
   async function disableLiveActivities() {
     let token: string | null = null;
     if (isSignedIn) {
-      const tokenResult = await settlePromise(() => getToken(resolveRelayClerkTokenOptions()));
+      const tokenResult = await settlePromise(() => readClerkToken?.() ?? Promise.resolve(null));
       if (tokenResult._tag === "Failure") {
         setLiveActivityStatus("enabled");
         reportAtomCommandResult(tokenResult, {
