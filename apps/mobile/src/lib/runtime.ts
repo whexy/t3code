@@ -4,6 +4,7 @@ import * as ManagedRuntime from "effect/ManagedRuntime";
 
 import { layerRemoteHttpClient } from "@t3tools/client-runtime/rpc";
 
+import { resolveSelfHostedPushConfig } from "../features/agent-awareness/selfHostedPush";
 import * as Dpop from "../features/cloud/dpop";
 import * as ManagedRelayLayer from "../features/cloud/managedRelayLayer";
 import { resolveCloudPublicConfig } from "../features/cloud/publicConfig";
@@ -30,7 +31,7 @@ type RuntimeLayerSource =
   | typeof Tracing.layer;
 
 const layerRuntime = Layer.merge(
-  ManagedRelayLayer.layer(configuredRelayUrl()),
+  ManagedRelayLayer.layer(configuredRelayUrl(), resolveSelfHostedPushConfig()?.url),
   NativeWebSocket.layer,
 ).pipe(
   Layer.provideMerge(Dpop.layer),
