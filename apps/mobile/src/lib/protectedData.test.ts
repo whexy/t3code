@@ -51,6 +51,9 @@ vi.mock("../features/cloud/managedRelayLayer", async () => {
 vi.mock("../features/cloud/publicConfig", () => ({
   resolveCloudPublicConfig: () => ({ relay: { url: null } }),
 }));
+vi.mock("../features/agent-awareness/selfHostedPush", () => ({
+  resolveSelfHostedPushConfig: () => null,
+}));
 vi.mock("../features/observability/tracing", async () => ({
   layer: (await import("effect/Layer")).empty,
 }));
