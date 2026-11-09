@@ -21,8 +21,13 @@ self-hosted fleet. For T3 Code itself (install, docs, issues), go to
 ![The rebase and build pipeline](assets/self-hosted-pipeline.svg)
 
 These two are the only workflows enabled on the fork. Upstream's workflow
-files come back with every rebase, so they stay in the repository and are
-disabled in GitHub instead. The steps are in
+files come back with every rebase, so they stay in the repository, and each
+rebase run disables any of them GitHub has enabled.
+
+Jobs run on GitHub-hosted runners, except the two Apple jobs, which run where
+the repository variables `NIX_DARWIN_RUNNER` (default `macos-15`) and
+`IOS_RUNNER` (default `xcode-27`) say. Point them at Blacksmith labels for
+speed, or clear them to fall back to GitHub. The steps are in
 [`self-hosted-rebase.yml`](workflows/self-hosted-rebase.yml),
 [`self-hosted-build.yml`](workflows/self-hosted-build.yml) and
 [`scripts/self-hosted`](../scripts/self-hosted).
@@ -57,8 +62,8 @@ The hub and MCP images are public on GHCR; take a `1.2.<run>` tag.
 
 ## The iOS app
 
-Each published build also uploads the app to TestFlight, on GitHub's
-`xcode-27` runner. It talks to T3 servers over the local network, the
+Each published build also uploads the app to TestFlight, on the
+`IOS_RUNNER` Mac. It talks to T3 servers over the local network, the
 tailnet or a public URL. T3 Connect sign-in, push notifications, Live
 Activities and `app.t3.codes` links need upstream's hosted services and
 Apple team, so they do not work in this build.
