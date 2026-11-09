@@ -141,7 +141,14 @@ then a release carries Linux and Windows only.
 | `APPLE_TEAM_ID` (variable)                 | `26DMRHRW6Z`                                                                                  |
 | `MACOS_APP_ID` (variable)                  | `dev.whexy.t3code.desktop`; a bundle id belongs to one team, so upstream's is not available   |
 | `CLERK_PASSKEY_RP_DOMAINS` (variable)      | The `webcredentials:` domain the signed entitlements name; nothing uses it without T3 Connect |
+| `MACOS_NOTARIZE` (variable)                | `false`, so the build leaves notarizing to the job after it                                   |
 
-Notarization uses the iOS job's `ASC_*` key. The app's signature differs from
-upstream's, so on a Mac the fork's app replaces upstream's instead of updating
-it, and anything upstream's app kept in the keychain has to be entered again.
+A Linux job notarizes the signed app after the build, with the iOS job's
+`ASC_*` key and up to four attempts, so Apple being unreachable costs minutes
+rather than a rebuild. The ticket is not stapled: the app's updater and
+dotfiles' install never ask Gatekeeper, and Gatekeeper checks a downloaded app
+with Apple online.
+
+The app's signature differs from upstream's, so on a Mac the fork's app
+replaces upstream's instead of updating it, and anything upstream's app kept in
+the keychain has to be entered again.
