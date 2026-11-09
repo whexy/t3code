@@ -46,6 +46,7 @@ import {
   PUBLISH_AGENT_ACTIVITY_SECRET,
   RELAY_ENVIRONMENT_CREDENTIAL_SECRET,
   RELAY_ISSUER_SECRET,
+  readSelfHostedPushTarget,
   RELAY_URL_SECRET,
 } from "../cloud/config.ts";
 import { EnvironmentSigningKey } from "../cloud/environmentKeys.ts";
@@ -179,6 +180,9 @@ function agentAwarenessPublishIdentity(
 }
 
 const CLEARED_PUBLISH_IDENTITY = agentAwarenessPublishIdentity(null);
+// After a failed publish the receiver may hold any state. This counts as live but matches no
+// real identity (those are "null" or JSON arrays and objects), so the next publish always sends.
+const UNACKNOWLEDGED_PUBLISH_IDENTITY = "unacknowledged";
 
 // A published tombstone stays recorded so repeats are skipped, but it is not live state.
 function hasLivePublishedState(
@@ -418,6 +422,7 @@ export const make = Effect.gen(function* () {
   // its first alert time through parent renames, relinks and the parent's own requests.
   const childAlertByThread = new Map<ThreadId, SubagentAlert>();
   const subagentRequests = new Map<ThreadId, SubagentRequest>();
+  const pushTarget = yield* readSelfHostedPushTarget;
 
   const readSecretString = (name: string) =>
     secrets
@@ -429,6 +434,7 @@ export const make = Effect.gen(function* () {
       );
 
   const readRelayConfig = Effect.gen(function* () {
+    if (pushTarget !== null) return pushTarget;
     const [url, issuer, environmentCredential] = yield* Effect.all([
       readSecretString(RELAY_URL_SECRET),
       readSecretString(RELAY_ISSUER_SECRET),
@@ -439,9 +445,12 @@ export const make = Effect.gen(function* () {
       : null;
   });
 
-  const readPublishAgentActivityEnabled = readSecretString(PUBLISH_AGENT_ACTIVITY_SECRET).pipe(
-    Effect.map(isAgentActivityPublishingEnabledValue),
-  );
+  const readPublishAgentActivityEnabled =
+    pushTarget !== null
+      ? Effect.succeed(true)
+      : readSecretString(PUBLISH_AGENT_ACTIVITY_SECRET).pipe(
+          Effect.map(isAgentActivityPublishingEnabledValue),
+        );
 
   const makeRelayClient = (relayConfig: {
     readonly url: string;
@@ -784,10 +793,17 @@ export const make = Effect.gen(function* () {
       Effect.tap(() => cancelPublishRetry(threadId)),
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) return Effect.void;
-        return Effect.logWarning("agent activity publish failed", {
-          threadId,
-          cause: Cause.pretty(cause),
-        }).pipe(Effect.andThen(schedulePublishRetry(threadId)));
+        return Ref.update(publishedStateByThreadRef, (publishedStates) =>
+          new Map(publishedStates).set(threadId, UNACKNOWLEDGED_PUBLISH_IDENTITY),
+        ).pipe(
+          Effect.andThen(
+            Effect.logWarning("agent activity publish failed", {
+              threadId,
+              cause: Cause.pretty(cause),
+            }),
+          ),
+          Effect.andThen(schedulePublishRetry(threadId)),
+        );
       }),
       Effect.withSpan("AgentAwarenessRelay.publishThread"),
     );
@@ -802,12 +818,9 @@ export const make = Effect.gen(function* () {
 
   schedulePublishRetry = Effect.fnUntraced(function* (threadId: ThreadId) {
     const attempts = publishRetries.get(threadId)?.attempts ?? 0;
-    const delayMs = RELAY_AGENT_ACTIVITY_RETRY_DELAYS_MS[attempts];
-    if (delayMs === undefined) {
-      // Retain exhausted budgets until activity or success resets them; old timers must not restart retries.
-      yield* Effect.logWarning("agent activity publish retry budget exhausted", { threadId });
-      return;
-    }
+    // Keep retrying at the last delay: giving up would leave the receiver on a stale state.
+    const delayMs =
+      RELAY_AGENT_ACTIVITY_RETRY_DELAYS_MS[attempts] ?? RELAY_AGENT_ACTIVITY_RETRY_DELAYS_MS[4];
     const retry = {
       attempts: attempts + 1,
       timer: undefined as Fiber.Fiber<void> | undefined,
@@ -831,9 +844,9 @@ export const make = Effect.gen(function* () {
   });
 
   const publishActiveThreadsUnsafe = Effect.gen(function* () {
-    const relayUrl = yield* readSecretString(RELAY_URL_SECRET).pipe(
-      Effect.orElseSucceed(() => null),
-    );
+    const relayUrl =
+      pushTarget?.url ??
+      (yield* readSecretString(RELAY_URL_SECRET).pipe(Effect.orElseSucceed(() => null)));
     if (!relayUrl) {
       yield* Effect.logDebug("agent activity snapshot skipped; relay link credentials unavailable");
       return "unlinked" as const;
