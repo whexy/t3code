@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Rebases self-hosted-nightly onto an upstream nightly release and pins
-# nix/sources.json to it: the state machine
+# Rebases dev onto an upstream nightly release, pins nix/sources.json to it,
+# and promotes dev to self-hosted-nightly: the state machine
 # .github/workflows/self-hosted-rebase.yml runs. Run it from a copy outside the
 # checkout, since the rebase rewrites this file.
 #
@@ -9,17 +9,18 @@
 # reads; `stage` names the operation that was running when the script died).
 set -euo pipefail
 
-branch="${BRANCH:-self-hosted-nightly}"
+branch="${BRANCH:-dev}"
+target="${TARGET:-self-hosted-nightly}"
 upstream_url="${UPSTREAM_URL:-https://github.com/pingdotgg/t3code.git}"
 scripts="$(cd "$(dirname "$0")" && pwd)"
 state_dir="${STATE_DIR:?}"
 mkdir -p "$state_dir"
 
-tag="" start="" result=""
+tag="" start="" result="" state="" promote=""
 record() { printf '%s' "$2" > "$state_dir/$1"; }
 enter() { record stage "$1"; }
 finish() {
-  local line="state=$1 tag=$tag start=$start result=$result"
+  local line="state=$state promote=$promote tag=$tag start=$start result=$result"
   echo "$line"
   if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then echo "$line" >> "$GITHUB_STEP_SUMMARY"; fi
   exit 0
@@ -62,14 +63,16 @@ for attempt in 1 2; do
   release="$(git rev-parse 'refs/remotes/upstream/release^{commit}')"
   base="$(git merge-base "$start" refs/remotes/upstream/main)"
 
+  result="$start"
+  record result "$result"
   if [[ "$release" == "$base" ]] &&
     jq -e --arg version "${tag#v}" '.version == $version' nix/sources.json > /dev/null; then
-    result="$start"
-    finish "NOOP(current)"
+    state="NOOP(current)"
+    break
   fi
   if [[ "$release" != "$base" ]] && git merge-base --is-ancestor "$release" "$base"; then
-    result="$start"
-    finish "NOOP(older)"
+    state="NOOP(older)"
+    break
   fi
 
   enter rebase
@@ -83,16 +86,42 @@ for attempt in 1 2; do
   fi
   result="$(git rev-parse HEAD)"
   record result "$result"
-  if [[ "$result" == "$start" ]]; then finish "NOOP(current)"; fi
+  if [[ "$result" == "$start" ]]; then
+    state="NOOP(current)"
+    break
+  fi
 
   enter push
   if output="$(git push --force-with-lease="$branch:$start" "${PUSH_URL:?}" "HEAD:refs/heads/$branch" 2>&1)"; then
     echo "$output"
-    finish PUSHED
+    state=PUSHED
+    break
   fi
   echo "$output" >&2
   if ! grep -q 'stale info' <<< "$output"; then exit 1; fi
   echo "$branch moved since $start; starting over (attempt $attempt)." >&2
 done
-enter push-race
-exit 1
+if [[ -z "$state" ]]; then
+  enter push-race
+  exit 1
+fi
+
+# The target only ever holds dev commits and the merge commits of promote pull
+# requests, so replacing it with dev loses nothing; a commit pushed to it any
+# other way stops the promote instead of vanishing.
+enter promote
+git fetch --no-tags origin "+refs/heads/$target:refs/remotes/origin/$target"
+promoted="$(git rev-parse "refs/remotes/origin/$target")"
+if [[ "$(git rev-parse "$promoted^{tree}")" == "$(git rev-parse "$result^{tree}")" ]]; then
+  promote=current
+  finish
+fi
+stray="$(git rev-list --no-merges "$promoted" --not "$start")"
+if [[ -n "$stray" ]]; then
+  echo "$target has commits $branch never had; land them on $branch first:" >&2
+  git log --no-walk --format='%h %s' --stdin <<< "$stray" >&2
+  exit 1
+fi
+git push --force-with-lease="$target:$promoted" "${PUSH_URL:?}" "$result:refs/heads/$target"
+promote=pushed
+finish
