@@ -497,6 +497,20 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }),
   );
 
+  it.effect("leaves macOS notarization on unless T3CODE_MACOS_NOTARIZE is false", () =>
+    Effect.gen(function* () {
+      const build = (env: Record<string, string>) =>
+        createBuildConfig("mac", "dmg", "0.0.33", true, false, undefined, undefined).pipe(
+          Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env }))),
+        );
+      const mac = (config: Record<string, unknown>) => config.mac as Record<string, unknown>;
+
+      assert.notProperty(mac(yield* build({})), "notarize");
+      assert.notProperty(mac(yield* build({ T3CODE_MACOS_NOTARIZE: "" })), "notarize");
+      assert.isFalse(mac(yield* build({ T3CODE_MACOS_NOTARIZE: "false" })).notarize);
+    }),
+  );
+
   it.effect("omits update feeds for pull request preview builds", () =>
     Effect.gen(function* () {
       const preview = yield* createBuildConfig(
