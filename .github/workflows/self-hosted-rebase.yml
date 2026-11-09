@@ -126,26 +126,3 @@ jobs:
               source: "t3code-fork", severity: "error", title: "Fork sync failed at \($stage)",
               detail: "The report script failed too.",
               url: "\(env.GITHUB_SERVER_URL)/\(env.GITHUB_REPOSITORY)/actions/runs/\(env.GITHUB_RUN_ID)"}')"
-
-  # Each rebase brings upstream's workflow files back, and a new one starts
-  # enabled. They ask for Blacksmith runners, which the fork pays for only for
-  # its Apple jobs, so every workflow but the fork's own is kept disabled.
-  disable-upstream-workflows:
-    needs: rebase
-    if: always()
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      actions: write
-    steps:
-      - env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh api --paginate "repos/$GITHUB_REPOSITORY/actions/workflows" --jq '.workflows[]
-            | select(.state == "active" and (.path | startswith(".github/workflows/"))
-              and (.path | startswith(".github/workflows/self-hosted-") | not))
-            | "\(.id) \(.path)"' |
-            while read -r id path; do
-              gh api -X PUT "repos/$GITHUB_REPOSITORY/actions/workflows/$id/disable"
-              echo "disabled $path" | tee -a "$GITHUB_STEP_SUMMARY"
-            done
