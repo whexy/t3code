@@ -12,11 +12,15 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { Command, Flag } from "effect/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import sharp from "sharp";
 
 import { BRAND_ASSET_PATHS, DEVELOPMENT_PUBLIC_ICON_OVERRIDES } from "./lib/brand-assets.ts";
 import { encodePngIco, readPngDimensions, WINDOWS_ICON_SIZES } from "./lib/icon-export.ts";
 
 const DESIGN_GENERATION = 26;
+// ictool's macOS rendition is full bleed; the .icns needs the 824pt body inside macOS's 1024pt icon grid.
+const MACOS_ICON_CANVAS = 1024;
+const MACOS_ICON_BODY = 824;
 const ICON_COMPOSER_EXECUTABLE_PARTS = [
   "Contents",
   "Applications",
@@ -41,7 +45,7 @@ const decodeIconComposerVersion = Schema.decodeUnknownEffect(
   Schema.fromJsonString(IconComposerVersion),
 );
 
-type IconPlatform = "iOS";
+type IconPlatform = "iOS" | "macOS";
 
 interface VariantOutputs {
   readonly ios: string;
@@ -185,11 +189,12 @@ export class IconExportEncodingError extends Schema.TaggedError<IconExportEncodi
   "IconExportEncodingError",
   {
     variant: Schema.String,
+    output: Schema.String,
     cause: Schema.Defect(),
   },
 ) {
   override get message(): string {
-    return `Failed to encode ICO renditions for the ${this.variant} icon.`;
+    return `Failed to encode the ${this.output} for the ${this.variant} icon.`;
   }
 }
 
@@ -593,11 +598,30 @@ const renderVariant = Effect.fn("iconExport.renderVariant")(function* (
   );
   const ico = yield* Effect.try({
     try: () => encodePngIco(icoRenditions),
-    catch: (cause) => new IconExportEncodingError({ variant: variant.label, cause }),
+    catch: (cause) =>
+      new IconExportEncodingError({ variant: variant.label, output: "ICO renditions", cause }),
+  });
+  const macosBody = yield* render("macOS", MACOS_ICON_BODY);
+  const inset = (MACOS_ICON_CANVAS - MACOS_ICON_BODY) / 2;
+  const macos = yield* Effect.tryPromise({
+    try: () =>
+      sharp(macosBody)
+        .extend({
+          top: inset,
+          bottom: inset,
+          left: inset,
+          right: inset,
+          background: { r: 0, g: 0, b: 0, alpha: 0 },
+        })
+        .png()
+        .toBuffer(),
+    catch: (cause) =>
+      new IconExportEncodingError({ variant: variant.label, output: "macOS icon", cause }),
   });
 
   return new Map<string, Buffer>([
     [variant.outputs.ios, ios],
+    [variant.outputs.macos, macos],
     [variant.outputs.universal, ios],
     [variant.outputs.appleTouch, yield* render("iOS", 180)],
     [variant.outputs.webIcon192, yield* render("iOS", 192)],
