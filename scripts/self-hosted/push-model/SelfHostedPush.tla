@@ -34,7 +34,8 @@ CONSTANTS
     NotifyFromPublishedThread, \* a notification comes from an owed publish, not the aggregate's first row
     NotifyOncePerPhase,        \* a thread's phase rings once: card alerts and notifications both mark it
     EndIsFinal,                \* from its first send an end is final: no card, resend it until APNs takes it
-    ReplayAlertsFromBaseline   \* a replay alerts like any delivery, against the persisted sent baseline
+    ReplayAlertsFromBaseline,  \* a replay alerts like any delivery, against the persisted sent baseline
+    AlertEveryEnteringRow      \* a card update alerts and marks every row entering ask or done, in one alert
 
 Boot     == <<"boot", 0>>   \* a delivery not caused by a publish: registration replay, sweep or startup
 Unknown  == "unknown"       \* no acknowledged state: the next publish always sends
@@ -45,6 +46,13 @@ NoSers   == [h \in Hosts |-> 0]
 AllNone(r) == \A h \in Hosts : r[h] = "none"
 \* Rows that move into an alerting phase (alertForAttentionTransition, alertForNewlyTerminal).
 Entering(prev, next) == {h \in Hosts : next[h] \in Alerting /\ prev[h] # next[h]}
+\* The rows a card update alerts (cardDelivery.ts alertedRows). Without AlertEveryEnteringRow,
+\* upstream's alertForAttentionTransition ?? alertForNewlyTerminal: a completion in the same
+\* update as a new approval neither rings nor is marked.
+Alerted(prev, next) ==
+    LET entering == Entering(prev, next)
+        asks == {h \in entering : next[h] = "ask"}
+    IN IF ~AlertEveryEnteringRow /\ asks # {} THEN asks ELSE entering
 Range(s) == {s[i] : i \in DOMAIN s}
 Without(s, h) == SelectSeq(s, LAMBDA x : x # h)
 Min(S) == CHOOSE i \in S : \A k \in S : i <= k
@@ -238,7 +246,7 @@ PushStartsDelivery ==
                     ELSE "update"
             cardRowsSent == IF card = "end" THEN NoRows ELSE agg
             alerts == IF card = "update" /\ lastKind = "agg" /\ (ReplayAlertsFromBaseline \/ ~replay) /\ mayRing
-                      THEN Entering(IF WriteAheadSend THEN alertBase ELSE lastRows, agg)
+                      THEN Alerted(IF WriteAheadSend THEN alertBase ELSE lastRows, agg)
                       ELSE {}
             Rings(h) == agg[h] \in Alerting /\ mayRing /\ (NotifyOncePerPhase => ~noted[h])
             \* notificationForPublish over DeviceQueue.owed (takeNotification)
