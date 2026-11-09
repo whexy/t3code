@@ -422,8 +422,8 @@ jobs:
       clerk_cli_oauth_client_id: ""
       relay_url: ""
 
-  # Signed with the team's Developer ID under its own bundle id (MACOS_APP_ID),
-  # and notarized with the App Store Connect key the iOS job uses.
+  # Signed with the team's Developer ID under its own bundle id (MACOS_APP_ID).
+  # MACOS_NOTARIZE=false leaves notarizing to desktop-mac-notarize.
   desktop-mac:
     needs: [desktop-plan, desktop-bundle]
     if: needs.desktop-plan.outputs.mac == 'true'
@@ -455,6 +455,46 @@ jobs:
       clerk_jwt_template: ""
       clerk_cli_oauth_client_id: ""
       relay_url: ""
+
+  # Apple's services drop connections from GitHub's Macs often enough that
+  # notarizing inside the build failed half its runs, so it happens here,
+  # where another attempt costs minutes instead of a rebuild. The ticket is
+  # not stapled: the updater and dotfiles' install never ask Gatekeeper, and
+  # Gatekeeper looks a downloaded app up online.
+  desktop-mac-notarize:
+    needs: desktop-mac
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            flake.nix
+            flake.lock
+          sparse-checkout-cone-mode: false
+      - uses: cachix/install-nix-action@v31
+      - uses: actions/download-artifact@v8
+        with:
+          name: desktop-mac-arm64
+          path: mac
+      - env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+        run: |
+          rcodesign() { nix run --inputs-from . nixpkgs#rcodesign -- "$@"; }
+          key="$RUNNER_TEMP/notary"
+          (umask 077 && mkdir "$key" && printf '%s\n' "$ASC_PRIVATE_KEY" > "$key/AuthKey.p8")
+          rcodesign encode-app-store-connect-api-key -o "$key/key.json" "$ASC_ISSUER_ID" "$ASC_KEY_ID" "$key/AuthKey.p8"
+          app=(mac/*.zip)
+          for attempt in 1 2 3 4; do
+            if rcodesign notary-submit --api-key-file "$key/key.json" --wait --max-wait-seconds 900 "${app[0]}"; then
+              echo "notarized: ${app[0]##*/} (attempt $attempt)" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            ((attempt < 4)) && sleep $((attempt * 120))
+          done
+          exit 1
 
   # A newer push builds itself, so a superseded commit is never tagged.
   gate:
@@ -727,11 +767,11 @@ jobs:
   # electron-updater accepts and which cannot clash with upstream's v<version>
   # tags in a clone that fetches both.
   publish-desktop:
-    needs: [gate, desktop-plan, desktop-linux, desktop-windows, desktop-mac]
+    needs: [gate, desktop-plan, desktop-linux, desktop-windows, desktop-mac, desktop-mac-notarize]
     if: >-
       !cancelled() && needs.gate.outputs.current == 'true' &&
       needs.desktop-linux.result == 'success' && needs.desktop-windows.result == 'success' &&
-      contains(fromJSON('["success","skipped"]'), needs.desktop-mac.result)
+      (needs.desktop-mac.result == 'skipped' || needs.desktop-mac-notarize.result == 'success')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -742,7 +782,8 @@ jobs:
           sparse-checkout: .github/actions
       - uses: actions/download-artifact@v8
         with:
-          pattern: desktop-*
+          # Not desktop-*, which also matches a failed build's launch-check output.
+          pattern: desktop-{linux-x64,win-x64,mac-arm64}
           path: release-assets
           merge-multiple: true
       - id: current
@@ -813,6 +854,7 @@ jobs:
         desktop-linux,
         desktop-windows,
         desktop-mac,
+        desktop-mac-notarize,
         publish-desktop,
         notify,
       ]
