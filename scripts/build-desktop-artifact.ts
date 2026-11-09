@@ -1290,7 +1290,8 @@ export function resolveMacPasskeySigningConfiguration(
   }
 
   return {
-    appId: DESKTOP_APP_ID,
+    // A bundle id is registered to one Apple team, so a team signing its own build names its own.
+    appId: env.T3CODE_MACOS_APP_ID?.trim() || DESKTOP_APP_ID,
     teamId,
     rpDomains: uniqueRpDomains,
     provisioningProfilePath,
@@ -2772,6 +2773,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   mockUpdateServerPort: number | undefined,
   macPasskeySigning:
     | {
+        readonly appId: string;
         readonly entitlementsPath: string;
         readonly provisioningProfilePath: string;
       }
@@ -2874,6 +2876,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       ...(signed ? { sign: path.join(repoRoot, "scripts/sign-macos.ts") } : {}),
       ...(macPasskeySigning
         ? {
+            appId: macPasskeySigning.appId,
             entitlements: macPasskeySigning.entitlementsPath,
             provisioningProfile: macPasskeySigning.provisioningProfilePath,
           }
@@ -3921,6 +3924,7 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
       options.mockUpdateServerPort,
       macPasskeySigning && macEntitlementsPath
         ? {
+            appId: macPasskeySigning.appId,
             entitlementsPath: macEntitlementsPath,
             provisioningProfilePath: macPasskeySigning.provisioningProfilePath,
           }
