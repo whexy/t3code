@@ -27,6 +27,15 @@ export class PushStoreError extends Schema.TaggedError<PushStoreError>()("PushSt
 
 type LiveActivityKind = "live_activity_update" | "live_activity_end";
 
+interface NotifiedThread {
+  readonly deviceId: string;
+  readonly environmentId: string;
+  readonly threadId: string;
+}
+
+/** A thread's phase that has rung or is ringing on a device. */
+export type PhaseMark = NotifiedThread & { readonly phase: string };
+
 /**
  * The SQLite state of one owner. Every method is synchronous so a caller can
  * read the rows and act on them, or store a row and queue its delivery, with
@@ -50,16 +59,22 @@ export class PushStore extends Context.Service<
     ) => void;
     readonly listTargets: () => ReadonlyArray<TargetRow>;
     readonly getTarget: (deviceId: string) => TargetRow | null;
-    /** Write-ahead: persists the aggregate about to be sent and returns the one it replaces. */
+    /**
+     * Write-ahead, in one write: persists the aggregate about to be sent (an end also marks the
+     * card as ending) and the phases its alert rings. Returns the sent aggregate it replaces.
+     */
     readonly beginSend: (input: {
       readonly deviceId: string;
       readonly token: string;
+      readonly kind: LiveActivityKind;
       readonly aggregate: RelayAgentActivityAggregateState | null;
+      readonly marks: ReadonlyArray<PhaseMark>;
     }) => string | null;
-    readonly restoreSent: (input: {
+    /** A refused send reached no one: restores the card's sent aggregate and drops its marks. */
+    readonly undoSend: (input: {
       readonly deviceId: string;
-      readonly token: string;
-      readonly sentAggregateJson: string | null;
+      readonly card: { readonly token: string; readonly sentAggregateJson: string | null } | null;
+      readonly marks: ReadonlyArray<PhaseMark>;
     }) => void;
     readonly recordDelivery: (input: {
       readonly deviceId: string;
@@ -74,6 +89,10 @@ export class PushStore extends Context.Service<
       readonly kind: LiveActivityKind | "push_notification";
       readonly invalidatedAt: string;
     }) => void;
+    /** The phase the device was last notified about for a thread, kept until the thread changes phase. */
+    readonly notifiedPhase: (thread: NotifiedThread) => string | null;
+    /** Write-ahead: persisted before the notification is sent. */
+    readonly markNotified: (mark: PhaseMark) => void;
   }
 >()("@t3tools/push/PushStore") {}
 
@@ -109,14 +128,23 @@ CREATE TABLE IF NOT EXISTS live_activities (
   last_live_activity_delivery_at TEXT,
   sent_aggregate_json TEXT,
   send_unsure INTEGER NOT NULL DEFAULT 0,
+  end_pending INTEGER NOT NULL DEFAULT 0,
   updated_at TEXT NOT NULL
+) STRICT;
+CREATE TABLE IF NOT EXISTS notified_phases (
+  device_id TEXT NOT NULL,
+  environment_id TEXT NOT NULL,
+  thread_id TEXT NOT NULL,
+  phase TEXT NOT NULL,
+  PRIMARY KEY (device_id, environment_id, thread_id)
 ) STRICT;
 `;
 
 const TARGET_SELECT = `
 SELECT d.device_id, d.platform, d.bundle_id, d.aps_environment, d.push_token, d.preferences_json,
   la.activity_push_token, la.remote_started_at, la.last_aggregate_json,
-  la.last_live_activity_delivery_at, la.sent_aggregate_json, coalesce(la.send_unsure, 0) AS send_unsure
+  la.last_live_activity_delivery_at, la.sent_aggregate_json, coalesce(la.send_unsure, 0) AS send_unsure,
+  coalesce(la.end_pending, 0) AS end_pending
 FROM devices d LEFT JOIN live_activities la ON la.device_id = d.device_id`;
 
 const decodeStateJson = Schema.decodeUnknownOption(
@@ -144,6 +172,7 @@ function toTarget(row: SqlRow): TargetRow {
     last_live_activity_delivery_at: text(row, "last_live_activity_delivery_at"),
     sent_aggregate_json: text(row, "sent_aggregate_json"),
     send_unsure: Number(row.send_unsure) === 1,
+    end_pending: Number(row.end_pending) === 1,
   };
 }
 
@@ -155,6 +184,15 @@ function make(db: NodeSqlite.DatabaseSync): PushStore["Service"] {
   // The write-ahead record must reach disk before the APNs send it guards.
   db.exec("PRAGMA synchronous = FULL");
   db.exec(SCHEMA);
+  // Databases created before EndIsFinal.
+  if (
+    !db
+      .prepare("PRAGMA table_info(live_activities)")
+      .all()
+      .some((c) => c.name === "end_pending")
+  ) {
+    db.exec("ALTER TABLE live_activities ADD COLUMN end_pending INTEGER NOT NULL DEFAULT 0");
+  }
 
   const transaction = (run: () => void) => {
     db.exec("BEGIN IMMEDIATE");
@@ -179,6 +217,28 @@ function make(db: NodeSqlite.DatabaseSync): PushStore["Service"] {
   const pruneTerminalRows = db.prepare(
     "DELETE FROM activity_rows WHERE phase IN ('completed', 'failed') AND updated_at < ?",
   );
+  // A mark lasts only while its phase does: a thread that leaves the phase may enter it again.
+  const clearMovedMarks = db.prepare(
+    "DELETE FROM notified_phases WHERE environment_id = ? AND thread_id = ? AND phase != ?",
+  );
+  const clearThreadMarks = db.prepare(
+    "DELETE FROM notified_phases WHERE environment_id = ? AND thread_id = ?",
+  );
+  const pruneOrphanMarks = db.prepare(`
+    DELETE FROM notified_phases WHERE NOT EXISTS (
+      SELECT 1 FROM activity_rows r
+      WHERE r.environment_id = notified_phases.environment_id
+        AND r.thread_id = notified_phases.thread_id)`);
+  const clearDeviceMarks = db.prepare("DELETE FROM notified_phases WHERE device_id = ?");
+  const notifiedPhase = db.prepare(
+    "SELECT phase FROM notified_phases WHERE device_id = ? AND environment_id = ? AND thread_id = ?",
+  );
+  const markNotified = db.prepare(`
+    INSERT INTO notified_phases (device_id, environment_id, thread_id, phase) VALUES (?, ?, ?, ?)
+    ON CONFLICT (device_id, environment_id, thread_id) DO UPDATE SET phase = excluded.phase`);
+  const clearMark = db.prepare(`
+    DELETE FROM notified_phases
+    WHERE device_id = ? AND environment_id = ? AND thread_id = ? AND phase = ?`);
   const releasePushToken = db.prepare(
     "UPDATE devices SET push_token = NULL, updated_at = ? WHERE push_token = ?",
   );
@@ -208,7 +268,7 @@ function make(db: NodeSqlite.DatabaseSync): PushStore["Service"] {
   );
   const releaseActivityToken = db.prepare(`
     UPDATE live_activities SET activity_push_token = NULL, remote_started_at = NULL,
-      ended_at = ?, updated_at = ?
+      ended_at = ?, end_pending = 0, updated_at = ?
     WHERE activity_push_token = ?`);
   const upsertLiveActivity = db.prepare(`
     INSERT INTO live_activities (device_id, activity_push_token, remote_started_at, updated_at)
@@ -221,6 +281,7 @@ function make(db: NodeSqlite.DatabaseSync): PushStore["Service"] {
       last_live_activity_delivery_at = NULL,
       sent_aggregate_json = NULL,
       send_unsure = 0,
+      end_pending = 0,
       updated_at = excluded.updated_at`);
   const listTargets = db.prepare(TARGET_SELECT);
   const getTarget = db.prepare(`${TARGET_SELECT} WHERE d.device_id = ?`);
@@ -228,7 +289,7 @@ function make(db: NodeSqlite.DatabaseSync): PushStore["Service"] {
     "SELECT sent_aggregate_json FROM live_activities WHERE device_id = ? AND activity_push_token = ?",
   );
   const beginSend = db.prepare(`
-    UPDATE live_activities SET sent_aggregate_json = ?, send_unsure = 1
+    UPDATE live_activities SET sent_aggregate_json = ?, send_unsure = 1, end_pending = ?
     WHERE device_id = ? AND activity_push_token = ?`);
   const restoreSent = db.prepare(`
     UPDATE live_activities SET sent_aggregate_json = ?
@@ -240,34 +301,40 @@ function make(db: NodeSqlite.DatabaseSync): PushStore["Service"] {
   // An ended card takes no more updates: drop its token, as LiveActivities.markDelivery does.
   const recordEnd = db.prepare(`
     UPDATE live_activities SET activity_push_token = NULL, ended_at = ?, last_aggregate_json = ?,
-      last_live_activity_delivery_at = ?, send_unsure = 0, updated_at = ?
+      last_live_activity_delivery_at = ?, send_unsure = 0, end_pending = 0, updated_at = ?
     WHERE device_id = ? AND activity_push_token = ?`);
   const invalidatePushToken = db.prepare(
     "UPDATE devices SET push_token = NULL, updated_at = ? WHERE device_id = ? AND push_token = ?",
   );
   const invalidateActivityToken = db.prepare(`
     UPDATE live_activities SET activity_push_token = NULL, remote_started_at = NULL,
-      ended_at = ?, send_unsure = 0, updated_at = ?
+      ended_at = ?, send_unsure = 0, end_pending = 0, updated_at = ?
     WHERE device_id = ? AND activity_push_token = ?`);
 
   return PushStore.of({
-    upsertRow: (state) => {
-      upsertRow.run(
-        state.environmentId,
-        state.threadId,
-        state.phase,
-        JSON.stringify(state),
-        state.updatedAt,
-      );
-    },
-    deleteRow: (input) => {
-      deleteRow.run(input.environmentId, input.threadId);
-    },
+    upsertRow: (state) =>
+      transaction(() => {
+        clearMovedMarks.run(state.environmentId, state.threadId, state.phase);
+        upsertRow.run(
+          state.environmentId,
+          state.threadId,
+          state.phase,
+          JSON.stringify(state),
+          state.updatedAt,
+        );
+      }),
+    deleteRow: (input) =>
+      transaction(() => {
+        clearThreadMarks.run(input.environmentId, input.threadId);
+        deleteRow.run(input.environmentId, input.threadId);
+      }),
     listRows: () =>
       listRows.all().flatMap((row) => Option.toArray(decodeStateJson(text(row, "state_json")))),
-    pruneTerminalRows: (updatedBefore) => {
-      pruneTerminalRows.run(updatedBefore);
-    },
+    pruneTerminalRows: (updatedBefore) =>
+      transaction(() => {
+        pruneTerminalRows.run(updatedBefore);
+        pruneOrphanMarks.run();
+      }),
     registerDevice: (registration, now) =>
       transaction(() => {
         if (registration.pushToken) releasePushToken.run(now, registration.pushToken);
@@ -291,6 +358,7 @@ function make(db: NodeSqlite.DatabaseSync): PushStore["Service"] {
       }),
     unregisterDevice: (deviceId) =>
       transaction(() => {
+        clearDeviceMarks.run(deviceId);
         deleteLiveActivity.run(deviceId);
         deleteDevice.run(deviceId);
       }),
@@ -313,12 +381,28 @@ function make(db: NodeSqlite.DatabaseSync): PushStore["Service"] {
     beginSend: (input) => {
       const row = sentAggregate.get(input.deviceId, input.token);
       const previous = row === undefined ? null : text(row, "sent_aggregate_json");
-      beginSend.run(aggregateJson(input.aggregate), input.deviceId, input.token);
+      transaction(() => {
+        beginSend.run(
+          aggregateJson(input.aggregate),
+          input.kind === "live_activity_end" ? 1 : 0,
+          input.deviceId,
+          input.token,
+        );
+        for (const mark of input.marks) {
+          markNotified.run(mark.deviceId, mark.environmentId, mark.threadId, mark.phase);
+        }
+      });
       return previous;
     },
-    restoreSent: (input) => {
-      restoreSent.run(input.sentAggregateJson, input.deviceId, input.token);
-    },
+    undoSend: (input) =>
+      transaction(() => {
+        if (input.card !== null) {
+          restoreSent.run(input.card.sentAggregateJson, input.deviceId, input.card.token);
+        }
+        for (const mark of input.marks) {
+          clearMark.run(mark.deviceId, mark.environmentId, mark.threadId, mark.phase);
+        }
+      }),
     recordDelivery: (input) => {
       const json = aggregateJson(input.aggregate);
       if (input.kind === "live_activity_end") {
@@ -345,6 +429,13 @@ function make(db: NodeSqlite.DatabaseSync): PushStore["Service"] {
           input.token,
         );
       }
+    },
+    notifiedPhase: (thread) => {
+      const row = notifiedPhase.get(thread.deviceId, thread.environmentId, thread.threadId);
+      return row === undefined ? null : text(row, "phase");
+    },
+    markNotified: (mark) => {
+      markNotified.run(mark.deviceId, mark.environmentId, mark.threadId, mark.phase);
     },
   });
 }
