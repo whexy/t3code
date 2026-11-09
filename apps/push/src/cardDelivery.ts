@@ -25,7 +25,9 @@ import {
 } from "../../../infra/relay/src/agentActivity/agentActivityAlerts.ts";
 import {
   isTerminalPhase,
+  MAX_SUMMARY_TEXT_LENGTH,
   notificationForActivity,
+  truncateText,
 } from "../../../infra/relay/src/agentActivity/agentActivityPayloads.ts";
 import type * as Apns from "../../../infra/relay/src/agentActivity/ApnsClient.ts";
 import type {
@@ -35,6 +37,8 @@ import type {
 import type { ApnsCredentials } from "../../../infra/relay/src/Config.ts";
 
 const MIN_LIVE_ACTIVITY_UPDATE_INTERVAL_MS = 15_000;
+// Two names plus the longest phase words and separator stay within MAX_SUMMARY_TEXT_LENGTH.
+const MAX_NAME_IN_COMBINED_ALERT = 45;
 const FRESHLY_ARMED_GRACE_MS = 2 * 60 * 1_000;
 const PERMANENT_APNS_TOKEN_REASONS = new Set([
   "BadDeviceToken",
@@ -178,17 +182,64 @@ function isFreshlyArmed(target: TargetRow, nowMs: number): boolean {
   );
 }
 
-/** `alertForAttentionTransition ?? alertForNewlyTerminal`, as the rows the alert rings for. */
+interface AlertedRows {
+  readonly attention: ReadonlyArray<RelayAgentActivityAggregateRow>;
+  readonly terminal: ReadonlyArray<RelayAgentActivityAggregateRow>;
+}
+
+const NO_ALERTED_ROWS: AlertedRows = { attention: [], terminal: [] };
+
+// Differs: upstream rings for completions only when nothing newly asks, so a completion delivered with an ask is never alerted.
 function alertedRows(input: {
   readonly previousAggregate: RelayAgentActivityAggregateState | null;
   readonly nextAggregate: RelayAgentActivityAggregateState;
   readonly preferences: RelayAgentAwarenessPreferences;
   readonly nowMs: number;
-}): ReadonlyArray<RelayAgentActivityAggregateRow> {
-  const attention = attentionTransitionRows(input);
-  return attention.length > 0
-    ? attention
-    : terminalTransitionRows({ ...input, includeUnobserved: true });
+}): AlertedRows {
+  return {
+    attention: attentionTransitionRows(input),
+    terminal: terminalTransitionRows({ ...input, includeUnobserved: true }),
+  };
+}
+
+function phaseWords(row: RelayAgentActivityAggregateRow): string {
+  switch (row.phase) {
+    case "waiting_for_approval":
+      return "needs approval";
+    case "waiting_for_input":
+      return "needs input";
+    case "failed":
+      return "failed";
+    default:
+      return "done";
+  }
+}
+
+/** One alert for both kinds, asks first; a single kind keeps upstream's text. */
+export function alertForAlertedRows(rows: AlertedRows): ApnsLiveActivityAlert | null {
+  const { attention, terminal } = rows;
+  const asking = attention[0];
+  const finished = terminal[0];
+  if (!asking || !finished) return alertForActivityRows(asking ? attention : terminal);
+  if (attention.length === 1 && terminal.length === 1) {
+    const name = (row: RelayAgentActivityAggregateRow) =>
+      `${truncateText(row.threadTitle, MAX_NAME_IN_COMBINED_ALERT)} ${phaseWords(row)}`;
+    return {
+      title: `${name(asking)} · ${name(finished)}`,
+      body: truncateText(
+        `${asking.status}: ${asking.projectTitle} · ${finished.status}: ${finished.projectTitle}`,
+        MAX_SUMMARY_TEXT_LENGTH,
+      ),
+    };
+  }
+  const agents = attention.length === 1 ? "agent needs" : "agents need";
+  return {
+    title: `${attention.length} ${agents} attention · ${terminal.length} finished`,
+    body: truncateText(
+      [...attention, ...terminal].map((row) => row.threadTitle).join(", "),
+      MAX_SUMMARY_TEXT_LENGTH,
+    ),
+  };
 }
 
 const endDelivery = (token: string): CardDelivery => ({
@@ -254,13 +305,13 @@ function chooseLiveActivityDelivery(input: {
         preferences,
         nowMs: input.nowMs,
       })
-    : [];
+    : NO_ALERTED_ROWS;
   return {
     kind: "live_activity_update",
     token,
     aggregate: nextAggregate,
-    alert: alertForActivityRows(alerted),
-    alerted,
+    alert: alertForAlertedRows(alerted),
+    alerted: [...alerted.attention, ...alerted.terminal],
   };
 }
 
