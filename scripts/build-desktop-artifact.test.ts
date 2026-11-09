@@ -1466,6 +1466,15 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       rpDomains: ["example.clerk.accounts.dev"],
       provisioningProfilePath: "/tmp/t3code.provisionprofile",
     });
+    assert.equal(
+      resolveMacPasskeySigningConfiguration({
+        T3CODE_APPLE_TEAM_ID: "abc1234567",
+        T3CODE_MACOS_PROVISIONING_PROFILE: "/tmp/t3code.provisionprofile",
+        T3CODE_CLERK_PUBLISHABLE_KEY: `pk_test_${btoa("example.clerk.accounts.dev$")}`,
+        T3CODE_MACOS_APP_ID: " dev.example.t3code.desktop ",
+      }).appId,
+      "dev.example.t3code.desktop",
+    );
   });
 
   it("normalizes explicit macOS passkey RP domains and renders required entitlements", () => {
