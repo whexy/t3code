@@ -16,6 +16,7 @@ import {
   TurnItemId,
 } from "@t3tools/contracts";
 import { RelayAgentActivityState } from "@t3tools/contracts/relay";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -172,6 +173,7 @@ const makeTestRelay = Effect.fnUntraced(function* (
     readonly readShell?: (threadId: ThreadId) => Effect.Effect<OrchestrationV2ThreadShell | null>;
     readonly domainEvents?: Stream.Stream<OrchestrationV2DomainEvent>;
     readonly catchUpThreads?: ReadonlyArray<OrchestrationV2ThreadShell>;
+    readonly env?: Record<string, string>;
   } = {},
 ) {
   const values = new Map<string, Uint8Array>(
@@ -327,7 +329,12 @@ const makeTestRelay = Effect.fnUntraced(function* (
       getById: () => Effect.succeedSome(project),
     }),
     Effect.provideService(FetchHttpClient.Fetch, fetch),
-    Effect.provide(NodeCrypto.layer),
+    Effect.provide(
+      Layer.mergeAll(
+        NodeCrypto.layer,
+        ConfigProvider.layer(ConfigProvider.fromEnv({ env: options.env ?? {} })),
+      ),
+    ),
   );
   return { relay, secrets, secretReads, currentShell, shellReads, publications, catchUp };
 });
@@ -486,9 +493,14 @@ describe("AgentAwarenessRelay", () => {
     }),
   );
 
-  it.effect("deduplicates state and republishes title changes", () =>
+  it.effect("deduplicates acknowledged state and resends after a failed publish", () =>
     Effect.gen(function* () {
-      const { relay, currentShell, publications } = yield* makeTestRelay();
+      const { relay, currentShell, publications } = yield* makeTestRelay({
+        respond: (attempt) =>
+          attempt === 3
+            ? new Response("unavailable", { status: 503 })
+            : Response.json({ ok: true, deliveries: [] }),
+      });
       yield* relay.publishThread(THREAD_ID);
       yield* Ref.set(
         currentShell,
@@ -500,6 +512,42 @@ describe("AgentAwarenessRelay", () => {
       yield* relay.publishThread(THREAD_ID);
       assert.equal(publications.length, 2);
       assert.equal(publications[1]?.state?.threadTitle, "Renamed thread");
+
+      // The receiver may have stored the failed rename, so reverting must not be skipped as unchanged.
+      yield* Ref.set(currentShell, shell());
+      yield* relay.publishThread(THREAD_ID);
+      yield* Ref.set(currentShell, shell({ title: "Renamed thread" }));
+      yield* relay.publishThread(THREAD_ID);
+      assert.deepEqual(
+        publications.map((publication) => publication.state?.threadTitle),
+        ["Thread", "Renamed thread", "Thread", "Renamed thread"],
+      );
+    }),
+  );
+
+  it.effect("keeps retrying a failed publish past the backoff schedule until it lands", () =>
+    Effect.gen(function* () {
+      const { relay, publications } = yield* makeTestRelay({
+        respond: (attempt) =>
+          attempt <= 7
+            ? new Response("unavailable", { status: 503 })
+            : Response.json({ ok: true, deliveries: [] }),
+      });
+      yield* relay.publishThread(THREAD_ID);
+      for (const delay of ["1 second", "2 seconds", "4 seconds", "8 seconds"] as const) {
+        yield* TestClock.adjust(delay);
+        yield* relay.drain;
+      }
+      for (let i = 0; i < 3; i++) {
+        yield* TestClock.adjust("16 seconds");
+        yield* relay.drain;
+      }
+      assert.equal(publications.length, 8);
+      assert.equal(publications[7]?.state?.phase, "running");
+
+      yield* TestClock.adjust("10 minutes");
+      yield* relay.drain;
+      assert.equal(publications.length, 8);
     }),
   );
 
@@ -973,6 +1021,41 @@ describe("AgentAwarenessRelay", () => {
     ),
   );
 });
+
+it.effect.each([
+  { name: "publishes to the self-hosted push target", configured: true },
+  { name: "stays silent", configured: false },
+])("without a T3 Connect link, startup catch-up $name", ({ configured }) =>
+  Effect.gen(function* () {
+    const { relay, currentShell, catchUp, publications } = yield* makeTestRelay({
+      linked: false,
+      catchUpThreads: [shell()],
+      env: configured
+        ? { T3CODE_PUSH_URL: "https://push.example.test", T3CODE_PUSH_TOKEN: "push-token" }
+        : {},
+    });
+    yield* relay.start();
+    yield* TestClock.adjust("1 second");
+    yield* relay.drain;
+    if (!configured) {
+      yield* relay.publishThread(THREAD_ID);
+      assert.equal(catchUp.activitySnapshotReads, 0);
+      assert.deepEqual(publications, []);
+      return;
+    }
+    assert.equal(catchUp.activitySnapshotReads, 1);
+    assert.equal(publications.length, 1);
+    assert.isTrue(publications[0]?.url.startsWith("https://push.example.test/") ?? false);
+    assert.equal(publications[0]?.authorization, "Bearer push-token");
+    assert.equal(publications[0]?.state?.phase, "running");
+
+    yield* Ref.set(currentShell, shell({ title: "Renamed thread" }));
+    yield* relay.publishThread(THREAD_ID);
+    assert.equal(publications.length, 2);
+    assert.equal(publications[1]?.authorization, "Bearer push-token");
+    assert.equal(publications[1]?.state?.threadTitle, "Renamed thread");
+  }).pipe(Effect.scoped),
+);
 
 it.effect("catches up after startup without polling after success", () =>
   Effect.gen(function* () {
