@@ -1,11 +1,11 @@
 name: Build a self-hosted image
 description: >-
   Builds a linux/amd64 image. Outside pull requests it pushes the image to
-  ghcr.io/whexy/t3code-<name> by digest only, which nothing deploys until
+  ghcr.io/<repository owner>/t3code-<name> by digest only, which nothing deploys until
   self-hosted-build.yml's promote job tags it, and outputs the digest.
 inputs:
   name:
-    description: Image name; it is pushed as ghcr.io/whexy/t3code-<name>
+    description: Image name; it is pushed as ghcr.io/<repository owner>/t3code-<name>
     required: true
   dockerfile:
     description: Dockerfile path
@@ -39,6 +39,6 @@ runs:
         provenance: false
         sbom: false
         labels: |
-          org.opencontainers.image.source=https://github.com/whexy/t3code
+          org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           org.opencontainers.image.revision=${{ github.sha }}
-        outputs: ${{ github.event_name != 'pull_request' && format('type=image,name=ghcr.io/whexy/t3code-{0},push-by-digest=true,name-canonical=true,push=true', inputs.name) || 'type=cacheonly' }}
+        outputs: ${{ github.event_name != 'pull_request' && format('type=image,name=ghcr.io/{0}/t3code-{1},push-by-digest=true,name-canonical=true,push=true', github.repository_owner, inputs.name) || 'type=cacheonly' }}
