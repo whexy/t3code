@@ -187,6 +187,51 @@ jobs:
           dockerfile: apps/policy-editor/Dockerfile
           context: ${{ runner.temp }}/context
 
+  push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.image.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            /*
+            !/.repos/
+            !/apps/mobile/modules/t3-terminal/Vendor/**/*.a
+          sparse-checkout-cone-mode: false
+
+      - uses: ./.github/actions/setup-ci-deps
+        with:
+          install: "false"
+
+      # t3-push imports the relay's APNs modules by path, so it needs the
+      # relay's dependencies as well as its own.
+      - name: Install
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
+        run: |
+          vp install --lockfile-only
+          vp install --frozen-lockfile --ignore-scripts --filter=@t3tools/push... --filter=t3code-relay...
+
+      - name: Test, typecheck and bundle
+        run: |
+          (cd apps/push && vp test run)
+          vp run --filter @t3tools/push typecheck
+          (cd apps/push && vp pack)
+          mkdir -p "$RUNNER_TEMP/context"
+          cp apps/push/dist/bin.mjs "$RUNNER_TEMP/context/"
+
+      - id: image
+        uses: ./.github/actions/self-hosted-image
+        with:
+          name: push
+          dockerfile: apps/push/Dockerfile
+          context: ${{ runner.temp }}/context
+
   nix-linux:
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -234,7 +279,7 @@ jobs:
 
   # A newer push builds itself, so a superseded commit is never tagged.
   gate:
-    needs: [web-hub, mcp, policy-editor, nix-linux, nix-darwin]
+    needs: [web-hub, mcp, policy-editor, push, nix-linux, nix-darwin]
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/self-hosted-nightly'
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -257,7 +302,7 @@ jobs:
           fi
 
   promote-images:
-    needs: [gate, web-hub, mcp, policy-editor]
+    needs: [gate, web-hub, mcp, policy-editor, push]
     if: needs.gate.outputs.current == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -282,6 +327,7 @@ jobs:
           HUB: ${{ needs.web-hub.outputs.digest }}
           MCP: ${{ needs.mcp.outputs.digest }}
           POLICY_EDITOR: ${{ needs.policy-editor.outputs.digest }}
+          PUSH: ${{ needs.push.outputs.digest }}
         run: |
           promote() {
             local image="ghcr.io/whexy/t3code-$1"
@@ -291,6 +337,7 @@ jobs:
           promote hub "$HUB"
           promote mcp "$MCP"
           promote policy-editor "$POLICY_EDITOR"
+          promote push "$PUSH"
           echo "images: 1.2.$GITHUB_RUN_NUMBER sha-${GITHUB_SHA::12}" >> "$GITHUB_STEP_SUMMARY"
 
   # ArgoCD Image Updater is the fallback for these images, not the trigger.
@@ -327,7 +374,8 @@ jobs:
         run: |
           git config user.name "whexy-bot[bot]"
           git config user.email "315421218+whexy-bot[bot]@users.noreply.github.com"
-          for app in t3code-hub t3code-mcp t3code-policy-editor; do
+          for app in t3code-hub t3code-mcp t3code-policy-editor t3code-push; do
+            [ -f "gitops/apps/$app/kustomization.yaml" ] || continue
             sed -i "0,/^\( *\)newTag: .*/s//\1newTag: $TAG/" "gitops/apps/$app/kustomization.yaml"
           done
           git diff --stat
@@ -449,6 +497,9 @@ jobs:
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          # Prebuild writes these into Info.plist only; without the secret, push stays off.
+          T3CODE_PUSH_URL: https://t3-push.clusters.work
+          T3CODE_PUSH_TOKEN: ${{ secrets.T3_PUSH_PHONE_TOKEN }}
         run: |
           runtime="$(./node_modules/.bin/expo-updates runtimeversion:resolve --platform ios --workflow managed | tail -1 | jq -r .runtimeVersion)"
           team="$(./node_modules/.bin/expo config --json | jq -r .ios.appleTeamId)"
@@ -518,6 +569,7 @@ jobs:
         web-hub,
         mcp,
         policy-editor,
+        push,
         nix-linux,
         nix-darwin,
         gate,
