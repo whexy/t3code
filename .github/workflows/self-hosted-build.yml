@@ -255,11 +255,9 @@ jobs:
           OUT: ${{ steps.check.outputs.out }}
         run: cachix push whexy-t3code "$OUT"
 
-  # Apple jobs take their runner from a repository variable, so they can move
-  # between Blacksmith and GitHub-hosted Macs without a commit.
   nix-darwin:
     if: github.event_name != 'pull_request'
-    runs-on: ${{ vars.NIX_DARWIN_RUNNER || 'macos-15' }}
+    runs-on: macos-15
     timeout-minutes: 90
     outputs:
       out: ${{ steps.check.outputs.out }}
@@ -332,7 +330,7 @@ jobs:
           PUSH: ${{ needs.push.outputs.digest }}
         run: |
           promote() {
-            local image="ghcr.io/$GITHUB_REPOSITORY_OWNER/t3code-$1"
+            local image="ghcr.io/whexy/t3code-$1"
             docker buildx imagetools create --prefer-index=false \
               -t "$image:sha-${GITHUB_SHA::12}" -t "$image:1.2.$GITHUB_RUN_NUMBER" "$image@${2:?no digest for $1}"
           }
@@ -421,7 +419,7 @@ jobs:
   ios-testflight:
     needs: gate
     if: needs.gate.outputs.current == 'true'
-    runs-on: ${{ vars.IOS_RUNNER || 'xcode-27' }}
+    runs-on: xcode-27
     timeout-minutes: 120
     env:
       APP_VARIANT: preview
@@ -465,9 +463,7 @@ jobs:
       - name: Install
         if: steps.secrets.outputs.present == 'true'
         run: |
-          # Runner images differ in which Xcode 27 point release they carry.
-          sudo xcode-select -s "$(ls -d /Applications/Xcode_27*.app | grep -v -i beta | sort -V | tail -1)"
-          xcodebuild -version
+          sudo xcode-select -s /Applications/Xcode_27.1.app
           vp install --lockfile-only
           vp install --frozen-lockfile --filter=@t3tools/mobile...
 
