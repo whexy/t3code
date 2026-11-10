@@ -65,8 +65,14 @@ const TurnTokenUsageCommonFields = {
   // The provider ran a local command; its counters describe that result, not model work.
   localCommand: Schema.optional(Schema.Boolean),
   // Provider-ledger counts beyond the main agent, such as native subagents and compaction.
+  // Its input includes the cache counts; absent cache counts mean the split is unknown.
   otherUsage: Schema.optional(
-    Schema.Struct({ inputTokens: NonNegativeInt, outputTokens: NonNegativeInt }),
+    Schema.Struct({
+      inputTokens: NonNegativeInt,
+      outputTokens: NonNegativeInt,
+      cachedInputTokens: Schema.optional(NonNegativeInt),
+      cacheCreationTokens: Schema.optional(NonNegativeInt),
+    }),
   ),
 };
 export const TurnTokenUsage = Schema.Union([
