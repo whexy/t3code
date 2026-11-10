@@ -9422,7 +9422,12 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             outputTokens: 1,
             cachedInputTokens: 0,
             cacheCreationTokens: 0,
-            otherUsage: { inputTokens: 0, outputTokens: 0 },
+            otherUsage: {
+              inputTokens: 0,
+              outputTokens: 0,
+              cachedInputTokens: 0,
+              cacheCreationTokens: 0,
+            },
           });
         }
       }).pipe(
