@@ -172,7 +172,7 @@ const withService = <A, E>(
     readonly failLaunches?: { remaining: number };
     readonly gate?: Deferred.Deferred<void>;
     readonly gateForTask?: (input: LaunchInput) => Deferred.Deferred<void> | undefined;
-    readonly relayHookBaseUrl?: string;
+    readonly hookBaseUrl?: string;
     readonly sql?: SqlClient.SqlClient;
     readonly workers?: Map<string, Effect.Effect<void>>;
     readonly policy?: ManagedPolicyDocument;
@@ -252,7 +252,7 @@ const withService = <A, E>(
       }),
       Layer.succeed(
         ScheduledTaskService.ScheduledTaskWebhookOrigin,
-        Effect.succeed({ relayHookBaseUrl: options.relayHookBaseUrl ?? null }),
+        Effect.succeed({ hookBaseUrl: options.hookBaseUrl ?? null }),
       ),
       ManagedPolicy.layerTest(options.policy),
     );
@@ -315,7 +315,7 @@ it.effect("dispatches exactly the rendered prompt and logs the delivery", () =>
   ),
 );
 
-it("builds the relay hook URL from the managed tunnel's key, never the environment id", () => {
+it("builds hook URLs from the public address or the managed tunnel's key, never the environment id", () => {
   const relayUrl = "https://relay.example.com/";
   assert.equal(
     ScheduledTaskService.relayHookBaseUrl({
@@ -326,6 +326,13 @@ it("builds the relay hook URL from the managed tunnel's key, never the environme
   );
   for (const tunnelName of [undefined, "t3coderelay-managedendpoint", "x-0123456789ABCDEF"]) {
     assert.isNull(ScheduledTaskService.relayHookBaseUrl({ relayUrl, tunnelName }));
+  }
+  for (const [publicUrl, expected] of [
+    ["https://host-t3.example.com", "https://host-t3.example.com/api/hooks"],
+    ["https://host-t3.example.com/", "https://host-t3.example.com/api/hooks"],
+    ["https://proxy.example.com/t3//", "https://proxy.example.com/t3/api/hooks"],
+  ] as const) {
+    assert.equal(ScheduledTaskService.publicHookBaseUrl(new URL(publicUrl)), expected);
   }
 });
 
@@ -340,7 +347,7 @@ it.effect("gives webhook tasks a relay URL when the environment has a managed tu
           `https://relay.example.com/v1/hooks/0123456789abcdef/scheduled-task%3Ahook/${token}`,
         );
       }),
-    { relayHookBaseUrl: "https://relay.example.com/v1/hooks/0123456789abcdef" },
+    { hookBaseUrl: "https://relay.example.com/v1/hooks/0123456789abcdef" },
   ),
 );
 
