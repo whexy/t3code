@@ -89,7 +89,29 @@ const KINDS: ReadonlyArray<{
       models: [ALIASED],
       inputTokens: 90,
       outputTokens: 9,
-      otherUsage: { inputTokens: 400, outputTokens: 40 },
+      otherUsage: {
+        inputTokens: 400,
+        outputTokens: 40,
+        cachedInputTokens: 300,
+        cacheCreationTokens: 50,
+      },
+    },
+  },
+  {
+    name: "claude subagent cache split larger than its input",
+    usage: {
+      ...base,
+      hasSubagents: true,
+      usageStatus: "complete",
+      models: [CLAUDE],
+      inputTokens: 41,
+      outputTokens: 4,
+      otherUsage: {
+        inputTokens: 80,
+        outputTokens: 8,
+        cachedInputTokens: 60,
+        cacheCreationTokens: 30,
+      },
     },
   },
   {
@@ -211,6 +233,12 @@ interface OracleRow {
   turns: number;
 }
 
+/** Cache tokens inside a row's other input; the row does not report them, but its cost uses them. */
+interface OracleOtherCache {
+  cached: number;
+  creation: number;
+}
+
 function oracleKey(usage: TurnTokenUsage, driver: string | undefined): string | null {
   const models = usage.models ?? [];
   if (models.length !== 1) return null;
@@ -227,6 +255,7 @@ function oracleKey(usage: TurnTokenUsage, driver: string | undefined): string | 
 
 function oracle(kinds: ReadonlyArray<(typeof KINDS)[number]>) {
   const rows = new Map<string | null, OracleRow>();
+  const otherCache = new Map<string | null, OracleOtherCache>();
   let incomplete = 0;
   for (const { usage, driver } of kinds) {
     if (usage === undefined) continue;
@@ -239,6 +268,10 @@ function oracle(kinds: ReadonlyArray<(typeof KINDS)[number]>) {
     const reasoning = local ? 0 : Math.min(usage.reasoningTokens ?? 0, output);
     const otherInput = usage.otherUsage?.inputTokens ?? 0;
     const otherOutput = usage.otherUsage?.outputTokens ?? 0;
+    // A split that cannot fit inside the other input is unknown, so that input is all uncached.
+    const otherCached = usage.otherUsage?.cachedInputTokens ?? 0;
+    const otherCreation = usage.otherUsage?.cacheCreationTokens ?? 0;
+    const splitFits = otherCached + otherCreation <= otherInput;
     if (uncached + cached + creation + output + otherInput + otherOutput === 0) continue;
     const key = oracleKey(usage, driver);
     const row = rows.get(key) ?? {
@@ -260,17 +293,23 @@ function oracle(kinds: ReadonlyArray<(typeof KINDS)[number]>) {
     row.otherOutput += otherOutput;
     row.turns += 1;
     rows.set(key, row);
+    const cache = otherCache.get(key) ?? { cached: 0, creation: 0 };
+    if (splitFits) {
+      cache.cached += otherCached;
+      cache.creation += otherCreation;
+    }
+    otherCache.set(key, cache);
   }
-  return { rows, incomplete };
+  return { rows, otherCache, incomplete };
 }
 
-function oracleCost(key: string | null, row: OracleRow): number | null {
+function oracleCost(key: string | null, row: OracleRow, cache: OracleOtherCache): number | null {
   const rate = key === null ? undefined : RATES[key];
   if (rate === undefined) return null;
   return (
-    (row.uncached + row.otherInput) * rate.input +
-    row.cached * rate.cacheRead +
-    row.creation * rate.cacheWrite +
+    (row.uncached + row.otherInput - cache.cached - cache.creation) * rate.input +
+    (row.cached + cache.cached) * rate.cacheRead +
+    (row.creation + cache.creation) * rate.cacheWrite +
     (row.output + row.otherOutput) * rate.output
   );
 }
@@ -368,7 +407,7 @@ function violation(sequence: readonly number[]): string | null {
     tokenSum += rowTokens(want);
 
     // cost: priced rows match the oracle's rates; unpriced and unknown rows cost 0.
-    const cost = oracleCost(row.model, want);
+    const cost = oracleCost(row.model, want, expected.otherCache.get(row.model)!);
     if (row.priced !== (cost !== null)) return `cost: row ${row.model} priced=${row.priced}`;
     if (!close(row.costUsd, cost ?? 0)) {
       return `cost: row ${row.model} costs ${row.costUsd}, expected ${cost ?? 0}`;

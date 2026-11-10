@@ -39,8 +39,8 @@ export function assertClaudeIdleResumeOutput(
       turn.turnTokenUsage?.otherUsage,
     ]),
     [
-      [7, { inputTokens: 0, outputTokens: 0 }],
-      [7, { inputTokens: 0, outputTokens: 0 }],
+      [7, { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, cacheCreationTokens: 0 }],
+      [7, { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, cacheCreationTokens: 0 }],
     ],
   );
 }

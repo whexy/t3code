@@ -59,7 +59,12 @@ export function assertClaudeCompactAfterPeerTurnOutput(
   );
   assert.deepInclude(usage[0], {
     outputTokens: 7,
-    otherUsage: { inputTokens: 1015, outputTokens: 12 },
+    otherUsage: {
+      inputTokens: 1015,
+      outputTokens: 12,
+      cachedInputTokens: 0,
+      cacheCreationTokens: 0,
+    },
   });
   // /compact reports zero tokens as a local command.
   assert.deepInclude(usage[1], {
