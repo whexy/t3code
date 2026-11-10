@@ -58,7 +58,7 @@ Create and manage scheduled tasks in **Settings → Scheduled tasks** (web, desk
 
 ### Webhook automations
 
-Choose **On webhook** as a task's schedule to trigger runs from external services (e.g., GitHub PR or CI events). A public URL requires a [T3 Connect](./remote-access.md) tunnel; click **Rotate** to invalidate and replace the URL.
+Choose **On webhook** as a task's schedule to trigger runs from external services (e.g., GitHub PR or CI events). A public URL requires a [T3 Connect](./remote-access.md) tunnel, or the server started with `T3CODE_PUBLIC_URL` set to an address that reaches it (such as your own reverse proxy or tunnel); without either, the editor shows only the URL's path. Click **Rotate** to invalidate and replace the URL.
 
 - **Prompt placeholders**: Insert `{{body.path}}`, `{{headers.name}}`, `{{query.name}}`, `{{body}}`, or `{{request}}`. Missing values render empty.
 - **Untrusted input protection**: Placeholder values are wrapped in `<webhook-data-…>` tags, and `$`/`@`/leading `/` tokens are neutralized so untrusted payloads can't invoke skills or commands.
