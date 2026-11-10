@@ -216,10 +216,66 @@ describe("billable native turn usage", () => {
   it("measures Claude ledger growth only from a known, nondecreasing baseline", () => {
     const ledger = (output: number) =>
       claudeModelLedger({ "claude-sonnet-4-6": { inputTokens: 100, outputTokens: output } });
-    expect(claudeLedgerDelta(ledger(10), ledger(25))).toEqual({ inputTokens: 0, outputTokens: 15 });
+    expect(claudeLedgerDelta(ledger(10), ledger(25))).toEqual({
+      inputTokens: 0,
+      outputTokens: 15,
+      cachedInputTokens: 0,
+      cacheCreationTokens: 0,
+    });
     expect(claudeLedgerDelta(ledger(25), ledger(10))).toBeUndefined();
     expect(claudeLedgerDelta(undefined, ledger(10))).toBeUndefined();
     expect(claudeModelLedger({})).toBeUndefined();
+  });
+
+  it("keeps the cache split of Claude subagent and compaction usage", () => {
+    const before = claudeModelLedger({
+      "claude-opus-5-5": { inputTokens: 10, outputTokens: 5, cacheReadInputTokens: 1_000 },
+    });
+    const after = claudeModelLedger({
+      "claude-opus-5-5": {
+        inputTokens: 13,
+        outputTokens: 45,
+        cacheReadInputTokens: 91_000,
+        cacheCreationInputTokens: 4_000,
+      },
+      "claude-haiku-5-5": {
+        inputTokens: 2,
+        outputTokens: 10,
+        cacheReadInputTokens: 5_000,
+        cacheCreationInputTokens: 500,
+      },
+    });
+    const ledger = claudeLedgerDelta(before, after);
+    expect(ledger).toEqual({
+      inputTokens: 99_505,
+      outputTokens: 50,
+      cachedInputTokens: 95_000,
+      cacheCreationTokens: 4_500,
+    });
+    const normalize = (cacheRead: number) =>
+      normalizeClaudeTurnTokenUsage(
+        {
+          subtype: "success",
+          usage: {
+            input_tokens: 1,
+            cache_read_input_tokens: cacheRead,
+            cache_creation_input_tokens: 400,
+            output_tokens: 20,
+          },
+        },
+        true,
+        "completed",
+        [],
+        { ledger },
+      ).otherUsage;
+    expect(normalize(30_000)).toEqual({
+      inputTokens: 69_104,
+      outputTokens: 30,
+      cachedInputTokens: 65_000,
+      cacheCreationTokens: 4_100,
+    });
+    // The root reports more cache reads than the ledger holds, so the split is unknown.
+    expect(normalize(96_000)).toEqual({ inputTokens: 3_104, outputTokens: 30 });
   });
 
   it("adds Claude steering segments to the final measured result once", () => {
