@@ -160,7 +160,7 @@ export type UsageSummary = typeof UsageSummary.Type;
 export const ThreadUsageInput = Schema.Struct({ threadId: ThreadId });
 export type ThreadUsageInput = typeof ThreadUsageInput.Type;
 
-/** Subagent and compaction tokens a provider reported without a model or cache split. */
+/** Subagent and compaction tokens a provider reported without a model split. */
 export const ThreadOtherUsage = Schema.Struct({
   inputTokens: NonNegativeInt,
   outputTokens: NonNegativeInt,
@@ -171,7 +171,10 @@ export type ThreadOtherUsage = typeof ThreadOtherUsage.Type;
 export const ThreadModelUsage = Schema.Struct({
   model: Schema.NullOr(TrimmedNonEmptyString),
   totals: UsageTokenTotals,
-  /** Attributed to the turn's main model and priced as its uncached input and output. */
+  /**
+   * Attributed to the turn's main model and priced at its rates. Input without a reported cache
+   * split is priced as uncached.
+   */
   otherUsage: Schema.NullOr(ThreadOtherUsage),
   costUsd: Schema.Number,
   /** False when the rate table has no price for this model; its cost then counts as 0. */
