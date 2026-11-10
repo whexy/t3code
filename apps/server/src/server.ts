@@ -18,6 +18,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { EnvironmentHttpApi, type RepositoryIdentity } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Cause from "effect/Cause";
+import * as Config from "effect/Config";
 import * as Duration from "effect/Duration";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -158,6 +159,7 @@ import * as HeldHooksWaker from "./relay/HeldHooksWaker.ts";
 import * as McpOAuth from "./auth/McpOAuth.ts";
 import * as McpOAuthHttp from "./auth/mcpOAuthHttp.ts";
 import {
+  publicHookBaseUrl,
   relayHookBaseUrl,
   ScheduledTaskWebhookOrigin,
 } from "./scheduledTasks/ScheduledTaskService.ts";
@@ -554,6 +556,11 @@ const layerCloudManagedEndpointRuntime = Layer.mergeAll(
 const layerScheduledTaskWebhookOrigin = Layer.effect(
   ScheduledTaskWebhookOrigin,
   Effect.gen(function* () {
+    // An operator-set address that reaches this server, such as a reverse proxy or tunnel.
+    const publicUrl = yield* Config.URL("T3CODE_PUBLIC_URL").pipe(Config.option);
+    if (Option.isSome(publicUrl)) {
+      return Effect.succeed({ hookBaseUrl: publicHookBaseUrl(publicUrl.value) });
+    }
     const secrets = yield* ServerSecretStore.ServerSecretStore;
     return Effect.gen(function* () {
       const [relayUrl, tunnelConfig] = yield* Effect.all([
@@ -561,11 +568,11 @@ const layerScheduledTaskWebhookOrigin = Layer.effect(
         secrets.get(CLOUD_ENDPOINT_RUNTIME_CONFIG),
       ]).pipe(Effect.orElseSucceed(() => [Option.none(), Option.none()] as const));
       if (Option.isNone(relayUrl) || Option.isNone(tunnelConfig)) {
-        return { relayHookBaseUrl: null };
+        return { hookBaseUrl: null };
       }
       const config = decodeRuntimeConfig(new TextDecoder().decode(tunnelConfig.value));
       return {
-        relayHookBaseUrl: relayHookBaseUrl({
+        hookBaseUrl: relayHookBaseUrl({
           relayUrl: new TextDecoder().decode(relayUrl.value),
           tunnelName: Option.isSome(config) ? config.value.tunnelName : undefined,
         }),
