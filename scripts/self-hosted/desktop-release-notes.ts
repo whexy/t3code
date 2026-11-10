@@ -1,4 +1,4 @@
-// @effect-diagnostics globalConsole:off - CI runs this copy without an install and reads the notes from stdout.
+// @effect-diagnostics nodeBuiltinImport:off - The release job runs this with plain Node and no install, so effect is unavailable.
 import * as NodeFS from "node:fs";
 import * as NodeURL from "node:url";
 
