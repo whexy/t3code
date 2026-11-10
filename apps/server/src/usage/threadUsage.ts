@@ -68,10 +68,34 @@ function addTotals(a: UsageTokenTotals, b: UsageTokenTotals): UsageTokenTotals {
   };
 }
 
-function addOther(a: ThreadOtherUsage | null, b: ThreadOtherUsage): ThreadOtherUsage {
+/** Other usage plus the cache tokens inside its input, which pricing needs and the row omits. */
+interface OtherUsage extends ThreadOtherUsage {
+  readonly cachedInputTokens: number;
+  readonly cacheCreationTokens: number;
+}
+
+// Without a cache split that fits inside the input, the input is priced as uncached.
+function turnOther(reported: NonNullable<TurnTokenUsage["otherUsage"]>): OtherUsage {
+  const cachedInputTokens = reported.cachedInputTokens ?? 0;
+  const cacheCreationTokens = reported.cacheCreationTokens ?? 0;
+  const fits = cachedInputTokens + cacheCreationTokens <= reported.inputTokens;
+  return {
+    inputTokens: reported.inputTokens,
+    outputTokens: reported.outputTokens,
+    cachedInputTokens: fits ? cachedInputTokens : 0,
+    cacheCreationTokens: fits ? cacheCreationTokens : 0,
+  };
+}
+
+function addOther(a: OtherUsage | null, b: OtherUsage): OtherUsage {
   return a === null
     ? b
-    : { inputTokens: a.inputTokens + b.inputTokens, outputTokens: a.outputTokens + b.outputTokens };
+    : {
+        inputTokens: a.inputTokens + b.inputTokens,
+        outputTokens: a.outputTokens + b.outputTokens,
+        cachedInputTokens: a.cachedInputTokens + b.cachedInputTokens,
+        cacheCreationTokens: a.cacheCreationTokens + b.cacheCreationTokens,
+      };
 }
 
 function otherTokens(other: ThreadOtherUsage | null): number {
@@ -82,12 +106,12 @@ function rowTokens(row: Pick<ThreadModelUsage, "totals" | "otherUsage">): number
   return totalTokens(row.totals) + otherTokens(row.otherUsage);
 }
 
-/** Prices other usage as uncached input and output of the same model; pricing is linear. */
+/** Prices other usage at the same model's rates; pricing is linear. */
 function priceRow(
   pricing: ThreadUsagePricing,
   model: string | null,
   totals: UsageTokenTotals,
-  other: ThreadOtherUsage | null,
+  other: OtherUsage | null,
 ) {
   if (model === null) return { costUsd: 0, priced: false };
   const priced = priceUsage(
@@ -96,7 +120,13 @@ function priceRow(
       model,
       totals: {
         ...totals,
-        uncachedInputTokens: totals.uncachedInputTokens + (other?.inputTokens ?? 0),
+        uncachedInputTokens:
+          totals.uncachedInputTokens +
+          (other === null
+            ? 0
+            : other.inputTokens - other.cachedInputTokens - other.cacheCreationTokens),
+        cachedInputTokens: totals.cachedInputTokens + (other?.cachedInputTokens ?? 0),
+        cacheCreationTokens: totals.cacheCreationTokens + (other?.cacheCreationTokens ?? 0),
         outputTokens: totals.outputTokens + (other?.outputTokens ?? 0),
       },
       speed: "standard",
@@ -118,7 +148,7 @@ export function summarizeThreadUsage(
 ): ThreadUsage | null {
   const byModel = new Map<
     string | null,
-    { totals: UsageTokenTotals; otherUsage: ThreadOtherUsage | null; turns: number }
+    { totals: UsageTokenTotals; otherUsage: OtherUsage | null; turns: number }
   >();
   let incompleteTurns = 0;
 
@@ -127,10 +157,10 @@ export function summarizeThreadUsage(
     if (usage === undefined) continue;
     if (usage.usageStatus !== "complete") incompleteTurns += 1;
     const totals = turnTotals(usage);
-    const reported = usage.otherUsage;
     const other =
-      reported !== undefined && reported.inputTokens + reported.outputTokens > 0
-        ? { inputTokens: reported.inputTokens, outputTokens: reported.outputTokens }
+      usage.otherUsage !== undefined &&
+      usage.otherUsage.inputTokens + usage.otherUsage.outputTokens > 0
+        ? turnOther(usage.otherUsage)
         : null;
     if (totalTokens(totals) + otherTokens(other) === 0) continue;
     const model = turnModel(usage, turn.nativeTurnRef?.driver, pricing.modelAliases);
@@ -148,7 +178,13 @@ export function summarizeThreadUsage(
   const models: ThreadModelUsage[] = [...byModel].map(([model, entry]) => ({
     model,
     totals: entry.totals,
-    otherUsage: entry.otherUsage,
+    otherUsage:
+      entry.otherUsage === null
+        ? null
+        : {
+            inputTokens: entry.otherUsage.inputTokens,
+            outputTokens: entry.otherUsage.outputTokens,
+          },
     ...priceRow(pricing, model, entry.totals, entry.otherUsage),
     turns: entry.turns,
   }));

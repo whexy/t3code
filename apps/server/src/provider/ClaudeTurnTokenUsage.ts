@@ -49,22 +49,36 @@ function withEarlierSegmentUsage(
   return total;
 }
 
-/** Per-model totals from the SDK's `modelUsage`, which grows for the life of one CLI process. */
-export type ClaudeModelLedger = ReadonlyMap<
-  string,
-  { readonly input: number; readonly output: number }
->;
-
+/** Token counts from the SDK's `modelUsage`; input includes cache reads and writes. */
 export interface ClaudeLedgerUsage {
   readonly inputTokens: number;
   readonly outputTokens: number;
+  readonly cachedInputTokens: number;
+  readonly cacheCreationTokens: number;
 }
+
+export const EMPTY_CLAUDE_LEDGER_USAGE: ClaudeLedgerUsage = {
+  inputTokens: 0,
+  outputTokens: 0,
+  cachedInputTokens: 0,
+  cacheCreationTokens: 0,
+};
+
+const LEDGER_FIELDS = [
+  "inputTokens",
+  "outputTokens",
+  "cachedInputTokens",
+  "cacheCreationTokens",
+] as const;
+
+/** Per-model totals from the SDK's `modelUsage`, which grows for the life of one CLI process. */
+export type ClaudeModelLedger = ReadonlyMap<string, ClaudeLedgerUsage>;
 
 /** Unknown when absent or empty: a process that did model work never reports an empty ledger. */
 export function claudeModelLedger(modelUsage: unknown): ClaudeModelLedger | undefined {
   if (typeof modelUsage !== "object" || modelUsage === null) return undefined;
   if (Object.keys(modelUsage).length === 0) return undefined;
-  const ledger = new Map<string, { readonly input: number; readonly output: number }>();
+  const ledger = new Map<string, ClaudeLedgerUsage>();
   for (const [model, entry] of Object.entries(modelUsage as Record<string, unknown>)) {
     const fields = (entry ?? {}) as Record<string, unknown>;
     const input = finiteNonNegativeInteger(fields.inputTokens);
@@ -72,7 +86,12 @@ export function claudeModelLedger(modelUsage: unknown): ClaudeModelLedger | unde
     if (input === undefined || output === undefined) return undefined;
     const cacheRead = finiteNonNegativeInteger(fields.cacheReadInputTokens) ?? 0;
     const cacheWrite = finiteNonNegativeInteger(fields.cacheCreationInputTokens) ?? 0;
-    ledger.set(model, { input: input + cacheRead + cacheWrite, output });
+    ledger.set(model, {
+      inputTokens: input + cacheRead + cacheWrite,
+      outputTokens: output,
+      cachedInputTokens: cacheRead,
+      cacheCreationTokens: cacheWrite,
+    });
   }
   return ledger;
 }
@@ -96,32 +115,39 @@ export function claudeLedgerDelta(
   current: ClaudeModelLedger | undefined,
 ): ClaudeLedgerUsage | undefined {
   if (previous === undefined || current === undefined) return undefined;
-  let inputTokens = 0;
-  let outputTokens = 0;
   for (const [model, before] of previous) {
     const after = current.get(model);
-    if (after === undefined || after.input < before.input || after.output < before.output) {
+    if (after === undefined || LEDGER_FIELDS.some((field) => after[field] < before[field])) {
       return undefined;
     }
   }
+  let growth = EMPTY_CLAUDE_LEDGER_USAGE;
   for (const [model, after] of current) {
     const before = previous.get(model);
-    inputTokens += after.input - (before?.input ?? 0);
-    outputTokens += after.output - (before?.output ?? 0);
+    growth = addLedgerCounts(growth, after);
+    if (before !== undefined) growth = addLedgerCounts(growth, before, -1);
   }
-  return { inputTokens, outputTokens };
+  return growth;
+}
+
+function addLedgerCounts(
+  left: ClaudeLedgerUsage,
+  right: ClaudeLedgerUsage,
+  sign: 1 | -1 = 1,
+): ClaudeLedgerUsage {
+  return {
+    inputTokens: left.inputTokens + sign * right.inputTokens,
+    outputTokens: left.outputTokens + sign * right.outputTokens,
+    cachedInputTokens: left.cachedInputTokens + sign * right.cachedInputTokens,
+    cacheCreationTokens: left.cacheCreationTokens + sign * right.cacheCreationTokens,
+  };
 }
 
 export function addClaudeLedgerUsage(
   left: ClaudeLedgerUsage | undefined,
   right: ClaudeLedgerUsage | undefined,
 ): ClaudeLedgerUsage | undefined {
-  return left === undefined || right === undefined
-    ? undefined
-    : {
-        inputTokens: left.inputTokens + right.inputTokens,
-        outputTokens: left.outputTokens + right.outputTokens,
-      };
+  return left === undefined || right === undefined ? undefined : addLedgerCounts(left, right);
 }
 
 export interface ClaudeTurnObservations {
@@ -129,6 +155,16 @@ export interface ClaudeTurnObservations {
   readonly rootModels?: ReadonlySet<string>;
   // Ledger growth across every result this turn consumed, including steered segments.
   readonly ledger?: ClaudeLedgerUsage | undefined;
+}
+
+/** Drops the cache split when it disagrees with the totals, so it can never exceed the input. */
+function otherLedgerUsage(ledger: ClaudeLedgerUsage, root: ClaudeLedgerUsage) {
+  const other = addLedgerCounts(ledger, root, -1);
+  const splitKnown =
+    other.cachedInputTokens >= 0 &&
+    other.cacheCreationTokens >= 0 &&
+    other.cachedInputTokens + other.cacheCreationTokens <= other.inputTokens;
+  return splitKnown ? other : { inputTokens: other.inputTokens, outputTokens: other.outputTokens };
 }
 
 export function normalizeClaudeTurnTokenUsage(
@@ -197,10 +233,12 @@ export function normalizeClaudeTurnTokenUsage(
     rawOutputTokens !== undefined &&
     observed.ledger.inputTokens >= inputTokens &&
     observed.ledger.outputTokens >= rawOutputTokens
-      ? {
-          inputTokens: observed.ledger.inputTokens - inputTokens,
-          outputTokens: observed.ledger.outputTokens - rawOutputTokens,
-        }
+      ? otherLedgerUsage(observed.ledger, {
+          inputTokens,
+          outputTokens: rawOutputTokens,
+          cachedInputTokens: cachedInputContribution ?? 0,
+          cacheCreationTokens: cacheCreationContribution ?? 0,
+        })
       : undefined;
   const commonUsage = {
     ...observedFields,
