@@ -100,7 +100,7 @@ const LEGACY_DELIVERY_OUTCOMES: ReadonlySet<string> = new Set([
 ]);
 
 interface WebhookOrigin {
-  readonly relayHookBaseUrl: string | null;
+  readonly hookBaseUrl: string | null;
 }
 
 const ENDPOINT_KEY = /^[0-9a-f]{16}$/;
@@ -117,10 +117,15 @@ export function relayHookBaseUrl(input: {
   return `${relayUrl}/v1/hooks/${endpointKey}`;
 }
 
+/** The server answers hooks itself, so a URL that reaches it directly works without the relay. */
+export function publicHookBaseUrl(publicUrl: URL): string {
+  return `${publicUrl.origin}${publicUrl.pathname.replace(/\/+$/, "")}${WEBHOOK_ROUTE_PREFIX}`;
+}
+
 export class ScheduledTaskWebhookOrigin extends Context.Reference<Effect.Effect<WebhookOrigin>>(
   "t3/scheduledTasks/ScheduledTaskWebhookOrigin",
   {
-    defaultValue: () => Effect.succeed({ relayHookBaseUrl: null }),
+    defaultValue: () => Effect.succeed({ hookBaseUrl: null }),
   },
 ) {}
 
@@ -373,7 +378,7 @@ function webhookEndpoint(
   origin: WebhookOrigin | null,
 ): ScheduledTask["webhook"] {
   if (row.webhook_token === null) return undefined;
-  const base = origin?.relayHookBaseUrl ?? null;
+  const base = origin?.hookBaseUrl ?? null;
   return {
     path: webhookPath(row.task_id, row.webhook_token),
     url: base === null ? null : `${base}/${encodeURIComponent(row.task_id)}/${row.webhook_token}`,
