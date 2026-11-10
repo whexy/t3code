@@ -66,6 +66,11 @@ export function assertClaudeNestedSubagentModelOutput(
     outputTokens: 236,
     reasoningTokens: 30,
     models: ["claude-sonnet-4-6"],
-    otherUsage: { inputTokens: 87_409, outputTokens: 335 },
+    otherUsage: {
+      inputTokens: 87_409,
+      outputTokens: 335,
+      cachedInputTokens: 51_077,
+      cacheCreationTokens: 36_301,
+    },
   });
 }
