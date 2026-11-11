@@ -6,9 +6,13 @@ Connect external agents (Claude Code or Codex in your terminal, ChatGPT, or any 
 
 Open the command palette (`Cmd/Ctrl+K`) and run **Use T3 Code in another app (MCP)** (or open **Settings → Sharing & access**), pick your app, and follow the prompts.
 
-- Cloud assistants (like ChatGPT or Claude) require **T3 Connect** enabled on the environment.
+- Cloud assistants (like ChatGPT or Claude) need an address that reaches the environment from the internet: the server's [public address](#give-the-server-a-public-address) when it has one, otherwise **T3 Connect** enabled on the environment.
 - To also reach other machines through the same connection, enable **Settings → Labs → Linked environments** and [link them](./remote-access.md#link-another-environment).
-- To copy the raw MCP endpoint (`https://<environment-address>/mcp`), open an environment's menu in **Settings → Environments → Copy MCP URL**. OAuth requires `https://` or `localhost` (plain `http://` LAN/Tailscale addresses cannot complete OAuth).
+- To copy the raw MCP endpoint (`https://<environment-address>/mcp`), open an environment's menu in **Settings → Environments → Copy MCP URL**. The copied URL uses the server's public address when it has one, then its T3 Connect address. OAuth requires `https://` or `localhost` (plain `http://` LAN/Tailscale addresses cannot complete OAuth).
+
+### Give the server a public address
+
+If you already expose the server on the internet through a reverse proxy or tunnel, start it with `T3CODE_PUBLIC_URL` set to that `https` address. The wizard and **Copy MCP URL** then use that address followed by `/mcp` without T3 Connect, and agents approve on the environment's own page with a code.
 
 ### CLI clients and ChatGPT
 

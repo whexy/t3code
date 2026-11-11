@@ -87,27 +87,64 @@ function UseInAnotherAppDialog({ requested }: { readonly requested: EnvironmentI
   const { environment, label } = useAccessEnvironment(requested);
   const gt = useGT();
   const title = `${gt("Use T3 Code in another app (MCP)")} · ${label ?? "T3 Code"}`;
+  const publicUrl = environment?.serverConfig?.environment.publicUrl;
+  const unavailable = (message: string) => (
+    <>
+      <WizardHeader title={title} />
+      <WizardPanel>
+        <GateMessage title={message} />
+      </WizardPanel>
+    </>
+  );
   return (
     <Dialog open onOpenChange={(open) => (open ? undefined : close())}>
       <WizardPopup>
-        {environment !== null && hasCloudPublicConfig() ? (
-          <Wizard key={environment.environmentId} environment={environment} title={title} />
+        {environment === null ? (
+          unavailable(gt("Connect to an environment first."))
+        ) : publicUrl !== undefined ? (
+          // The server's own sign-in page approves with a code, so hosted approval does not apply.
+          <Wizard
+            key={environment.environmentId}
+            environment={environment}
+            title={title}
+            mcpUrl={`${publicUrl}/mcp`}
+            blocked={null}
+            hostedApproval={false}
+          />
+        ) : hasCloudPublicConfig() ? (
+          <ConnectWizard key={environment.environmentId} environment={environment} title={title} />
+        ) : environment.serverConfig === null ? (
+          unavailable(gt("Connect to {environment} first.", { environment: environment.label }))
         ) : (
-          <>
-            <WizardHeader title={title} />
-            <WizardPanel>
-              <GateMessage
-                title={
-                  environment === null
-                    ? gt("Connect to an environment first.")
-                    : gt("T3 Connect is not available in this build.")
-                }
-              />
-            </WizardPanel>
-          </>
+          unavailable(
+            gt(
+              "{environment} has no public address. Start its server with T3CODE_PUBLIC_URL set to one.",
+              { environment: environment.label },
+            ),
+          )
         )}
       </WizardPopup>
     </Dialog>
+  );
+}
+
+/** Reaches the environment through its T3 Connect tunnel. */
+function ConnectWizard({
+  environment,
+  title,
+}: {
+  readonly environment: EnvironmentPresentation;
+  readonly title: string;
+}) {
+  const gate = useGate(environment);
+  return (
+    <Wizard
+      environment={environment}
+      title={title}
+      mcpUrl={gate.gate.kind === "open" ? gate.gate.mcpUrl : null}
+      blocked={<GateScreen environment={environment} gate={gate} />}
+      hostedApproval={environment.serverConfig?.environment.capabilities.mcpHostedApproval === true}
+    />
   );
 }
 
@@ -123,22 +160,26 @@ type Choice = McpApp | "other";
 function Wizard({
   environment,
   title,
+  mcpUrl,
+  blocked,
+  hostedApproval,
 }: {
   readonly environment: EnvironmentPresentation;
   readonly title: string;
+  /** Null until the environment has an address apps can reach; `blocked` shows why. */
+  readonly mcpUrl: string | null;
+  readonly blocked: ReactNode;
+  /** The level is picked on the sign-in page, so the wizard neither asks for it nor needs a code. */
+  readonly hostedApproval: boolean;
 }) {
   const gt = useGT();
   const m = useMessages();
-  const gate = useGate(environment);
   const levels = useGrantableLevels(environment);
   const [step, setStep] = useState<Step>(0);
   const [choice, setChoice] = useState<Choice | null>(null);
   const [picked, setPicked] = useState<AuthMcpClientAccess | null>(null);
   const access = picked ?? DEFAULT_LEVELS.find((level) => levels.get(level) === undefined) ?? null;
-  const open = gate.gate.kind === "open";
-  // The level is picked on the sign-in page, so the wizard neither asks for it nor needs a code.
-  const hostedApproval =
-    environment.serverConfig?.environment.capabilities.mcpHostedApproval === true;
+  const open = mcpUrl !== null;
   const steps = hostedApproval ? HOSTED_APPROVAL_STEPS : STEPS;
   const shownStep = hostedApproval && step === 2 ? 1 : step;
   const next = () => setStep(step === 0 ? (hostedApproval ? 2 : 1) : 2);
@@ -159,8 +200,8 @@ function Wizard({
         ) : null}
       </WizardHeader>
       <WizardPanel>
-        {gate.gate.kind !== "open" ? (
-          <GateScreen environment={environment} gate={gate} />
+        {mcpUrl === null ? (
+          blocked
         ) : step === 0 ? (
           <AppStep choice={choice} onChoose={setChoice} />
         ) : step === 1 ? (
@@ -189,7 +230,7 @@ function Wizard({
         ) : choice !== null && (hostedApproval || access !== null) ? (
           <ConnectStep
             environment={environment}
-            mcpUrl={gate.gate.mcpUrl}
+            mcpUrl={mcpUrl}
             choice={choice}
             access={hostedApproval ? null : access}
           />
