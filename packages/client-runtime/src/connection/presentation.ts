@@ -117,15 +117,17 @@ export function connectionStatusTitle(connection: EnvironmentConnectionPresentat
 }
 
 /**
- * The T3 Connect address wins whenever it is known: it works for agents anywhere, while the
- * connected route is often a LAN or loopback address. SSH routes ride a local forward that
- * disappears with the client, so they have no stable address.
+ * The server's own public address, then the T3 Connect address, win whenever known: they work
+ * for agents anywhere, while the connected route is often a LAN or loopback address. SSH routes
+ * ride a local forward that disappears with the client, so they have no stable address.
  */
 export function environmentMcpUrl(input: {
   readonly entry: ConnectionCatalogEntry;
+  readonly publicUrl?: string | undefined;
   readonly relayHttpBaseUrl?: string | undefined;
   readonly connectedTarget?: ConnectionTarget | null | undefined;
 }): string | null {
+  if (input.publicUrl !== undefined) return `${input.publicUrl}/mcp`;
   const relayMcpUrl = input.relayHttpBaseUrl ? mcpUrlFromBase(input.relayHttpBaseUrl) : null;
   if (relayMcpUrl !== null) return relayMcpUrl;
   const connectedRouteId = input.connectedTarget ? connectionRouteId(input.connectedTarget) : null;
