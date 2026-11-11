@@ -5,11 +5,13 @@ import {
   type ExecutionEnvironmentDescriptor,
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
@@ -207,6 +209,7 @@ export const make = Effect.gen(function* () {
     serverSelfUpdate === "desktop-managed" && serverConfig.desktopTelemetryControlFd !== undefined;
 
   const databaseMigration = databaseMigrationHead(serverConfig.dbPath);
+  const publicUrl = yield* Config.URL("T3CODE_PUBLIC_URL").pipe(Config.option);
   const descriptor: ExecutionEnvironmentDescriptor = {
     environmentId,
     label,
@@ -218,6 +221,11 @@ export const make = Effect.gen(function* () {
     serverVersion: packageJson.version,
     orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
     ...(databaseMigration === undefined ? {} : { databaseMigration }),
+    ...(Option.isSome(publicUrl)
+      ? {
+          publicUrl: `${publicUrl.value.origin}${publicUrl.value.pathname.replace(/\/+$/, "")}`,
+        }
+      : {}),
     capabilities: {
       repositoryIdentity: true,
       connectionProbe: true,

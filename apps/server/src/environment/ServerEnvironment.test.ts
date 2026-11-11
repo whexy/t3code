@@ -149,6 +149,31 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("ServerEnvironmen
     }),
   );
   it.effect.each([
+    { env: {}, publicUrl: undefined },
+    {
+      env: { T3CODE_PUBLIC_URL: "https://host-t3.example/" },
+      publicUrl: "https://host-t3.example",
+    },
+  ])("advertises the public address $publicUrl", ({ env, publicUrl }) =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-server-environment-public-url-test-",
+      });
+      const descriptor = yield* Effect.gen(function* () {
+        const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
+        return yield* serverEnvironment.getDescriptor;
+      }).pipe(
+        Effect.provide(
+          layerServerEnvironment(baseDir).pipe(
+            Layer.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env }))),
+          ),
+        ),
+      );
+      expect(descriptor.publicUrl).toBe(publicUrl);
+    }),
+  );
+  it.effect.each([
     { name: "missing", content: undefined },
     { name: "empty", content: "" },
     { name: "whitespace-only", content: " \t\n" },
