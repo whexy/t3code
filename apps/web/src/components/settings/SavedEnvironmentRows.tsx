@@ -202,6 +202,7 @@ export function SavedBackendListRow({
   const connectedTarget = isConnected && prepared._tag === "Some" ? prepared.value.target : null;
   const mcpUrl = environmentMcpUrl({
     entry: environment.entry,
+    publicUrl: (environment.serverConfig?.environment ?? lastDescriptor)?.publicUrl,
     relayHttpBaseUrl: discoveredRelayHttpBaseUrl ?? lastRelayHttpBaseUrl,
     connectedTarget,
   });
