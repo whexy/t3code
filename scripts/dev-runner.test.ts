@@ -119,13 +119,14 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
       }),
     );
 
-    it.effect("strips inherited service-launcher context", () =>
+    it.effect("strips inherited service-launcher context and public address", () =>
       Effect.gen(function* () {
         const env = yield* createDevRunnerEnv({
           mode: "dev",
           baseEnv: {
             T3_SERVICE_LAUNCHER_CONTEXT: '{"childVersion":"9.9.9"}',
             T3_BOOT_SERVICE_UNIT: "t3code.service",
+            T3CODE_PUBLIC_URL: "https://host-t3.example",
           },
           serverOffset: 0,
           webOffset: 0,
@@ -140,6 +141,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
 
         assert.equal(env.T3_SERVICE_LAUNCHER_CONTEXT, undefined);
         assert.equal(env.T3_BOOT_SERVICE_UNIT, undefined);
+        assert.equal(env.T3CODE_PUBLIC_URL, undefined);
       }),
     );
 
