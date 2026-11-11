@@ -11,14 +11,18 @@ in once, and you choose what it may do.
 Open the command palette (`Cmd/Ctrl+K`) and choose **Use T3 Code in another
 app (MCP)**, or use the button in **Settings → Sharing & access**. Pick the
 app and follow the step for that app. Assistants like
-Poke and Claude run in the cloud, so the wizard first asks you to sign in to T3
-Connect and turn it on for the environment. To reach your other machines through
+Poke and Claude run in the cloud, so they need an address that reaches the
+environment from the internet. When the environment's server has a
+[public address](#give-the-server-a-public-address), the wizard uses it.
+Otherwise it first asks you to sign in to T3 Connect and turn it on for the
+environment. To reach your other machines through
 the same connection, turn on **Linked environments** in Labs and
 [link them](./remote-access.md#link-another-environment).
 
-When the app opens the sign-in page, choose what it may do and approve with your
-T3 Connect account. On an older environment, the wizard asks for the level and
-gives you a code to paste instead. A code works once, for 5 minutes, and
+When the app opens the sign-in page on a T3 Connect address, choose what it may
+do and approve with your T3 Connect account. On the server's public address, or
+on an older environment, the wizard asks for the level and gives you a code to
+paste instead. A code works once, for 5 minutes, and
 approves only that level.
 
 For an app that is not listed, choose **Something else…**, add a remote MCP
@@ -35,8 +39,9 @@ example:
 https://<environment-address>/mcp
 ```
 
-When T3 Connect serves the environment, the copied URL is its T3 Connect
-address, which agents can reach from anywhere. Otherwise it uses the route this
+When the environment's server has a public address, the copied URL uses it.
+Otherwise, when T3 Connect serves the environment, the copied URL is its T3
+Connect address. Agents can reach either from anywhere. Otherwise it uses the route this
 device is connected over, so an agent on the same device can reach it.
 
 - **An agent on your own computers** can use `localhost` on the host, T3
@@ -47,8 +52,15 @@ device is connected over, so an agent on the same device can reach it.
   `http://100.x.y.z:3773`, lets an agent find the environment but not finish
   signing in.
 - **A hosted agent**, such as ChatGPT or a bot running in the cloud, must reach
-  the environment from the internet. Use the T3 Connect address. A Tailscale
-  address only works from your own tailnet.
+  the environment from the internet. Use the server's public address or the T3
+  Connect address. A Tailscale address only works from your own tailnet.
+
+### Give the server a public address
+
+If you already expose the server on the internet, through a reverse proxy or a
+tunnel, start it with `T3CODE_PUBLIC_URL` set to that `https` address. The
+wizard and **Copy MCP URL** then use that address followed by `/mcp`, without T3
+Connect, and agents approve on the environment's own page with a code.
 
 ## Approve a sign-in
 
@@ -123,8 +135,8 @@ codex mcp login t3
 Add the environment as a custom MCP app in ChatGPT's apps settings:
 
 1. Create a new app or plugin with a custom MCP server.
-2. Set the server URL to `https://<environment-address>/mcp`, using the T3
-   Connect address.
+2. Set the server URL to `https://<environment-address>/mcp`, using the
+   server's public address or its T3 Connect address.
 3. Choose **OAuth** for authentication. ChatGPT discovers the rest; you do not
    need a client ID or secret.
 4. Create the app, then approve the sign-in page that opens.
