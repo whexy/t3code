@@ -2,9 +2,9 @@
 # self-hosted-nightly. n8n dispatches `nightly-release` (optional
 # client_payload.tag) when upstream publishes one; workflow_dispatch does the
 # same by hand, which also promotes dev when there is no new release. dev's
-# commits are rebased onto the release, nix/sources.json is pinned to it in one
-# `chore(nix): pin sources` commit on top, dev is pushed as the whexy-bot App,
-# and self-hosted-nightly is set to dev, whose push starts
+# commits are rebased onto the release, nix/sources.json and pnpm-lock.yaml are
+# pinned to it in one `chore(nix): pin sources` commit on top, dev is pushed as
+# the whexy-bot App, and self-hosted-nightly is set to dev, whose push starts
 # self-hosted-build.yml. scripts/self-hosted/rebase.sh is the state machine;
 # its summary line names the state it ended in.
 #
