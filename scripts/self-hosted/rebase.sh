@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Rebases dev onto an upstream nightly release, pins nix/sources.json to it,
-# and promotes dev to self-hosted-nightly: the state machine
-# .github/workflows/self-hosted-rebase.yml runs. Run it from a copy outside the
-# checkout, since the rebase rewrites this file.
+# Rebases dev onto an upstream nightly release, pins nix/sources.json and
+# pnpm-lock.yaml to it, and promotes dev to self-hosted-nightly: the state
+# machine .github/workflows/self-hosted-rebase.yml runs. Run it from a copy
+# outside the checkout, since the rebase rewrites this file.
 #
 # Env: TAG (optional; default the newest nightly), PUSH_URL (authenticated
 # remote URL), STATE_DIR (the stage, tag, start and result the failure report
@@ -26,16 +26,36 @@ finish() {
   exit 0
 }
 
-# A fork commit that edits nix/sources.json after the dropped pin commit, such
-# as the one that keyed its hashes by system on its first rebase, conflicts
-# there. PIN rewrites the file, so the fork's version stands in.
+budget=apps/server/src/provider/agentContextBudget.json
+
+# Upstream regenerates these files in most releases, so a fork commit touching
+# them conflicts on nearly every rebase. Each resolves mechanically; any other
+# conflicted file leaves the rebase stopped for a repair run.
+resolve_generated() {
+  local conflicted file
+  conflicted="$(git diff --name-only --diff-filter=U)"
+  [[ -n "$conflicted" ]] || return 1
+  while read -r file; do
+    case "$file" in
+      # PIN rewrites both.
+      nix/sources.json) git checkout --theirs -- "$file" ;;
+      pnpm-lock.yaml) git checkout --ours -- "$file" ;;
+      # Measured byte counts: the fork commit's change applies on top of upstream's.
+      "$budget")
+        jq --argjson base "$(git show ":1:$file")" --argjson fork "$(git show ":3:$file")" \
+          'with_entries(.value += $fork[.key] - $base[.key])' <(git show ":2:$file") > "$file"
+        ;;
+      *) return 1 ;;
+    esac
+    git add -- "$file"
+  done <<< "$conflicted"
+}
+
 rebase_onto() {
   # Git 2.45+ writes `pick <sha> # <subject>`, older versions omit the `# `.
   GIT_SEQUENCE_EDITOR="sed -i -E '/^pick [0-9a-f]+ (# )?chore\\(nix\\): pin sources /s/^pick/drop/'" \
     git rebase -i --onto "$1" "$2" && return 0
-  while [[ "$(git diff --name-only --diff-filter=U)" == nix/sources.json ]]; do
-    git checkout --theirs nix/sources.json
-    git add nix/sources.json
+  while resolve_generated; do
     GIT_EDITOR=true git rebase --continue && return 0
   done
   return 1
@@ -78,9 +98,15 @@ for attempt in 1 2; do
   enter rebase
   rebase_onto "$release" "$base"
 
+  # A replayed lockfile can merge cleanly yet miss entries. Every fork dependency
+  # is catalog: or workspace:, so rebuilding upstream's lockfile for the fork's
+  # packages adds their importers and nothing else.
   enter pin
+  git checkout "$release" -- pnpm-lock.yaml
+  npx -y "pnpm@$(jq -r '.packageManager | ltrimstr("pnpm@")' package.json)" \
+    install --lockfile-only --ignore-scripts
   nix/update-sources.sh "$tag"
-  git add nix/sources.json
+  git add nix/sources.json pnpm-lock.yaml
   if ! git diff --cached --quiet; then
     git commit -q --no-verify -m "chore(nix): pin sources for $tag"
   fi
