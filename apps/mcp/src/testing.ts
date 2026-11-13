@@ -28,6 +28,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Record from "effect/Record";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { McpSchema } from "effect/ai";
@@ -119,13 +120,19 @@ export function bridgeLayer(environment: T3Environment) {
 /** McpServer sends a tool's encoded result as structured content, which must be JSON. */
 const decodeCallToolResult = Schema.decodeUnknownEffect(McpSchema.CallToolResult);
 
+/** A client sends JSON, which has no undefined: an undefined field arrives omitted. */
+const encodeToolParameters = Record.map(BridgeToolkit.tools, (tool) =>
+  Schema.encodeUnknownEffect(Schema.toCodecJson(tool.parametersSchema)),
+);
+
 /** Calls one tool the way an MCP client does; a tool failure fails the effect. */
 export const callTool = Effect.fnUntraced(function* <Name extends keyof typeof BridgeToolkit.tools>(
   name: Name,
   input: Tool.ParametersEncoded<(typeof BridgeToolkit.tools)[Name]>,
 ) {
   const toolkit = yield* BridgeToolkit;
-  const results = yield* toolkit.handle(name, input).pipe(Effect.flatMap(Stream.runCollect));
+  const params = yield* encodeToolParameters[name](input).pipe(Effect.orDie);
+  const results = yield* toolkit.handle(name, params).pipe(Effect.flatMap(Stream.runCollect));
   const { result, encodedResult } = results[0]!;
   yield* decodeCallToolResult({
     content: [],
