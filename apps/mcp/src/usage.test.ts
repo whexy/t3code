@@ -13,12 +13,11 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import * as Stream from "effect/Stream";
 import * as Tool from "effect/ai/Tool";
 
 import { BridgeError, Environments, type T3Environment } from "./environment.ts";
-import { fakeEnvironment } from "./testing.ts";
-import { BridgeToolkit, BridgeToolkitHandlersLive } from "./tools.ts";
+import { callTool, fakeEnvironment } from "./testing.ts";
+import { BridgeToolkitHandlersLive } from "./tools.ts";
 import { GetUsageTool, usageReport, usageWindow } from "./usage.ts";
 
 const encodeUsage = Schema.encodeSync(GetUsageTool.successSchema);
@@ -266,14 +265,7 @@ it.effect(
         Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
       );
       const call = (args: typeof GetUsageTool.parametersSchema.Type) =>
-        Effect.gen(function* () {
-          const toolkit = yield* BridgeToolkit;
-          const results = yield* toolkit
-            .handle("get_usage", args)
-            .pipe(Effect.flatMap(Stream.runCollect));
-          const result = results[0]!.result;
-          return "totals" in result ? result : yield* Effect.die(result);
-        }).pipe(Effect.provide(handlers));
+        callTool("get_usage", args).pipe(Effect.provide(handlers));
       const result = yield* call({
         ...input,
         server_id: null,
