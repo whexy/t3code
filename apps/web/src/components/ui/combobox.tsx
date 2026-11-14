@@ -232,18 +232,47 @@ function ComboboxEmpty({ className, ...props }: ComboboxPrimitive.Empty.Props) {
 function ComboboxList({
   className,
   scrollAreaClassName,
+  footerItems,
+  children,
   ...props
 }: ComboboxPrimitive.List.Props & {
   /** Put height caps here, not on `className`: a capped list never resizes, so the scrollbar goes stale. */
   scrollAreaClassName?: string;
+  /**
+   * Filtered items pinned below the scrolling rows. They must come last in the
+   * filtered items: they stay in the list, which indexes items by DOM order.
+   */
+  footerItems?: readonly unknown[];
 }) {
+  if (footerItems !== undefined && typeof children === "function") {
+    return (
+      <ComboboxPrimitive.List
+        className={cn("flex min-h-0 flex-col", className)}
+        data-slot="combobox-list"
+        {...props}
+      >
+        <ScrollArea className={scrollAreaClassName} observeContent scrollbarGutter scrollFade>
+          <div className="not-empty:px-1 not-empty:py-1">
+            <ComboboxPrimitive.Collection>
+              {(item, index) => (footerItems.includes(item) ? null : children(item, index))}
+            </ComboboxPrimitive.Collection>
+          </div>
+        </ScrollArea>
+        <div className="shrink-0 border-t border-border/70 p-1 empty:hidden">
+          {footerItems.map(children)}
+        </div>
+      </ComboboxPrimitive.List>
+    );
+  }
   return (
     <ScrollArea className={scrollAreaClassName} observeContent scrollbarGutter scrollFade>
       <ComboboxPrimitive.List
         className={cn("not-empty:scroll-py-1 not-empty:px-1 not-empty:py-1", className)}
         data-slot="combobox-list"
         {...props}
-      />
+      >
+        {children}
+      </ComboboxPrimitive.List>
     </ScrollArea>
   );
 }
