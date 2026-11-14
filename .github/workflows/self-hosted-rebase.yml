@@ -1,12 +1,12 @@
-# Keeps dev on top of the newest upstream nightly release and promotes it to
+# Keeps dev on top of the latest upstream stable release and promotes it to
 # self-hosted-nightly. n8n dispatches `nightly-release` (optional
-# client_payload.tag) when upstream publishes one; workflow_dispatch does the
-# same by hand, which also promotes dev when there is no new release. dev's
-# commits are rebased onto the release, nix/sources.json and pnpm-lock.yaml are
-# pinned to it in one `chore(nix): pin sources` commit on top, dev is pushed as
-# the whexy-bot App, and self-hosted-nightly is set to dev, whose push starts
-# self-hosted-build.yml. scripts/self-hosted/rebase.sh is the state machine;
-# its summary line names the state it ended in.
+# client_payload.tag) when upstream publishes a stable release;
+# workflow_dispatch does the same by hand, which also promotes dev when there is
+# no new release. dev's commits are rebased onto the release, nix/sources.json
+# and pnpm-lock.yaml are pinned to it in one `chore(nix): pin sources` commit on
+# top, dev is pushed as the whexy-bot App, and self-hosted-nightly is set to
+# dev, whose push starts self-hosted-build.yml. scripts/self-hosted/rebase.sh is
+# the state machine; its summary line names the state it ended in.
 #
 # A failure before promote leaves self-hosted-nightly alone, so the last build
 # keeps serving, and is reported to T3 Code, which starts an agent run to
@@ -21,7 +21,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Upstream nightly tag; empty takes the newest. Every run also promotes dev
+        description: Upstream stable tag, such as v0.1.9; empty takes the latest. Every run also promotes dev
         required: false
         type: string
 
@@ -78,7 +78,7 @@ jobs:
           git config user.name "whexy-bot[bot]"
           git config user.email "315421218+whexy-bot[bot]@users.noreply.github.com"
           mkdir -p "$RUNNER_TEMP/scripts"
-          cp scripts/self-hosted/rebase.sh scripts/self-hosted/nightly-release.ts "$RUNNER_TEMP/scripts/"
+          cp scripts/self-hosted/rebase.sh scripts/self-hosted/stable-release.ts "$RUNNER_TEMP/scripts/"
           STATE_DIR="$RUNNER_TEMP/rebase" PUSH_URL="https://x-access-token:$TOKEN@github.com/$GITHUB_REPOSITORY.git" \
             bash "$RUNNER_TEMP/scripts/rebase.sh"
 
