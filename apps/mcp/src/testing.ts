@@ -34,6 +34,7 @@ import * as Stream from "effect/Stream";
 import { McpSchema } from "effect/ai";
 import type * as Tool from "effect/ai/Tool";
 
+import { SessionCallbacks } from "./callbacks.ts";
 import { BridgeError, Environments, type T3Environment } from "./environment.ts";
 import { BridgeToolkit, BridgeToolkitHandlersLive } from "./tools.ts";
 
@@ -98,8 +99,25 @@ export function threadServer(
   return { environment, sent, layer: bridgeLayer(environment) };
 }
 
-export function bridgeLayer(environment: T3Environment) {
+/** No callbacks armed; a test that sets one provides the real service. */
+export const noCallbacks = Layer.succeed(
+  SessionCallbacks,
+  SessionCallbacks.of({
+    set: Effect.fn("SessionCallbacks.set")(function* () {
+      return yield* Effect.die("unused set_session_callback");
+    }),
+    armed: Effect.fn("SessionCallbacks.armed")(function* () {
+      return yield* Effect.succeed(null);
+    }),
+  }),
+);
+
+export function bridgeLayer(
+  environment: T3Environment,
+  callbacks: Layer.Layer<SessionCallbacks> = noCallbacks,
+) {
   return BridgeToolkitHandlersLive.pipe(
+    Layer.provide(callbacks),
     Layer.provide(
       Layer.succeed(
         Environments,

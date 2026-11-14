@@ -1,4 +1,5 @@
 import type {
+  OrchestrationV2Run,
   OrchestrationV2ThreadProjection,
   OrchestrationV2ThreadStreamItem,
 } from "@t3tools/contracts";
@@ -8,6 +9,7 @@ import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 
 import { BridgeError } from "./errors.ts";
+import { threadState, type SessionState } from "./status.ts";
 
 /**
  * The first projection, from the subscription's snapshot and replayed events,
@@ -63,3 +65,33 @@ export const waitForThreadState = <E, R>(
       ),
     );
   });
+
+/**
+ * Runs doing work, or due to start it without anyone acting; a held queue waits for resume_queue.
+ * A waiting run that needs the user ends the wait through its state, not here.
+ */
+const WORKING_RUN_STATUSES = new Set(["queued", "preparing", "starting", "running", "waiting"]);
+const isWorking = (run: OrchestrationV2Run) =>
+  WORKING_RUN_STATUSES.has(run.status) && run.queueHeld !== true;
+const WORKING_STATES = new Set<SessionState>(["queued", "starting", "running"]);
+
+export const workingRunIds = (projection: OrchestrationV2ThreadProjection) =>
+  projection.runs.filter(isWorking).map((run) => run.id);
+
+/**
+ * What a wait is for: the work underway when it began has ended, or the agent
+ * needs the user. Watching those runs, not only the state, ends the wait with
+ * the turn even when a message queued later starts right after it. `watched`
+ * fixes those runs up front, for a wait that resumes after a restart.
+ */
+export function turnEnded(watched?: ReadonlyArray<string>) {
+  let started = watched === undefined ? undefined : new Set(watched);
+  return (projection: OrchestrationV2ThreadProjection) => {
+    started ??= new Set(workingRunIds(projection));
+    if (!WORKING_STATES.has(threadState(projection))) return true;
+    const pending = started;
+    return (
+      pending.size > 0 && !projection.runs.some((run) => pending.has(run.id) && isWorking(run))
+    );
+  };
+}

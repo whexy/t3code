@@ -16,7 +16,7 @@ import * as Schema from "effect/Schema";
 import * as Tool from "effect/ai/Tool";
 
 import { BridgeError, Environments, type T3Environment } from "./environment.ts";
-import { callTool, fakeEnvironment } from "./testing.ts";
+import { callTool, fakeEnvironment, noCallbacks } from "./testing.ts";
 import { BridgeToolkitHandlersLive } from "./tools.ts";
 import { GetUsageTool, usageReport, usageWindow } from "./usage.ts";
 
@@ -262,7 +262,7 @@ it.effect(
       });
       const handlers = BridgeToolkitHandlersLive.pipe(
         Layer.provide(Layer.succeed(Environments, environments)),
-        Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+        Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, noCallbacks)),
       );
       const call = (args: typeof GetUsageTool.parametersSchema.Type) =>
         callTool("get_usage", args).pipe(Effect.provide(handlers));

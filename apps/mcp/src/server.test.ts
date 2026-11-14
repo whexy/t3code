@@ -137,6 +137,7 @@ describe("bridge listeners", () => {
         "read_session_message",
         "respond_to_session",
         "send_session_message",
+        "set_session_callback",
         "update_session",
       ]);
       const called = decodeCall(
