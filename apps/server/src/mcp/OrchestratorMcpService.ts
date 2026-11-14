@@ -3457,8 +3457,6 @@ const make = Effect.gen(function* () {
     }),
     waitForThread: Effect.fn("OrchestratorMcpService.waitForThread")(function* (scope, input) {
       const { parent, target } = yield* loadScopedThread(scope, input.threadId, []);
-      // An outside agent cannot answer in T3, so a pending question ends its wait.
-      const outside = scope.thread === undefined && scope.client?.linked !== true;
       const result = yield* threadManagement
         .waitForThread({
           projectId: target.thread.projectId,
@@ -3469,7 +3467,6 @@ const make = Effect.gen(function* () {
             Math.max(1, input.timeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS),
           ),
           ...(input.untilDelegatedWorkSettled === true ? { untilDelegatedWorkSettled: true } : {}),
-          ...(outside ? { untilNeedsInput: true } : {}),
         })
         .pipe(Effect.mapError(threadManagementFailure));
       const status = result.run === null ? "idle" : runOutcome(result.run);
@@ -3506,9 +3503,6 @@ const make = Effect.gen(function* () {
           : {
               resultRun: { runId: result.resultRun.id, status: runOutcome(result.resultRun) },
             }),
-        ...(result.pendingRequestIds === undefined
-          ? {}
-          : { pendingRequestIds: result.pendingRequestIds }),
       } satisfies OrchestratorMcpThreadWaitResult;
     }),
     interruptThread: Effect.fn("OrchestratorMcpService.interruptThread")(function* (scope, input) {
