@@ -16,7 +16,7 @@
     in
     {
       packages = forSystems (pkgs: rec {
-        t3-server = pkgs.callPackage ./nix/t3-server.nix { };
+        t3-server = pkgs.callPackage ./nix/t3-server.nix { inherit (self) lastModifiedDate; };
         default = t3-server;
       });
     };
