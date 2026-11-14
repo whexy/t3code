@@ -107,26 +107,6 @@ T3 Code.
   `projectId` or `threadId`.
 - To list threads across projects, call `t3_thread_list` with
   `allProjects: true`, or use `t3_thread_search`.
-- `t3_thread_wait` returns after 50 seconds unless the agent asks for longer,
-  because hosted assistants give up on a tool call after about a minute. It also
-  returns when the thread stops to ask you something in T3 Code.
-
-### Get called back instead of waiting
-
-A bot that a webhook can wake, such as a scheduled routine, can call
-`t3_thread_callback` instead of waiting. It returns at once, and when the run
-ends or the thread waits for your answer, the environment POSTs the same
-result `t3_thread_wait` gives, as JSON, to the bot's `https` URL. Headers the
-bot passes, such as its `Authorization` key, go with every POST and are never
-shown again.
-
-- Each POST carries an `eventId`. A POST that fails is tried again for up to a
-  day, also after a restart, with the same `eventId`.
-- A callback is sent once. To hear about the next stop, the bot sets a new one.
-  It ends after 24 hours, and when you revoke the agent.
-- The environment does not POST to its own computer or to link-local
-  addresses. Addresses on your network or tailnet work.
-- An organization policy that turns off webhook tasks also turns off callbacks.
 
 ## Claude Code
 
