@@ -34,8 +34,6 @@ import {
   OrchestratorMcpThreadSendResult,
   OrchestratorMcpThreadWaitInput,
   OrchestratorMcpThreadWaitResult,
-  OrchestratorMcpThreadCallbackInput,
-  OrchestratorMcpThreadCallbackResult,
   ThreadMetadataMcpUpdateInput,
   ThreadMetadataMcpUpdateResult,
   TrimmedNonEmptyString,
@@ -52,7 +50,6 @@ import * as RemoteDelegation from "../../../peer/RemoteDelegation.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as OrchestratorMcpService from "../../OrchestratorMcpService.ts";
 import * as ThreadMetadataMcpService from "../../ThreadMetadataMcpService.ts";
-import * as WaitCallbacks from "../../WaitCallbacks.ts";
 
 const dependencies = [
   McpInvocationContext.McpInvocationContext,
@@ -305,20 +302,6 @@ const ThreadWaitTool = Tool.make("t3_thread_wait", {
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true);
 
-const ThreadCallbackTool = Tool.make("t3_thread_callback", {
-  description:
-    "Instead of waiting, return at once and POST the `t3_thread_wait` result as JSON to `callback.url` when the run ends or waits for the user. Expires in 24 h. One per thread: a new one replaces it, null cancels it.",
-  parameters: OrchestratorMcpThreadCallbackInput,
-  success: OrchestratorMcpThreadCallbackResult,
-  failure: OrchestratorMcpFailure,
-  failureMode: "return",
-  dependencies: [...dependencies, WaitCallbacks.WaitCallbacks],
-})
-  .annotate(Tool.Title, "Call back when a T3 thread is done")
-  .annotate(Tool.Destructive, false)
-  .annotate(Tool.OpenWorld, true)
-  .annotate(McpSchema.EnabledWhen, WaitCallbacks.onlyForOutsideClients);
-
 const ThreadInterruptTool = Tool.make("t3_thread_interrupt", {
   description:
     "Interrupt a top-level thread's running turn. No `runId`: newest running turn. No effect when idle. For a delegate, use `task_cancel`.",
@@ -390,7 +373,6 @@ export const OrchestratorToolkit = Toolkit.make(
   ThreadUpdateTool,
   ThreadSendTool,
   ThreadWaitTool,
-  ThreadCallbackTool,
   ThreadInterruptTool,
   EnvironmentLinksTool,
   EnvironmentLinkTool,
