@@ -14,6 +14,11 @@
   versionCheckHook,
   # nix/update-sources.sh passes the pins it is computing.
   sources ? lib.importJSON ./sources.json,
+  # The commit's time, YYYYMMDDHHMMSS in UTC. Appended to upstream's nightly,
+  # it gives every commit on self-hosted-nightly its own version, which the
+  # desktop release for that commit shares (desktop-plan in
+  # .github/workflows/self-hosted-build.yml).
+  lastModifiedDate,
 }:
 
 let
@@ -149,7 +154,7 @@ let
 in
 stdenv.mkDerivation (finalAttrs: {
   pname = "t3-server";
-  inherit (sources) version;
+  version = "${sources.version}.${lastModifiedDate}";
   inherit src;
 
   pnpmWorkspaces = [
