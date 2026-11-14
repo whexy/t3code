@@ -140,6 +140,8 @@ const DEFAULT_WAIT_TIMEOUT_MS = 10 * 60 * 1_000;
 // Nothing is written while a task wait blocks, and Node fetch drops a silent call at 300 s.
 const DEFAULT_TASK_WAIT_TIMEOUT_MS = 4 * 60 * 1_000;
 const MAX_WAIT_TIMEOUT_MS = 60 * 60 * 1_000;
+// Hosted MCP clients abandon a silent tool call near 60 s; FORWARDED_WAIT_CHUNK_MS has the same reason.
+const OUTSIDE_CLIENT_WAIT_TIMEOUT_MS = 50_000;
 const TASK_WAKE_EVENTS = [
   { thread: "parent", eventType: "subagent.updated" },
   { thread: "child", eventType: "run.updated" },
@@ -3324,6 +3326,8 @@ const make = Effect.gen(function* () {
     }),
     waitForThread: Effect.fn("OrchestratorMcpService.waitForThread")(function* (scope, input) {
       const { parent, target } = yield* loadScopedThread(scope, input.threadId, []);
+      // An outside agent cannot answer in T3, so a pending question ends its wait.
+      const outside = scope.thread === undefined && scope.client?.linked !== true;
       const result = yield* threadManagement
         .waitForThread({
           projectId: target.thread.projectId,
@@ -3331,9 +3335,14 @@ const make = Effect.gen(function* () {
           ...(input.runId === undefined ? {} : { runId: input.runId }),
           timeoutMs: Math.min(
             MAX_WAIT_TIMEOUT_MS,
-            Math.max(1, input.timeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS),
+            Math.max(
+              1,
+              input.timeoutMs ??
+                (outside ? OUTSIDE_CLIENT_WAIT_TIMEOUT_MS : DEFAULT_WAIT_TIMEOUT_MS),
+            ),
           ),
           ...(input.untilDelegatedWorkSettled === true ? { untilDelegatedWorkSettled: true } : {}),
+          ...(outside ? { untilNeedsInput: true } : {}),
         })
         .pipe(Effect.mapError(threadManagementFailure));
       const status = result.run === null ? "idle" : runOutcome(result.run);
@@ -3370,6 +3379,9 @@ const make = Effect.gen(function* () {
           : {
               resultRun: { runId: result.resultRun.id, status: runOutcome(result.resultRun) },
             }),
+        ...(result.pendingRequestIds === undefined
+          ? {}
+          : { pendingRequestIds: result.pendingRequestIds }),
       } satisfies OrchestratorMcpThreadWaitResult;
     }),
     interruptThread: Effect.fn("OrchestratorMcpService.interruptThread")(function* (scope, input) {
