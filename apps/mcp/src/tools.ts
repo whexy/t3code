@@ -12,7 +12,6 @@ import {
   ThreadId,
   TrimmedNonEmptyString,
   type OrchestrationV2Command,
-  type OrchestrationV2Run,
   type OrchestrationV2ThreadLaunchWorkspaceStrategy,
   type OrchestrationV2ThreadProjection,
 } from "@t3tools/contracts";
@@ -41,8 +40,10 @@ import {
   selectedReasoningEffort,
   summarizeAgents,
 } from "./agents.ts";
-import { BridgeError, Environments } from "./environment.ts";
+import { CallbackTarget, SessionCallbacks, type StatusReport } from "./callbacks.ts";
+import { BridgeError, Environments, type T3Environment } from "./environment.ts";
 import { InspectProjectTool, inspectProject } from "./inspect.ts";
+import { turnEnded } from "./threadWatch.ts";
 import { findSessions, sessionMarks } from "./sessions.ts";
 import { GetUsageTool, getUsage } from "./usage.ts";
 import {
@@ -309,6 +310,10 @@ const SessionStatusResult = Schema.Struct({
   omitted_updates: Schema.Int,
   cursor: Schema.String,
   timed_out: Schema.optional(Schema.Boolean),
+  /** Set while set_session_callback holds a callback for the session. */
+  callback: Schema.optional(
+    Schema.Struct({ callback_id: Schema.String, expires_at: Schema.String }),
+  ),
   next_step: Schema.String,
 });
 
@@ -572,6 +577,36 @@ const GetSessionStatusTool = Tool.make("get_session_status", {
   .annotate(Tool.Idempotent, true)
   .annotate(Tool.OpenWorld, false);
 
+const SetSessionCallbackTool = Tool.make("set_session_callback", {
+  description:
+    "Instead of waiting with get_session_status, have the bridge POST to callback.url when the agent's current turn ends or it needs the user (at once if that is already so). The POST body is JSON: event \"session.status\", event_id, server_id, session_id, occurred_at, and status, the get_session_status result (updates after cursor, if passed), or error when the server could not be reached by the time the callback expired. A failed POST is retried for up to a day with the same event_id. A callback fires once, expires after 24 hours, and is replaced by a new one for the same session; callback null cancels it. Returns the session's current status and the armed callback.",
+  parameters: Schema.Struct({
+    server_id: ServerIdInput,
+    session_id: SessionIdInput,
+    cursor: optionalInput(
+      Schema.String.annotate({
+        description:
+          "cursor from the previous get_session_status call; the POSTed status reports updates after it.",
+      }),
+    ),
+    callback: Schema.NullOr(CallbackTarget).annotate({
+      description: "Where to POST; null cancels the session's callback.",
+    }),
+  }),
+  success: Schema.Struct({
+    ...SessionStatusResult.fields,
+    callback: Schema.NullOr(
+      Schema.Struct({ callback_id: Schema.String, expires_at: Schema.String }),
+    ),
+  }),
+  failure: BridgeError,
+})
+  .annotate(Tool.Title, "Call back when a coding session needs attention")
+  .annotate(Tool.Readonly, false)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, false)
+  .annotate(Tool.OpenWorld, true);
+
 const ReadSessionMessageTool = Tool.make("read_session_message", {
   description:
     "Read the rest of a message get_session_status or read_session_history cut short (an update marked truncated). Pass its item_id and next_offset as offset, then keep passing the returned next_offset until it is null. For a message from a read_session_history page, also pass that page's history_cursor. Offsets count UTF-16 code units. A message still streaming can grow; streaming true means more may follow.",
@@ -735,6 +770,7 @@ export const BridgeToolkit = Toolkit.make(
   SendSessionMessageTool,
   ControlSessionTool,
   GetSessionStatusTool,
+  SetSessionCallbackTool,
   ReadSessionMessageTool,
   ReadSessionHistoryTool,
   UpdateSessionTool,
@@ -817,32 +853,6 @@ const marksOf = (thread: OrchestrationV2ThreadProjection["thread"]) =>
     snoozedUntil: isoOrNull(thread.snoozedUntil),
   });
 
-/**
- * Runs doing work, or due to start it without anyone acting; a held queue waits for resume_queue.
- * A waiting run that needs the user ends the wait through its state, not here.
- */
-const WORKING_RUN_STATUSES = new Set(["queued", "preparing", "starting", "running", "waiting"]);
-const isWorking = (run: OrchestrationV2Run) =>
-  WORKING_RUN_STATUSES.has(run.status) && run.queueHeld !== true;
-const WORKING_STATES = new Set<SessionState>(["queued", "starting", "running"]);
-
-/**
- * What get_session_status waits for: the work underway when the wait began
- * has ended, or the agent needs the user. Watching those runs, not only the
- * state, ends the wait with the turn even when a message queued later starts
- * right after it.
- */
-function turnEnded() {
-  let watched: ReadonlySet<string> | undefined;
-  return (projection: OrchestrationV2ThreadProjection) => {
-    const started = (watched ??= new Set(projection.runs.filter(isWorking).map((run) => run.id)));
-    if (!WORKING_STATES.has(threadState(projection))) return true;
-    return (
-      started.size > 0 && !projection.runs.some((run) => started.has(run.id) && isWorking(run))
-    );
-  };
-}
-
 /** How long the latest turn has run, for a client to narrate. */
 const elapsed = (startedAt: string, nowMs: number) => {
   const seconds = Math.max(0, Math.round((nowMs - Date.parse(startedAt)) / 1000));
@@ -891,8 +901,60 @@ function nextStep(
 const WAIT_STEP =
   "To hear when the agent finishes, call get_session_status with wait: true, passing back each returned cursor.";
 
+/** What get_session_status reports, and what a session callback POSTs. */
+function sessionStatus(
+  environment: T3Environment,
+  projection: OrchestrationV2ThreadProjection,
+  options: {
+    readonly cursor: string | undefined;
+    readonly limit: number;
+    readonly timedOut?: boolean;
+  },
+  nowMs: number,
+): typeof SessionStatusResult.Type {
+  const thread = projection.thread;
+  const summary = summarizeSession(projection, { cursor: options.cursor, limit: options.limit });
+  return {
+    server_id: environment.id,
+    session_id: thread.id,
+    project_id: thread.projectId,
+    title: thread.title,
+    agent: thread.modelSelection.instanceId,
+    model: thread.modelSelection.model,
+    reasoning_effort: selectedReasoningEffort(thread.modelSelection),
+    ...marksOf(thread),
+    queued_messages: queuedMessages(projection),
+    branch: thread.branch,
+    worktree_path: thread.worktreePath,
+    ...summary,
+    ...(options.timedOut === undefined ? {} : { timed_out: options.timedOut }),
+    next_step: nextStep(summary, nowMs),
+  };
+}
+
+const encodeSessionStatus = Schema.encodeEffect(Schema.toCodecJson(SessionStatusResult));
+
+export const reportSessionStatus: StatusReport = (environment, projection, options) =>
+  DateTime.now.pipe(
+    Effect.flatMap((now) =>
+      encodeSessionStatus(
+        sessionStatus(
+          environment,
+          projection,
+          { cursor: options.cursor, limit: DEFAULT_UPDATE_LIMIT, timedOut: options.timedOut },
+          DateTime.toEpochMillis(now),
+        ),
+      ),
+    ),
+    Effect.orDie,
+  );
+
+const CALLBACK_STEP =
+  "The bridge POSTs this session's status to callback.url when the agent's turn ends or it needs the user. Nothing more to call until then; get_session_status still works meanwhile.";
+
 const make = Effect.gen(function* () {
   const environments = yield* Environments;
+  const callbacks = yield* SessionCallbacks;
   const random = yield* SecureRandom.SecureRandom;
   const uuid = random.uuidV4();
   const commandId = uuid.pipe(Effect.map(CommandId.make));
@@ -1573,26 +1635,40 @@ const make = Effect.gen(function* () {
         input.wait === true
           ? yield* environment.waitForThread(threadId, turnEnded(), WAIT_MS)
           : { projection: yield* environment.thread(threadId), settled: true };
-      const thread = projection.thread;
-      const summary = summarizeSession(projection, {
-        cursor: input.cursor ?? undefined,
-        limit: input.limit ?? DEFAULT_UPDATE_LIMIT,
-      });
+      const armed = yield* callbacks.armed(environment.id, projection.thread.id);
       return {
-        server_id: environment.id,
-        session_id: thread.id,
-        project_id: thread.projectId,
-        title: thread.title,
-        agent: thread.modelSelection.instanceId,
-        model: thread.modelSelection.model,
-        reasoning_effort: selectedReasoningEffort(thread.modelSelection),
-        ...marksOf(thread),
-        queued_messages: queuedMessages(projection),
-        branch: thread.branch,
-        worktree_path: thread.worktreePath,
-        ...summary,
-        ...(input.wait === true ? { timed_out: !settled } : {}),
-        next_step: nextStep(summary, DateTime.toEpochMillis(yield* DateTime.now)),
+        ...sessionStatus(
+          environment,
+          projection,
+          {
+            cursor: input.cursor ?? undefined,
+            limit: input.limit ?? DEFAULT_UPDATE_LIMIT,
+            ...(input.wait === true ? { timedOut: !settled } : {}),
+          },
+          DateTime.toEpochMillis(yield* DateTime.now),
+        ),
+        ...(armed === null ? {} : { callback: armed }),
+      };
+    }),
+
+    set_session_callback: Effect.fn("BridgeToolkit.set_session_callback")(function* (input) {
+      const cursor = input.cursor ?? undefined;
+      const { environment, projection, armed } = yield* callbacks.set({
+        serverId: input.server_id,
+        sessionId: input.session_id,
+        cursor,
+        callback: input.callback,
+      });
+      const status = sessionStatus(
+        environment,
+        projection,
+        { cursor, limit: DEFAULT_UPDATE_LIMIT },
+        DateTime.toEpochMillis(yield* DateTime.now),
+      );
+      return {
+        ...status,
+        callback: armed,
+        next_step: armed === null ? status.next_step : CALLBACK_STEP,
       };
     }),
 

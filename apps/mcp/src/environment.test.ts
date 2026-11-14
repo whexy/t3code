@@ -23,7 +23,7 @@ import * as Socket from "effect/socket/Socket";
 import { check, pair, supportOf } from "./access.ts";
 import { Environments, layer } from "./environment.ts";
 import { Registry, type ServerRecord } from "./registry.ts";
-import { callTool } from "./testing.ts";
+import { callTool, noCallbacks } from "./testing.ts";
 import { BridgeToolkitHandlersLive } from "./tools.ts";
 
 const descriptor = (
@@ -265,7 +265,7 @@ describe("environments on servers too old for the bridge", () => {
       );
       const tools = BridgeToolkitHandlersLive.pipe(
         Layer.provide(fixture.environments),
-        Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+        Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, noCallbacks)),
       );
       return Effect.gen(function* () {
         const listed = yield* callTool("list_sessions", {});
