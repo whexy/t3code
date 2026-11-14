@@ -21,6 +21,7 @@ import {
   ProviderThreadId,
   ProviderTurnId,
   RunId,
+  RuntimeRequestId,
   ThreadId,
   type OrchestrationV2ServerCommand,
   type OrchestrationV2StoredEvent,
@@ -4280,6 +4281,53 @@ describe("OrchestratorMcpService thread lookup", () => {
             getThreadRecords: () => Effect.succeed(idleThreadProjection(launched)),
             waitForThread: () =>
               Effect.succeed({ threadId: launched.id, run: null, timedOut: false }),
+          }),
+        ),
+      );
+    }),
+  );
+
+  it.effect("ends an outside client's wait before hosted clients drop it, and on a question", () =>
+    Effect.gen(function* () {
+      const sent = yield* Ref.make(0);
+      const waits: Array<ThreadManagementService.ThreadManagementWaitInput> = [];
+      const question = RuntimeRequestId.make("request:question");
+      return yield* Effect.gen(function* () {
+        const mcp = yield* OrchestratorMcpService.OrchestratorMcpService;
+        const outside = yield* mcp.waitForThread(client, { threadId: launched.id });
+        yield* mcp.waitForThread(
+          {
+            ...client,
+            thread: {
+              threadId: launched.id,
+              providerSessionId: "provider-session:wait-outside",
+              providerInstanceId: ProviderInstanceId.make("codex"),
+            },
+          },
+          { threadId: launched.id },
+        );
+        assert.deepEqual(outside.pendingRequestIds, [question]);
+        assert.deepEqual(
+          waits.map((wait) => [wait.timeoutMs, wait.untilNeedsInput]),
+          [
+            [50_000, true],
+            [10 * 60 * 1_000, undefined],
+          ],
+        );
+      }).pipe(
+        Effect.provide(
+          service([launched], sent, {
+            getThreadRecords: () => Effect.succeed(idleThreadProjection(launched)),
+            getProjectThreadRecords: () => Effect.succeed(idleThreadProjection(launched)),
+            waitForThread: (input) => {
+              waits.push(input);
+              return Effect.succeed({
+                threadId: launched.id,
+                run: null,
+                timedOut: false,
+                ...(input.untilNeedsInput === true ? { pendingRequestIds: [question] } : {}),
+              });
+            },
           }),
         ),
       );
