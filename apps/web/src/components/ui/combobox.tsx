@@ -229,14 +229,47 @@ function ComboboxEmpty({ className, ...props }: ComboboxPrimitive.Empty.Props) {
   );
 }
 
-function ComboboxList({ className, ...props }: ComboboxPrimitive.List.Props) {
+function ComboboxList({
+  className,
+  footerItems,
+  children,
+  ...props
+}: ComboboxPrimitive.List.Props & {
+  /**
+   * Filtered items pinned below the scrolling rows. They must come last in the
+   * filtered items: they stay in the list, which indexes items by DOM order.
+   */
+  footerItems?: readonly unknown[];
+}) {
+  if (footerItems !== undefined && typeof children === "function") {
+    return (
+      <ComboboxPrimitive.List
+        className={cn("flex min-h-0 flex-col", className)}
+        data-slot="combobox-list"
+        {...props}
+      >
+        <ScrollArea scrollbarGutter scrollFade>
+          <div className="not-empty:px-1 not-empty:py-1">
+            <ComboboxPrimitive.Collection>
+              {(item, index) => (footerItems.includes(item) ? null : children(item, index))}
+            </ComboboxPrimitive.Collection>
+          </div>
+        </ScrollArea>
+        <div className="shrink-0 border-t border-border/70 p-1 empty:hidden">
+          {footerItems.map(children)}
+        </div>
+      </ComboboxPrimitive.List>
+    );
+  }
   return (
     <ScrollArea scrollbarGutter scrollFade>
       <ComboboxPrimitive.List
         className={cn("not-empty:scroll-py-1 not-empty:px-1 not-empty:py-1", className)}
         data-slot="combobox-list"
         {...props}
-      />
+      >
+        {children}
+      </ComboboxPrimitive.List>
     </ScrollArea>
   );
 }
