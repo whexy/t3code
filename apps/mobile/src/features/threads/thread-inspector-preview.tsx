@@ -20,7 +20,7 @@ import { ThreadPreviewRoute } from "./thread-preview-route";
 
 /** A thread shown outside its route: in the inspector pane, or presented full screen with a close. */
 export type ThreadInspectorPresentation =
-  | { readonly onMaximize: () => void }
+  | { readonly onMaximize: () => void; readonly onBack?: () => void }
   | { readonly onClose: () => void };
 
 export function ThreadInspectorHeader(
@@ -32,6 +32,15 @@ export function ThreadInspectorHeader(
       <AppBar
         title={props.title}
         subtitle={props.subtitle}
+        backInSplitView={
+          props.onBack
+            ? {
+                accessibilityLabel: "Back to side chats",
+                icon: "chevron.left",
+                onPress: props.onBack,
+              }
+            : undefined
+        }
         actions={[
           {
             accessibilityLabel: gt("Maximize thread"),
@@ -67,6 +76,8 @@ export function ThreadInspectorPreview(props: {
   readonly target: ThreadInspectorTarget;
   readonly onClose: () => void;
   readonly onOpen: (target: ThreadInspectorTarget) => void;
+  /** Returns to the list the thread was opened from. */
+  readonly onBack?: () => void;
   readonly renderThread: (
     props: StaticScreenProps<{ readonly environmentId: string; readonly threadId: string }> & {
       readonly inspectorPresentation: ThreadInspectorPresentation;
@@ -123,6 +134,7 @@ export function ThreadInspectorPreview(props: {
                         environmentId: route.params.environmentId,
                         threadId: route.params.threadId,
                       }),
+                    ...(props.onBack ? { onBack: props.onBack } : {}),
                   },
                 })
               }
