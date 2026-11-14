@@ -33,6 +33,8 @@ export function ThreadInspectorPreview(props: {
   readonly target: ThreadInspectorTarget;
   readonly onClose: () => void;
   readonly onOpen: (target: ThreadInspectorTarget) => void;
+  /** Returns to the list the thread was opened from. */
+  readonly onBack?: () => void;
   readonly renderThread: (
     props: StaticScreenProps<{ readonly environmentId: string; readonly threadId: string }> & {
       readonly inspectorPresentation: ThreadInspectorPresentation;
@@ -95,6 +97,7 @@ export function ThreadInspectorPreview(props: {
                         environmentId: route.params.environmentId,
                         threadId: route.params.threadId,
                       }),
+                    ...(props.onBack ? { onBack: props.onBack } : {}),
                   },
                 })
               }

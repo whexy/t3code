@@ -34,6 +34,7 @@ import {
   MessageId,
   ThreadId,
   type ProjectScript,
+  type ScopedThreadRef,
 } from "@t3tools/contracts";
 import {
   projectScriptCwd,
@@ -130,6 +131,9 @@ import { openSettings } from "../settings/settings-navigation";
 import { ThreadInspectorHeader, type ThreadInspectorPresentation } from "./thread-inspector-header";
 import { InspectorContentScope, ThreadInspectorPreview } from "./thread-inspector-preview";
 import { useStartSideChat } from "./useStartSideChat";
+import { useDiscardAbandonedSideChat } from "./useDiscardAbandonedSideChat";
+import { ThreadSideChatsPane } from "./ThreadSideChatsPane";
+import { useOpenLinkedThread } from "./useOpenLinkedThread";
 import { useThreadStatusAnnouncements } from "./useThreadStatusAnnouncements";
 import type { ThreadInspectorMode, ThreadInspectorTarget } from "./thread-inspector-navigation";
 import { useSelectWorkspaceDetail } from "../layout/workspace/useSelectWorkspaceDetail";
@@ -393,7 +397,13 @@ function ThreadRouteContent(
   const selectedThreadDetail = Option.getOrNull(selectedThreadDetailState.data);
   const { selectedThreadCwd } = useSelectedThreadWorktree();
   const startSideChat = useStartSideChat();
+  const openLinkedThread = useOpenLinkedThread();
   const composer = useThreadComposerState({ startSideChat });
+  useDiscardAbandonedSideChat(
+    selectedThread === null
+      ? null
+      : scopeThreadRef(selectedThread.environmentId, selectedThread.id),
+  );
   const gitState = useSelectedThreadGitState();
   const gitActions = useSelectedThreadGitActions();
   const requests = useSelectedThreadRequests();
@@ -608,6 +618,27 @@ function ThreadRouteContent(
     setChosenInspectorMode(props.renderInspector === undefined ? "files" : "route");
     showInspector();
   };
+  const handleOpenSideChatsInspector = () => {
+    navigation.setParams({ inspector: undefined });
+    setChosenInspectorMode("sideChats");
+    showInspector();
+  };
+  const startingSideChatRef = useRef(false);
+  const handleNewSideChat = async (open: (sideChat: ScopedThreadRef) => void) => {
+    if (selectedThread === null || startingSideChatRef.current) return;
+    startingSideChatRef.current = true;
+    await startSideChat(
+      scopeThreadRef(selectedThread.environmentId, selectedThread.id),
+      null,
+      {
+        runtimeMode: composer.runtimeMode ?? selectedThread.runtimeMode,
+        modelSelection: composer.modelSelection ?? selectedThread.modelSelection,
+      },
+      open,
+    ).finally(() => {
+      startingSideChatRef.current = false;
+    });
+  };
   const handleSelectInspectorFile = (path: string) => {
     if (selectedThread === null) {
       return;
@@ -643,12 +674,38 @@ function ThreadRouteContent(
         )}
       </InspectorSheetContext.Consumer>
     ) : null;
+  const renderSideChatsInspector = () =>
+    selectedThread !== null ? (
+      <InspectorSheetContext.Consumer>
+        {(closeInspectorSheet) => {
+          // A sheet closes before the side chat opens over it; a column keeps the list beside it.
+          const openSideChat = (sideChat: ScopedThreadRef) =>
+            closeInspectorSheet
+              ? closeInspectorSheet(() => openLinkedThread(sideChat))
+              : openLinkedThread(sideChat);
+          return (
+            <ThreadSideChatsPane
+              environmentId={selectedThread.environmentId}
+              threadId={selectedThread.id}
+              newSideChatUnavailableReason={composer.sideChatUnavailableReason}
+              onNewSideChat={() => void handleNewSideChat(openSideChat)}
+              onOpenSideChat={(sideChatId) =>
+                openSideChat(scopeThreadRef(selectedThread.environmentId, sideChatId))
+              }
+            />
+          );
+        }}
+      </InspectorSheetContext.Consumer>
+    ) : null;
   const renderPreviewInspector = () =>
     previewTarget ? (
       <ThreadInspectorPreviewWhileVisible
         target={previewTarget}
         renderThread={(screen) => <ThreadRouteScreen {...screen} />}
         onClose={toggleAuxiliaryPane}
+        {...(chosenInspectorMode === "sideChats"
+          ? { onBack: () => navigation.setParams({ inspector: undefined }) }
+          : {})}
         onOpen={(inspector) => {
           if (
             inspector.type === "thread" &&
@@ -678,6 +735,7 @@ function ThreadRouteContent(
                 ]
               : []),
             { key: "files", render: renderFilesInspector, prewarm: true },
+            { key: "sideChats", render: renderSideChatsInspector },
             { key: "git", render: renderGitInspector, prewarm: true },
             ...(props.renderInspector ? [{ key: "route", render: props.renderInspector }] : []),
           ],
@@ -1047,6 +1105,16 @@ function ThreadRouteContent(
                 hasThreadCwd={selectedThreadCwd !== null}
                 inspectorMode={inspectorMode}
                 onOpenFilesInspector={handleOpenFilesInspector}
+                {...(selectedThread.lineage.sideChat === true ||
+                selectedThread.lineage.relationshipToParent === "subagent" ||
+                selectedThreadCreation !== null
+                  ? {}
+                  : {
+                      sideChats: {
+                        thread: scopeThreadRef(selectedThread.environmentId, selectedThread.id),
+                        onOpen: handleOpenSideChatsInspector,
+                      },
+                    })}
                 onReturnToThread={props.onReturnToThread}
               />
             )
