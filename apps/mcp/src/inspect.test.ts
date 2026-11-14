@@ -21,7 +21,7 @@ import * as Schema from "effect/Schema";
 
 import { BridgeError, Environments, type T3Environment, type VcsReads } from "./environment.ts";
 import { redactRemoteUrl } from "./inspect.ts";
-import { appThread, at, callTool, fakeEnvironment, serverConfig } from "./testing.ts";
+import { appThread, at, callTool, fakeEnvironment, serverConfig, noCallbacks } from "./testing.ts";
 import { BridgeToolkitHandlersLive } from "./tools.ts";
 
 const isBridgeError = Schema.is(BridgeError);
@@ -150,7 +150,7 @@ function bridge(...environments: ReadonlyArray<T3Environment>) {
         }),
       ),
     ),
-    Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+    Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, noCallbacks)),
   );
 }
 
