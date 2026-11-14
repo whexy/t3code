@@ -43,6 +43,7 @@ export type ApnsNotificationPayload = typeof ApnsNotificationPayload.Type;
 export const ApnsLiveActivityAlert = Schema.Struct({
   title: Schema.String,
   body: Schema.String,
+  sound: Schema.optional(Schema.String),
 });
 export type ApnsLiveActivityAlert = typeof ApnsLiveActivityAlert.Type;
 

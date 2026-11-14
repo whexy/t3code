@@ -34,7 +34,14 @@ type Reply =
 const ApnsPayload = Schema.Struct({
   aps: Schema.Struct({
     event: Schema.optional(Schema.String),
-    alert: Schema.optional(Schema.Struct({ title: Schema.String, body: Schema.String })),
+    alert: Schema.optional(
+      Schema.Struct({
+        title: Schema.String,
+        body: Schema.String,
+        sound: Schema.optional(Schema.String),
+      }),
+    ),
+    sound: Schema.optional(Schema.String),
     "content-state": Schema.optional(
       Schema.Struct({ props: Schema.fromJsonString(RelayAgentActivityAggregateState) }),
     ),
@@ -47,6 +54,7 @@ interface Sent {
   readonly pushType: string | undefined;
   readonly event: string | null;
   readonly alert: string | null;
+  readonly sound: string | null;
   readonly rows: ReadonlyArray<string>;
 }
 
@@ -62,6 +70,7 @@ const fakeApns = Effect.gen(function* () {
         pushType: request.headers["apns-push-type"],
         event: aps.event ?? null,
         alert: aps.alert?.title ?? null,
+        sound: aps.alert?.sound ?? aps.sound ?? null,
         rows: (aps["content-state"]?.props.activities ?? []).map(
           (row) => `${row.threadId}:${row.phase}`,
         ),
@@ -232,7 +241,7 @@ describe("t3-push deliveries", () => {
         new Set(["thread:waiting_for_approval", "thread:running"]),
       );
       expect(coalesced.rows).toHaveLength(2);
-      expect(coalesced.alert).toBe("Thread on h1");
+      expect(coalesced).toMatchObject({ alert: "Thread on h1", sound: "default" });
       expect((yield* Fiber.join(h1Runs)).deliveries).toHaveLength(1);
       // Their rows were stored after the first delivery read the rows.
       expect(isPending(h2Runs)).toBe(true);
@@ -277,6 +286,7 @@ describe("t3-push deliveries", () => {
           pushType: "liveactivity",
           event: "update",
           alert: null,
+          sound: null,
           rows: ["thread:waiting_for_approval"],
         });
         // Recorded now, so the host's retry of the state its failed request carried is skipped.
@@ -402,6 +412,19 @@ describe("t3-push deliveries", () => {
     }),
   );
 
+  it.effect("rings a card completion with the completion sound", () =>
+    Effect.gen(function* () {
+      const { apns, push } = yield* setup();
+      yield* registerPhone(push, { card: true });
+      yield* publish(push, "h1", "running");
+      yield* publish(push, "h1", "completed");
+      expect(yield* Queue.clear(apns.sent)).toMatchObject([
+        { event: "update", alert: null },
+        { event: "update", alert: "Thread on h1", sound: "notification-completion.wav" },
+      ]);
+    }),
+  );
+
   it.effect("alerts an ask and a completion delivered together once, naming both", () =>
     Effect.gen(function* () {
       const { apns, push } = yield* setup();
@@ -423,7 +446,11 @@ describe("t3-push deliveries", () => {
       // A title change, or a host retrying after its timeout.
       yield* publish(push, "h2", "completed");
       expect(yield* Queue.clear(apns.sent)).toMatchObject([
-        { event: "update", alert: "Thread on h1 needs input · Thread on h2 done" },
+        {
+          event: "update",
+          alert: "Thread on h1 needs input · Thread on h2 done",
+          sound: "default",
+        },
         { event: "end", alert: null },
       ]);
     }),
@@ -502,6 +529,7 @@ describe("t3-push deliveries", () => {
         pushType: "liveactivity",
         event: "update",
         alert: null,
+        sound: null,
         rows: ["thread:waiting_for_approval"],
       });
     }),
@@ -590,7 +618,7 @@ describe("t3-push deliveries", () => {
       // h1's running row sorts ahead of h2's finished one.
       yield* publish(push, "h2", "completed");
       expect(yield* Queue.clear(apns.sent)).toMatchObject([
-        { pushType: "alert", alert: "Thread on h2" },
+        { pushType: "alert", alert: "Thread on h2", sound: "notification-completion.wav" },
       ]);
     }),
   );
