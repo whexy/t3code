@@ -85,8 +85,6 @@ import * as ProviderInstanceRegistryHydration from "./provider/ProviderInstanceR
 import * as ProjectSettingsOverrideSweep from "./provider/ProjectSettingsOverrideSweep.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import * as McpHttpServer from "./mcp/McpHttpServer.ts";
-import * as OrchestratorMcpService from "./mcp/OrchestratorMcpService.ts";
-import * as WaitCallbacks from "./mcp/WaitCallbacks.ts";
 import * as PeerForwarding from "./peer/PeerForwarding.ts";
 import * as RemoteDelegation from "./peer/RemoteDelegation.ts";
 import * as PeerLinkRequests from "./peer/PeerLinkRequests.ts";
@@ -854,15 +852,7 @@ const layerMakeRoutes = Layer.mergeAll(
   Layer.effectDiscard(
     RemoteDelegation.RemoteDelegation.pipe(Effect.flatMap((remote) => remote.start())),
   ),
-  // Resumes outside agents' wait callbacks after a restart.
-  Layer.effectDiscard(WaitCallbacks.WaitCallbacks.pipe(Effect.flatMap((c) => c.start()))),
 ).pipe(
-  Layer.provide(
-    WaitCallbacks.layer.pipe(
-      Layer.provide(OrchestratorMcpService.layer),
-      Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
-    ),
-  ),
   Layer.provide(
     PullRequestReviewGuideService.layer.pipe(Layer.provide(PullRequestReviewGuides.layer)),
   ),
