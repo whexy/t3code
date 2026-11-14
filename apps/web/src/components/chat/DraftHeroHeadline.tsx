@@ -267,7 +267,9 @@ export function DraftHeroHeadline({
           }}
         />
         <ComboboxEmpty>No matching projects.</ComboboxEmpty>
-        <ComboboxList>
+        <ComboboxList
+          footerItems={filteredPickerItems.filter((item) => item.value === ADD_PROJECT_VALUE)}
+        >
           {(item: PickerItem) => {
             const entry = projectEntryByKey.get(item.value);
             return (
