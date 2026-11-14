@@ -1,13 +1,19 @@
+import { useAtomValue } from "@effect/atom-react";
+import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import type { ScopedThreadRef } from "@t3tools/contracts";
+import { Atom } from "effect/reactivity";
 import { useGT, useMessages } from "gt-react-native";
 
 import { AppBar } from "../../components/ui/AppBar";
-import type { AppBarAction, AppBarMenu } from "../../components/ui/AppBar.types";
+import type { AppBarMenu, AppBarMenuItem } from "../../components/ui/AppBar.types";
+import { environmentThreadShells } from "../../state/threads";
 import {
   useAdaptiveWorkspaceLayout,
   useWorkspacePaneState,
 } from "../layout/AdaptiveWorkspaceLayout";
 import type { ThreadInspectorMode } from "./thread-inspector-navigation";
 import { useWorkspaceBackNavigation } from "../layout/workspace/useAndroidWorkspaceNavigation";
+import { describeSideChatsAwaitingUser } from "./sideChatsStatus";
 import {
   threadTerminalMenu,
   useThreadGitMenuDefinition,
@@ -23,6 +29,8 @@ export function ThreadHeader(props: {
   readonly hasThreadCwd: boolean;
   readonly inspectorMode: ThreadInspectorMode | null;
   readonly onOpenFilesInspector: () => void;
+  /** Absent where this thread cannot have side chats. */
+  readonly sideChats?: { readonly thread: ScopedThreadRef; readonly onOpen: () => void };
 }) {
   const gt = useGT();
   const m = useMessages();
@@ -32,19 +40,49 @@ export function ThreadHeader(props: {
   const gitMenu = useThreadGitMenuDefinition(props.gitControls);
   const terminalMenu = threadTerminalMenu(props.gitControls, m);
   const filesVisible = props.inspectorMode === "files" && panes.auxiliaryPaneVisible;
-  const actions: AppBarAction[] = props.hasThreadCwd
-    ? [
-        {
-          accessibilityLabel: filesVisible ? gt("Close files") : gt("Open files"),
-          icon: "folder",
-          selected: filesVisible,
-          disabled: !props.gitControls.canOpenFiles,
+  const sideChatsVisible = props.inspectorMode === "sideChats" && panes.auxiliaryPaneVisible;
+  const sideChatsStatus = useSideChatsStatus(props.sideChats?.thread ?? null);
+  const panelItems: AppBarMenuItem[] = [
+    ...(props.hasThreadCwd
+      ? [
+          {
+            id: "files",
+            title: gt("Files"),
+            icon: "folder",
+            selected: filesVisible,
+            disabled: !props.gitControls.canOpenFiles,
+            onPress: filesVisible ? toggleAuxiliaryPane : props.onOpenFilesInspector,
+          },
+        ]
+      : []),
+    ...(props.sideChats
+      ? [
+          {
+            id: "side-chats",
+            title: gt("Side chats"),
+            icon: "bubble.left.and.bubble.right",
+            ...(sideChatsStatus === null ? {} : { subtitle: sideChatsStatus }),
+            selected: sideChatsVisible,
+            onPress: sideChatsVisible ? toggleAuxiliaryPane : props.sideChats.onOpen,
+          },
+        ]
+      : []),
+  ];
+  // Panels open beside the thread, so they share one button instead of one each.
+  const panelsMenu: AppBarMenu | null =
+    panelItems.length === 0
+      ? null
+      : {
+          title: gt("Panels"),
+          icon: "sidebar.right",
           separateBackground: false,
-          onPress: filesVisible ? toggleAuxiliaryPane : props.onOpenFilesInspector,
-        },
-      ]
-    : [];
-  const menus = [gitMenu, terminalMenu].filter((menu): menu is AppBarMenu => menu !== null);
+          ...(sideChatsStatus === null ? {} : { status: sideChatsStatus }),
+          items: panelItems,
+        };
+  // iOS lays out trailing items from the edge inward, so the first menu sits outermost.
+  const menus = [panelsMenu, gitMenu, terminalMenu].filter(
+    (menu): menu is AppBarMenu => menu !== null,
+  );
 
   return (
     <AppBar
@@ -61,9 +99,19 @@ export function ThreadHeader(props: {
             }
           : undefined
       }
-      actions={actions}
       menus={menus}
       hideBottomBorder
     />
   );
+}
+
+const NO_SIDE_CHATS_ATOM = Atom.make<ReadonlyArray<EnvironmentThreadShell>>([]).pipe(
+  Atom.withLabel("mobile-thread-header-side-chats:none"),
+);
+
+function useSideChatsStatus(ref: ScopedThreadRef | null): string | null {
+  const sideChats = useAtomValue(
+    ref === null ? NO_SIDE_CHATS_ATOM : environmentThreadShells.sideChatsAtom(ref),
+  );
+  return describeSideChatsAwaitingUser(sideChats);
 }

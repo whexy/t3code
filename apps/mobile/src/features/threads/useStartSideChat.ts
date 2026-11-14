@@ -17,10 +17,13 @@ import { msg, useGT } from "gt-react-native";
 import { m } from "../../i18n/messages";
 
 import * as Dialog from "../../components/ui/Dialog";
+import { scopedThreadKey } from "../../lib/scopedEntities";
 import { uuidv4 } from "../../lib/uuid";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { environmentThreadShells, threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { updateComposerDraftSettings } from "../../state/use-composer-drafts";
+import { markFreshSideChat } from "./freshSideChats";
 import { waitForThreadShell } from "./threadForkNavigation";
 import { useOpenLinkedThread } from "./useOpenLinkedThread";
 
@@ -31,8 +34,9 @@ export type SideChatMessage = Pick<
 
 /**
  * Forks `source` at its latest stable point into a side chat, sends `message` there, and opens
- * it like any linked thread. Resolves false when the side chat did not start. `settings` are
- * what the parent's composer would send, which its thread gets only on its next send.
+ * it with `open`, or like any linked thread. Without a message it opens empty with `settings` in
+ * its composer. Resolves false when the side chat did not start. `settings` are what the
+ * parent's composer would send, which its thread gets only on its next send.
  */
 export function useStartSideChat() {
   const gt = useGT();
@@ -53,8 +57,9 @@ export function useStartSideChat() {
 
   return async (
     source: ScopedThreadRef,
-    message: SideChatMessage,
+    message: SideChatMessage | null,
     settings: { readonly runtimeMode: RuntimeMode; readonly modelSelection: ModelSelection },
+    open: (sideChat: ScopedThreadRef) => void = openLinkedThread,
   ): Promise<boolean> => {
     const targetThreadId = ThreadId.make(uuidv4());
     const fork = await forkSideChat({
@@ -106,6 +111,14 @@ export function useStartSideChat() {
         return false;
       }
     }
+    if (message === null) {
+      updateComposerDraftSettings(scopedThreadKey(source.environmentId, targetThreadId), {
+        modelSelection: settings.modelSelection,
+      });
+      markFreshSideChat(targetRef);
+      open(targetRef);
+      return true;
+    }
     const { titleSeed, ...content } = message;
     const turn = await startTurn({
       environmentId: source.environmentId,
@@ -124,7 +137,7 @@ export function useStartSideChat() {
       discard();
       return false;
     }
-    openLinkedThread({ environmentId: source.environmentId, threadId: targetThreadId });
+    open(targetRef);
     return true;
   };
 }
