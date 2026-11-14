@@ -9,6 +9,7 @@ import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import { ApnsEnvironment, type ApnsCredentials } from "../Config.ts";
 import { MAX_SUMMARY_TEXT_LENGTH, truncateText } from "./agentActivityPayloads.ts";
+import { alertSound } from "./alertSound.ts";
 import type { ApnsLiveActivityAlert, ApnsNotificationPayload } from "./apnsDeliveryJobs.ts";
 import type { ApnsJwtEncodingError, ApnsJwtSigningError } from "./apnsJwt.ts";
 import * as ApnsProviderTokens from "./ApnsProviderTokens.ts";
@@ -109,7 +110,7 @@ function liveActivityAlertPayload(alert: ApnsLiveActivityAlert) {
     alert: {
       title: alert.title,
       body: alert.body,
-      sound: "default",
+      sound: alert.sound ?? "default",
     },
   };
 }
@@ -138,6 +139,7 @@ function makeLiveActivityRequest(input: MakeLiveActivityRequestInput): ApnsLiveA
       },
       alert: input.alert
         ? {
+            ...input.alert,
             title: truncateText(input.alert.title, maxTextLength),
             body: truncateText(input.alert.body, maxTextLength),
           }
@@ -223,7 +225,7 @@ function makePushNotificationRequest(input: {
           title: input.notification.title,
           body: input.notification.body,
         },
-        sound: "default",
+        sound: alertSound([input.notification.phase]),
         "thread-id": notificationThreadId(input.notification),
       },
       // Expo iOS exposes userInfo.body as notification.content.data for remote pushes.
