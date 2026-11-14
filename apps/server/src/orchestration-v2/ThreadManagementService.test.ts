@@ -14,6 +14,7 @@ import {
   ProjectId,
   ProviderInstanceId,
   RunId,
+  RuntimeRequestId,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
@@ -559,6 +560,71 @@ it.effect("waitForThread returns the cut run once its continuation is declined",
     const result = yield* Fiber.join(fiber);
 
     expect(result).toMatchObject({ timedOut: false, run: { id: runId, status: "cancelled" } });
+  }),
+);
+
+it.effect("waitForThread untilNeedsInput ends on a question, not on a tool call it answers", () =>
+  Effect.gen(function* () {
+    const projectId = ProjectId.make("project:thread-management:wait-input");
+    const threadId = ThreadId.make("thread:thread-management:wait-input");
+    const runId = RunId.make("run:thread-management:wait-input");
+    const toolCall = RuntimeRequestId.make("request:wait-input:tool");
+    const question = RuntimeRequestId.make("request:wait-input:question");
+    const subscribed = yield* Deferred.make<void>();
+    const events = yield* Queue.unbounded<OrchestrationV2StoredEvent>();
+    let runtimeRequests = [{ id: toolCall, kind: "dynamic_tool_call", status: "pending" }];
+    const layerTest = ThreadManagementService.layer.pipe(
+      Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
+      Layer.provide(
+        Layer.mock(Orchestrator.OrchestratorV2)({
+          getThreadEventSequence: () => Effect.succeed(0),
+          restartContinuationPending: () => Effect.succeed(false),
+          streamStoredEventsFrom: (input) =>
+            input?.eventType === "runtime-request.updated"
+              ? Stream.fromEffect(Deferred.succeed(subscribed, undefined)).pipe(
+                  Stream.drain,
+                  Stream.concat(Stream.fromQueue(events)),
+                )
+              : Stream.never,
+          getThreadRecords: () =>
+            Effect.sync(
+              () =>
+                ({
+                  thread: { id: threadId, projectId, deletedAt: null },
+                  runs: [{ id: runId, status: "running" }],
+                  runtimeRequests,
+                }) as unknown as OrchestrationV2ThreadProjection,
+            ),
+        }),
+      ),
+      Layer.provide(ServerSettings.layerTest()),
+      Layer.provide(layerReceiptsTest),
+    );
+    const service = yield* ThreadManagementService.ThreadManagementService.pipe(
+      Effect.provide(layerTest),
+    );
+    const fiber = yield* service
+      .waitForThread({
+        projectId,
+        threadId,
+        runId,
+        timeoutMs: 60 * 60 * 1_000,
+        untilNeedsInput: true,
+      })
+      .pipe(Effect.forkChild);
+    yield* Deferred.await(subscribed);
+    runtimeRequests = [...runtimeRequests, { id: question, kind: "user_input", status: "pending" }];
+    yield* Queue.offer(events, {
+      sequence: 1,
+      event: { threadId, type: "runtime-request.updated" },
+    } as unknown as OrchestrationV2StoredEvent);
+    const result = yield* Fiber.join(fiber);
+
+    expect(result).toMatchObject({
+      timedOut: false,
+      run: { id: runId, status: "running" },
+      pendingRequestIds: [question],
+    });
   }),
 );
 
