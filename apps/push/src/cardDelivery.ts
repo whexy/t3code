@@ -29,6 +29,7 @@ import {
   notificationForActivity,
   truncateText,
 } from "../../../infra/relay/src/agentActivity/agentActivityPayloads.ts";
+import { alertSound } from "../../../infra/relay/src/agentActivity/alertSound.ts";
 import type * as Apns from "../../../infra/relay/src/agentActivity/ApnsClient.ts";
 import type {
   ApnsLiveActivityAlert,
@@ -215,8 +216,18 @@ function phaseWords(row: RelayAgentActivityAggregateRow): string {
   }
 }
 
-/** One alert for both kinds, asks first; a single kind keeps upstream's text. */
 export function alertForAlertedRows(rows: AlertedRows): ApnsLiveActivityAlert | null {
+  const alert = alertTextForAlertedRows(rows);
+  return (
+    alert && {
+      ...alert,
+      sound: alertSound([...rows.attention, ...rows.terminal].map((row) => row.phase)),
+    }
+  );
+}
+
+/** One alert for both kinds, asks first; a single kind keeps upstream's text. */
+function alertTextForAlertedRows(rows: AlertedRows): ApnsLiveActivityAlert | null {
   const { attention, terminal } = rows;
   const asking = attention[0];
   const finished = terminal[0];

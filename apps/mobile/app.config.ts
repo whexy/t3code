@@ -361,6 +361,7 @@ const config: ExpoConfig = {
       {
         icon: variant.assets.androidNotificationIcon,
         color: variant.assets.androidNotificationColor,
+        sounds: ["./assets/sounds/notification-completion.wav"],
         mode: APP_VARIANT === "development" ? "development" : "production",
       },
     ],
