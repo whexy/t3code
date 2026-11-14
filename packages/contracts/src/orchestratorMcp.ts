@@ -561,21 +561,6 @@ export const OrchestratorMcpThreadSendResult = Schema.Struct({
 });
 export type OrchestratorMcpThreadSendResult = typeof OrchestratorMcpThreadSendResult.Type;
 
-export const OrchestratorMcpWaitCallback = Schema.Struct({
-  url: Schema.String.check(Schema.isMaxLength(2048)).annotate({ description: "An https URL." }),
-  headers: Schema.optional(
-    Schema.Array(
-      Schema.Struct({
-        name: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9-]{1,64}$/)),
-        value: Schema.String.check(Schema.isMaxLength(4096)),
-      }),
-    )
-      .check(Schema.isMaxLength(8))
-      .annotate({ description: "Sent with every POST, such as Authorization. Never shown again." }),
-  ),
-});
-export type OrchestratorMcpWaitCallback = typeof OrchestratorMcpWaitCallback.Type;
-
 export const OrchestratorMcpThreadWaitInput = Schema.Struct({
   environmentId: OrchestratorMcpEnvironmentTarget,
   threadId: ThreadId,
@@ -598,43 +583,8 @@ export const OrchestratorMcpThreadWaitResult = Schema.Struct({
   next: Schema.optional(OrchestratorMcpRunningTaskNext),
   /** With untilDelegatedWorkSettled, once settled: the run whose reply is the thread's result. */
   resultRun: Schema.optional(Schema.Struct({ runId: RunId, status: OrchestrationV2RunStatus })),
-  pendingRequestIds: Schema.optional(
-    Schema.Array(RuntimeRequestId).annotate({
-      description:
-        "Outside T3 Code: it waits for the user to answer these in T3 Code. Waiting again returns at once until they do.",
-    }),
-  ),
 });
 export type OrchestratorMcpThreadWaitResult = typeof OrchestratorMcpThreadWaitResult.Type;
-
-export const OrchestratorMcpThreadCallbackInput = Schema.Struct({
-  threadId: ThreadId,
-  runId: Schema.optional(RunId),
-  untilDelegatedWorkSettled: OrchestratorMcpThreadWaitInput.fields.untilDelegatedWorkSettled,
-  callback: Schema.NullOr(OrchestratorMcpWaitCallback),
-});
-export type OrchestratorMcpThreadCallbackInput = typeof OrchestratorMcpThreadCallbackInput.Type;
-
-export const OrchestratorMcpThreadCallbackResult = Schema.Struct({
-  ...OrchestratorMcpThreadWaitResult.fields,
-  /** The armed callback, or null once cancelled. */
-  callback: Schema.NullOr(Schema.Struct({ id: Schema.String, expiresAt: IsoDateTime })),
-});
-export type OrchestratorMcpThreadCallbackResult = typeof OrchestratorMcpThreadCallbackResult.Type;
-
-/** What a wait callback POSTs: the wait's `result`, or an `error` when it could not finish. */
-export const OrchestratorMcpWaitCallbackEvent = Schema.Struct({
-  event: Schema.Literal("thread.wait"),
-  /** The callback's id. Retries and resends after a restart keep it, so receivers can dedupe. */
-  eventId: Schema.String,
-  environmentId: EnvironmentId,
-  threadId: ThreadId,
-  link: Schema.String,
-  occurredAt: IsoDateTime,
-  result: Schema.optional(OrchestratorMcpThreadWaitResult),
-  error: Schema.optional(Schema.String),
-});
-export type OrchestratorMcpWaitCallbackEvent = typeof OrchestratorMcpWaitCallbackEvent.Type;
 
 export const OrchestratorMcpThreadInterruptInput = Schema.Struct({
   environmentId: OrchestratorMcpEnvironmentTarget,
