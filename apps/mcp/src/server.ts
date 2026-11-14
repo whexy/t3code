@@ -10,10 +10,11 @@ import * as Socket from "effect/socket/Socket";
 
 import packageJson from "../package.json" with { type: "json" };
 import * as Admin from "./admin.ts";
+import * as Callbacks from "./callbacks.ts";
 import { RequireAccess } from "./cloudflareAccess.ts";
 import * as Environment from "./environment.ts";
 import * as Registry from "./registry.ts";
-import { BridgeToolkit, BridgeToolkitHandlersLive } from "./tools.ts";
+import { BridgeToolkit, BridgeToolkitHandlersLive, reportSessionStatus } from "./tools.ts";
 
 export interface Listener {
   readonly host: string;
@@ -42,7 +43,11 @@ export const layer = (options: {
 }) => {
   const tools = McpServer.toolkit(BridgeToolkit).pipe(
     Layer.provide(BridgeToolkitHandlersLive),
-    Layer.provide(Environment.layer),
+    Layer.provide(
+      Callbacks.layer({ dataDir: options.dataDir, report: reportSessionStatus }).pipe(
+        Layer.provideMerge(Environment.layer),
+      ),
+    ),
   );
   const transport = McpServer.layerHttp({
     name: "T3 Code",
