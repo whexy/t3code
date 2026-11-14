@@ -317,7 +317,7 @@ jobs:
         shell: bash
         run: |
           brand=production
-          if [[ "${{ inputs.version }}" =~ -nightly\.[0-9]{8}\.[0-9]+$ ]]; then brand=nightly; fi
+          if [[ "${{ inputs.version }}" =~ -nightly\.[0-9]{8}\.[0-9]+(\.[0-9]+)?$ ]]; then brand=nightly; fi
           node scripts/apply-web-brand-assets.ts "$brand" apps/server/dist/client
 
       - name: Resolve target Node.js for the CLI executable
