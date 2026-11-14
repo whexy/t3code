@@ -339,8 +339,8 @@ sidebar. Find one again under **Side chats** in thread details, where it opens
 [like a subagent does](#open-a-thread-beside-the-one-you-are-in).
 
 In the mobile app, open the panels menu in the thread's top bar and choose **Side
-chats** to list them and start a new one with **+**. `/side` and `/btw` work there
-too. A new side chat you leave without sending a message is removed.
+chats** to list them and start a new one. `/side` and `/btw` work there too. A
+new side chat you leave without sending a message is removed.
 
 A side chat works in the same folder as the thread and starts with the permissions,
 model, and reasoning level shown in the thread's composer, including for its first
