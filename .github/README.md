@@ -1,7 +1,7 @@
 # whexy/t3code
 
 An unofficial fork of [T3 Code](https://github.com/pingdotgg/t3code) that
-follows every upstream nightly and runs Wenxuan's fleet: the machines
+follows upstream's stable releases and runs Wenxuan's fleet: the machines
 [whexy/dotfiles](https://github.com/whexy/dotfiles) manages, the clusters-work
 Kubernetes cluster, an iPhone, and the desktop apps. It needs none of
 upstream's hosted services. For T3 Code itself (install, docs, issues), go to
@@ -23,8 +23,8 @@ upstream's hosted services. For T3 Code itself (install, docs, issues), go to
 
 ![How a commit is checked, published, and delivered](assets/self-hosted-pipeline.svg)
 
-When upstream publishes a nightly, the rebase puts `dev` on top of it and moves
-`self-hosted-nightly` to `dev`, which starts the build. A build publishes only
+When upstream publishes a stable release, the rebase puts `dev` on top of it
+and moves `self-hosted-nightly` to `dev`, which starts the build. A build publishes only
 while its commit is still the branch head; otherwise the newer push publishes
 instead. From there:
 
@@ -44,14 +44,14 @@ Open pull requests against `dev`, the default branch. They run the checks
 without the macOS leg and the desktop builds, publish nothing, and are
 rebase-merged.
 
-A merged pull request ships with the next upstream nightly. To ship it sooner,
+A merged pull request ships with the next upstream stable release. To ship it sooner,
 merge the open "chore(release): promote dev to self-hosted-nightly" pull
 request with a merge commit, or run
 [`self-hosted-rebase.yml`](workflows/self-hosted-rebase.yml) by hand. Nobody
 commits to `self-hosted-nightly` directly.
 
-`dev` is an upstream nightly tag, then the fork's commits, then one
-`chore(nix): pin sources for <tag>` commit, then any pull requests merged since.
+`dev` is the nightly tag upstream cut its latest stable release from, then the
+fork's commits, then one `chore(nix): pin sources for <tag>` commit, then any pull requests merged since.
 Every rebase replays it onto the new tag and force-pushes, so a `pin/<sha12>`
 tag keeps each commit the build published fetchable.
 
