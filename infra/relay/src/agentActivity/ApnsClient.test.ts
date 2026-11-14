@@ -142,6 +142,19 @@ describe("ApnsClient", () => {
           deepLink: "/threads/env/thread",
         },
       });
+
+      const completed = apns.makePushNotificationRequest({
+        token: "push-token",
+        notification: {
+          title: "Thread",
+          body: "Done: Project",
+          environmentId: "env",
+          threadId: "thread",
+          deepLink: "/threads/env/thread",
+          phase: "completed",
+        },
+      });
+      expect(completed.payload).toMatchObject({ aps: { sound: "notification-completion.wav" } });
     }).pipe(Effect.provide(layerTest)),
   );
 
@@ -189,7 +202,11 @@ describe("ApnsClient", () => {
         event: "update",
         token: "token",
         state: longState,
-        alert: { title: "界".repeat(120), body: "界".repeat(120) },
+        alert: {
+          title: "界".repeat(120),
+          body: "界".repeat(120),
+          sound: "notification-completion.wav",
+        },
         nowEpochSeconds: Math.floor(now.epochMilliseconds / 1_000),
         nowIso: DateTime.formatIso(now),
       });
@@ -197,7 +214,10 @@ describe("ApnsClient", () => {
       expect(
         new TextEncoder().encode(JSON.stringify(request.payload)).byteLength,
       ).toBeLessThanOrEqual(4096);
-      const payload = request.payload as { aps: { "content-state": { props: string } } };
+      const payload = request.payload as {
+        aps: { "content-state": { props: string }; alert: { sound: string } };
+      };
+      expect(payload.aps.alert.sound).toBe("notification-completion.wav");
       const sent = JSON.parse(payload.aps["content-state"].props) as typeof longState;
       expect(sent.activities.map((row) => row.threadId)).toEqual(["a", "b", "c", "d", "e"]);
       expect(sent.activities[0]?.threadTitle).toMatch(/^界+\.\.\.$/);
