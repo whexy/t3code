@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Rebases dev onto an upstream nightly release, pins nix/sources.json and
+# Rebases dev onto an upstream stable release, pins nix/sources.json and
 # pnpm-lock.yaml to it, and promotes dev to self-hosted-nightly: the state
 # machine .github/workflows/self-hosted-rebase.yml runs. Run it from a copy
 # outside the checkout, since the rebase rewrites this file.
 #
-# Env: TAG (optional; default the newest nightly), PUSH_URL (authenticated
+# Env: TAG (optional stable tag; default the latest), PUSH_URL (authenticated
 # remote URL), STATE_DIR (the stage, tag, start and result the failure report
 # reads; `stage` names the operation that was running when the script died).
 set -euo pipefail
@@ -16,11 +16,11 @@ scripts="$(cd "$(dirname "$0")" && pwd)"
 state_dir="${STATE_DIR:?}"
 mkdir -p "$state_dir"
 
-tag="" start="" result="" state="" promote=""
+stable="" tag="" start="" result="" state="" promote=""
 record() { printf '%s' "$2" > "$state_dir/$1"; }
 enter() { record stage "$1"; }
 finish() {
-  local line="state=$state promote=$promote tag=$tag start=$start result=$result"
+  local line="state=$state promote=$promote stable=$stable tag=$tag start=$start result=$result"
   echo "$line"
   if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then echo "$line" >> "$GITHUB_STEP_SUMMARY"; fi
   exit 0
@@ -71,13 +71,21 @@ for attempt in 1 2; do
   record start "$start"
   git checkout -q --detach "$start"
 
-  tag="${TAG:-}"
-  if [[ -z "$tag" ]]; then tag="$(node "$scripts/nightly-release.ts")"; fi
-  record tag "$tag"
-  if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-nightly\.[0-9]{8}\.[0-9]+$ ]]; then
-    echo "Not an upstream nightly tag: $tag" >&2
+  stable="${TAG:-}"
+  if [[ -z "$stable" ]]; then stable="$(node "$scripts/stable-release.ts")"; fi
+  record tag "$stable"
+  # Upstream cuts each stable release from a nightly. The fork pins that
+  # nightly's tag, whose version keeps the fleet on the nightly update track
+  # (nix/t3-server.nix appends the commit time, which needs a nightly version).
+  tags="$(git ls-remote --tags upstream)"
+  commit="$(awk -v ref="refs/tags/$stable" '$2 == ref || $2 == ref "^{}" { commit = $1 } END { print commit }' <<< "$tags")"
+  tag="$(awk -v commit="$commit" '$1 == commit { sub(/^refs\/tags\//, "", $2); sub(/\^\{\}$/, "", $2); print $2 }' <<< "$tags" |
+    grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-nightly\.[0-9]{8}\.[0-9]+$' | sort -V | tail -n 1 || true)"
+  if [[ ! "$stable" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ || -z "$commit" || -z "$tag" ]]; then
+    echo "Not an upstream stable tag with a nightly at its commit: $stable" >&2
     exit 1
   fi
+  record tag "$tag"
   git fetch --no-tags upstream "+refs/heads/main:refs/remotes/upstream/main" \
     "+refs/tags/$tag:refs/remotes/upstream/release"
   release="$(git rev-parse 'refs/remotes/upstream/release^{commit}')"
