@@ -281,16 +281,17 @@ jobs:
           OUT: ${{ steps.check.outputs.out }}
         run: cachix push whexy-t3code "$OUT"
 
-  # The desktop app keeps upstream's nightly version, since clients compare
-  # nightly build numbers with the servers' (apps/web/src/versionSkew.ts).
-  # So each upstream nightly gets one release, from the first commit on it
-  # whose desktop builds pass; later commits on that nightly ship with the next.
+  # The desktop app takes the t3-server's version, upstream's nightly plus the
+  # commit's time (nix/t3-server.nix), so every commit gets its own release.
+  # Clients compare it with the servers' (apps/web/src/versionSkew.ts), and
+  # dotfiles finds the release by the server's version, so the two must match.
   desktop-plan:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       version: ${{ steps.plan.outputs.version }}
+      upstream: ${{ steps.plan.outputs.upstream }}
       build: ${{ steps.plan.outputs.build }}
       mac: ${{ steps.plan.outputs.mac }}
     steps:
@@ -309,7 +310,10 @@ jobs:
           MACOS_APP_ID: ${{ vars.MACOS_APP_ID }}
           RP_DOMAINS: ${{ vars.CLERK_PASSKEY_RP_DOMAINS }}
         run: |
-          version="$(jq -r .version nix/sources.json)"
+          upstream="$(jq -r .version nix/sources.json)"
+          # Nix's lastModifiedDate for this commit.
+          version="$upstream.$(TZ=UTC0 git show -s --format=%cd --date=format-local:%Y%m%d%H%M%S HEAD)"
+          echo "upstream=$upstream" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           if found="$(gh release view "$version" --repo "$GITHUB_REPOSITORY" --json tagName 2>&1)"; then
             echo "state=DESKTOP_PUBLISHED version=$version" | tee -a "$GITHUB_STEP_SUMMARY"
@@ -799,25 +803,33 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: 24
-      # Upstream's notes for this nightly, plus the fork's feat/fix/perf commits
-      # the previous fork release did not carry.
+      # Upstream's notes for this nightly unless the previous fork release
+      # already carried them, plus the fork's feat/fix/perf commits it did not.
       - name: Write release notes
         if: steps.current.outputs.current == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ needs.desktop-plan.outputs.version }}
+          UPSTREAM: ${{ needs.desktop-plan.outputs.upstream }}
         run: |
           previous="$(gh release list --repo "$GITHUB_REPOSITORY" --limit 50 --json tagName,createdAt \
             --jq '[.[] | select(.tagName | test("^[0-9]+\\.[0-9]+\\.[0-9]+-nightly\\."))] | sort_by(.createdAt) | last | .tagName // ""')"
-          git fetch --no-tags --filter=blob:none https://github.com/pingdotgg/t3code.git \
-            "+refs/tags/v$VERSION:refs/tags/v$VERSION" \
-            ${previous:+"+refs/tags/v$previous:refs/tags/v$previous"}
-          git log --no-merges --format=%s "v$VERSION..$GITHUB_SHA" > "$RUNNER_TEMP/fork-subjects"
-          : > "$RUNNER_TEMP/previous-fork-subjects"
-          if [[ -n "$previous" ]]; then
-            git log --no-merges --format=%s "v$previous..$previous" > "$RUNNER_TEMP/previous-fork-subjects"
+          # The upstream nightly a fork release was built on: its version without the commit time.
+          previous_upstream=
+          if [[ "$previous" =~ ^[0-9]+\.[0-9]+\.[0-9]+-nightly\.[0-9]{8}\.[0-9]+ ]]; then
+            previous_upstream="${BASH_REMATCH[0]}"
           fi
-          gh release view "v$VERSION" --repo pingdotgg/t3code --json body --jq .body > "$RUNNER_TEMP/upstream-notes"
+          git fetch --no-tags --filter=blob:none https://github.com/pingdotgg/t3code.git \
+            "+refs/tags/v$UPSTREAM:refs/tags/v$UPSTREAM" \
+            ${previous_upstream:+"+refs/tags/v$previous_upstream:refs/tags/v$previous_upstream"}
+          git log --no-merges --format=%s "v$UPSTREAM..$GITHUB_SHA" > "$RUNNER_TEMP/fork-subjects"
+          : > "$RUNNER_TEMP/previous-fork-subjects"
+          if [[ -n "$previous_upstream" ]]; then
+            git log --no-merges --format=%s "v$previous_upstream..$previous" > "$RUNNER_TEMP/previous-fork-subjects"
+          fi
+          : > "$RUNNER_TEMP/upstream-notes"
+          if [[ "$previous_upstream" != "$UPSTREAM" ]]; then
+            gh release view "v$UPSTREAM" --repo pingdotgg/t3code --json body --jq .body > "$RUNNER_TEMP/upstream-notes"
+          fi
           node scripts/self-hosted/desktop-release-notes.ts \
             "$RUNNER_TEMP/upstream-notes" "$RUNNER_TEMP/fork-subjects" "$RUNNER_TEMP/previous-fork-subjects" \
             > "$RUNNER_TEMP/release-notes.md"
