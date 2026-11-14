@@ -436,7 +436,7 @@ bridge uses it again on the next call; there is nothing to re-enable.
 
 ## Following a session
 
-MCP clients cannot be called back, so they ask. `get_session_status` with
+A chat client asks. `get_session_status` with
 `wait: true` holds the call until the work underway when it began ends, or
 the agent needs an approval or an answer, and then reports. A message queued
 after the wait began does not extend it. After about 45 seconds it returns
@@ -445,6 +445,25 @@ the returned `cursor` to keep waiting. ChatGPT drops a tool call after about
 a minute and reports that as an error rather than as work still running, so
 one call cannot wait for a whole turn. A client that stops asking loses
 nothing: the agent keeps working, and the next status reports what happened.
+
+A bot that a webhook can wake, such as an n8n flow or a scheduled routine,
+can ask to be called back instead. `set_session_callback` returns at once, and
+when the agent's current turn ends or it needs the user, the bridge POSTs the
+same result `get_session_status` gives, as JSON, to the bot's `https` URL.
+Headers the bot passes, such as its `Authorization` key, go with every POST and
+are never shown again.
+
+- Each POST carries an `event_id`. A POST that fails with a network error, 408,
+  425, 429 or a 5xx is tried again for up to a day with the same `event_id`.
+  Other responses end it.
+- A callback is sent once. To hear about the next turn, set a new one. It
+  replaces any earlier callback for the session, `callback: null` cancels it,
+  and it ends after 24 hours. `get_session_status` shows the armed callback.
+- Callbacks are kept in `callbacks.json` in the data directory and survive a
+  bridge restart. While a paired server is unreachable, as during its
+  restarts, the bridge keeps trying it until the callback expires.
+- The bridge does not POST to itself, to link-local addresses, or to cloud
+  metadata endpoints. LAN, tailnet, and cluster addresses work.
 
 Every status carries `next_step`, one sentence on what to do with it: wait
 again, ask the user, or report the answer. `create_session`,
