@@ -2,7 +2,7 @@
 # commits the fleet has not got. Merging it with a merge commit, the only
 # method self-hosted-nightly's ruleset allows, pushes self-hosted-nightly,
 # which self-hosted-build.yml builds and publishes. Its head is dev itself, so
-# it follows every merge into dev. The next upstream nightly promotes dev
+# it follows every merge into dev. The next upstream stable release promotes dev
 # anyway, and self-hosted-rebase.yml closes the pull request then.
 name: self-hosted-promote-pr
 
@@ -42,7 +42,7 @@ jobs:
           BODY: |
             Merging this ships every commit below to the fleet: the merge commit lands on `self-hosted-nightly`, whose build publishes the images, the Nix server, the desktop and iOS apps, and starts the dotfiles pin lane.
 
-            Use **Create a merge commit**; the branch ruleset allows no other method. This pull request follows `dev` as more pull requests merge. The next upstream nightly promotes `dev` on its own and closes it.
+            Use **Create a merge commit**; the branch ruleset allows no other method. This pull request follows `dev` as more pull requests merge. The next upstream stable release promotes `dev` on its own and closes it.
         run: |
           ahead="$(gh api "repos/$GITHUB_REPOSITORY/compare/self-hosted-nightly...dev" --jq .ahead_by)"
           open="$(gh pr list --repo "$GITHUB_REPOSITORY" --base self-hosted-nightly --head dev --state open \
