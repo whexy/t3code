@@ -90,7 +90,7 @@ On web and desktop, subagents, side chats, and [threads on linked machines](./re
 
 Ask a quick side question about a thread without polluting its history. A side chat starts with the parent thread's context, folder, model, and permissions while the parent keeps working.
 
-- **Start** (web/desktop): Send `/side <question>` or `/btw <question>`, or choose **Side chat** from the right panel's **+** menu.
-- **Find later**: Listed under **Side chats** in thread details (web/desktop) or above the composer (mobile); hidden from the main sidebar.
+- **Start** (web/desktop): Send `/side <question>` or `/btw <question>`, or choose **Side chat** from the right panel's **+** menu. On mobile, open the panels menu in the thread's top bar, choose **Side chats**, and tap **+** (`/side` and `/btw` work there too).
+- **Find later**: Listed under **Side chats** in thread details (web/desktop) or the **Side chats** panel (mobile); hidden from the main sidebar.
 - **Bring results back**: Click **Add to chat** in the side chat, or `@`-mention its title in the parent composer (not readable by external OpenCode servers).
 - **Lifecycle**: Closing an unused side chat deletes it. Deleting or archiving the parent thread deletes or archives its side chats.

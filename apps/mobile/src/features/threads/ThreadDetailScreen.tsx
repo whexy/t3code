@@ -216,7 +216,6 @@ import { useThreadTurnSubagents } from "./ThreadAgentsSheet";
 import { ComposerQueuedEditBanner } from "./ComposerQueuedEdit";
 import { useThreadQueuedCount } from "./ThreadQueueControl";
 import { ThreadGuestShareBar } from "./ThreadGuestShareBar";
-import { ThreadSideChatsRow } from "./ThreadSideChatsRow";
 import type { ThreadContentPresentation } from "./threadContentPresentation";
 import { resolveThreadFeedSubmissionAnchor } from "./thread-feed-scroll-position";
 import { useOpenLinkedThread } from "./useOpenLinkedThread";
@@ -1746,12 +1745,6 @@ function ThreadDetailBody(
                       threadRef={props.selectedThreadDetailRef}
                       canOperateThread={props.canOperateThread}
                     />
-                    {props.draftMode ? null : (
-                      <ThreadSideChatsRow
-                        environmentId={props.environmentId}
-                        threadId={props.selectedThread.id}
-                      />
-                    )}
                     {props.feedbackSubmissions.map((submission) => (
                       <ComposerFeedback
                         key={submission.id}
