@@ -142,6 +142,7 @@ import {
   SavedBackendListRow,
 } from "./SavedEnvironmentRows";
 import { AddEnvironmentDialog } from "./AddEnvironmentDialog";
+import { PairDeviceDialog } from "./PairDeviceDialog";
 import {
   type ConnectDeviceRevokeRequest,
   RevokeConnectDeviceDialog,
@@ -1687,6 +1688,7 @@ function ConnectionsSettingsContent({
             {savedServerUpdateTargets.length > 0 ? (
               <ServerUpdatesAction targets={savedServerUpdateTargets} variant="ghost-muted" />
             ) : null}
+            <PairDeviceDialog savedEnvironments={savedEnvironments} />
             <AddEnvironmentDialog
               open={addBackendDialogOpen}
               routeTarget={routeTarget}
