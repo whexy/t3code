@@ -6,12 +6,21 @@ import type * as NodeNet from "node:net";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import * as NodeZlib from "node:zlib";
+
+import * as SharedDevUpdates from "@t3tools/shared/devUpdates";
+import { afterEach, describe, expect, expectTypeOf, it } from "vite-plus/test";
 
 import {
   type AccessVerifier,
   createSelfHostedServer,
+  DEV_UPDATES_CHANNEL,
+  DEV_UPDATES_HUB_PATH,
+  DEV_UPDATES_MANIFEST_URL,
+  type DevBundleStore,
+  type DevUpdatesState,
   makeCloudflareAccessVerifier,
+  makeDevBundleStore,
   SHARED_CATALOG_PATH,
 } from "./server.ts";
 
@@ -20,7 +29,9 @@ afterEach(async () => {
   await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
 });
 
-async function startServer(input: { historyLimit?: number; access?: AccessVerifier } = {}) {
+async function startServer(
+  input: { historyLimit?: number; access?: AccessVerifier; devBundles?: DevBundleStore } = {},
+) {
   const directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-self-hosted-"));
   const webRoot = NodePath.join(directory, "web");
   const catalogDir = NodePath.join(directory, "catalog");
@@ -34,6 +45,7 @@ async function startServer(input: { historyLimit?: number; access?: AccessVerifi
     catalogDir,
     historyLimit: input.historyLimit ?? 100,
     access: input.access ?? (async () => true),
+    devBundles: input.devBundles,
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   cleanups.push(async () => {
@@ -179,5 +191,301 @@ describe("Cloudflare Access verification", () => {
     expect(
       (await fetch(catalogUrl, { headers: { "Cf-Access-Jwt-Assertion": sign(valid) } })).status,
     ).toBe(404);
+  });
+});
+
+describe("dev updates", () => {
+  const signingKeys = NodeCrypto.generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const otherKeys = NodeCrypto.generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const release = "1.2.80";
+  const assetUrl = (id: string) => `https://ota.test/t3code/assets/${id}.tgz`;
+
+  function tarGz(entries: Record<string, string>) {
+    const blocks: Buffer[] = [];
+    for (const [name, content] of Object.entries(entries)) {
+      const directory = name.endsWith("/");
+      const data = Buffer.from(directory ? "" : content);
+      const header = Buffer.alloc(512);
+      header.write(name, 0, 100);
+      header.write("0000755\0", 100);
+      header.write(`${data.length.toString(8).padStart(11, "0")}\0`, 124);
+      header.write(directory ? "5" : "0", 156);
+      header.write("ustar\u000000", 257);
+      blocks.push(header, data, Buffer.alloc((512 - (data.length % 512)) % 512));
+    }
+    return NodeZlib.gzipSync(Buffer.concat([...blocks, Buffer.alloc(1024)]));
+  }
+
+  const goodArchive = (html: string) =>
+    tarGz({ "./": "", "./index.html": html, "./assets/": "", "./assets/dev-1.js": "dev chunk" });
+
+  function signature(body: Buffer, key = signingKeys.privateKey) {
+    const sig = NodeCrypto.sign("RSA-SHA256", body, key).toString("base64");
+    return `sig="${sig}", keyid="main", alg="rsa-v1_5-sha256"`;
+  }
+
+  function multipart(name: "manifest" | "directive", body: Buffer, expoSignature?: string) {
+    const boundary = "test-boundary";
+    const headers = [
+      "content-type: application/json; charset=utf-8",
+      `content-disposition: form-data; name="${name}"`,
+      ...(expoSignature === undefined ? [] : [`expo-signature: ${expoSignature}`]),
+    ];
+    return new Response(
+      Buffer.concat([
+        Buffer.from(`--${boundary}\r\n${headers.join("\r\n")}\r\n\r\n`),
+        body,
+        Buffer.from(`\r\n--${boundary}--\r\n`),
+      ]),
+      { headers: { "content-type": `multipart/mixed; boundary=${boundary}` } },
+    );
+  }
+
+  function manifestFor(id: string, archive: Buffer, overrides: Record<string, unknown> = {}) {
+    return Buffer.from(
+      JSON.stringify({
+        id,
+        createdAt: "2026-11-15T00:00:00.000Z",
+        runtimeVersion: release,
+        launchAsset: {
+          hash: NodeCrypto.createHash("sha256").update(archive).digest("base64url"),
+          key: "bundle",
+          contentType: "application/gzip",
+          url: assetUrl(id),
+        },
+        assets: [],
+        metadata: { gitCommit: `${id}0000000000` },
+        extra: {},
+        ...overrides,
+      }),
+    );
+  }
+
+  /** A fake OTA server whose next manifest response the test sets. */
+  async function makeOta(input: { release?: string; directory?: string } = {}) {
+    const directory =
+      input.directory ?? (await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-dev-updates-")));
+    if (input.directory === undefined) {
+      cleanups.push(() => NodeFSP.rm(directory, { recursive: true, force: true }));
+    }
+    const ota = {
+      manifest: (): Response => new Response(null, { status: 204 }),
+      archives: new Map<string, Buffer>(),
+      manifestRequests: [] as Array<Headers>,
+    };
+    const store = makeDevBundleStore({
+      release: input.release ?? release,
+      directory,
+      verificationKey: signingKeys.publicKey,
+      fetch: async (url, init) => {
+        if (url === DEV_UPDATES_MANIFEST_URL) {
+          ota.manifestRequests.push(new Headers(init?.headers));
+          return ota.manifest();
+        }
+        const archive = [...ota.archives].find(([id]) => url === assetUrl(id))?.[1];
+        return archive ? new Response(archive) : new Response(null, { status: 404 });
+      },
+    });
+    const publish = (id: string, archive: Buffer, overrides?: Record<string, unknown>) => {
+      ota.archives.set(id, archive);
+      const body = manifestFor(id, archive, overrides);
+      ota.manifest = () => multipart("manifest", body, signature(body));
+    };
+    return { ota, store, directory, publish };
+  }
+
+  const devCookie = { Cookie: "theme=dark; t3_dev_updates=1" };
+
+  it("mirrors the shared client contract", () => {
+    expect([DEV_UPDATES_HUB_PATH, DEV_UPDATES_MANIFEST_URL, DEV_UPDATES_CHANNEL]).toEqual([
+      SharedDevUpdates.DEV_UPDATES_HUB_PATH,
+      SharedDevUpdates.DEV_UPDATES_MANIFEST_URL,
+      SharedDevUpdates.DEV_UPDATES_CHANNEL,
+    ]);
+    expectTypeOf<DevUpdatesState>().toEqualTypeOf<SharedDevUpdates.DevUpdatesState>();
+  });
+
+  it("installs a signed bundle and serves it only to browsers that opted in", async () => {
+    const { ota, store, publish } = await makeOta();
+    publish("update-1", goodArchive("<dev-shell>"));
+    await store.refresh();
+
+    expect(Object.fromEntries(ota.manifestRequests[0]!)).toMatchObject({
+      "expo-platform": "web",
+      "expo-runtime-version": release,
+      "expo-channel-name": "dev",
+      "expo-protocol-version": "1",
+    });
+    const { origin } = await startServer({ devBundles: store });
+    const dev = await fetch(`${origin}/settings`, { headers: devCookie });
+    expect(await dev.text()).toBe("<dev-shell>");
+    expect(dev.headers.get("Cache-Control")).toBe("no-store");
+    expect(dev.headers.get("Vary")).toBe("Cookie");
+    const release_ = await fetch(`${origin}/`);
+    expect(await release_.text()).toBe("<app-shell>");
+    expect(release_.headers.get("Cache-Control")).toBe("no-store");
+    expect(release_.headers.get("Vary")).toBe("Cookie");
+
+    // A page from either bundle still finds its own chunks after switching.
+    expect(await (await fetch(`${origin}/assets/dev-1.js`)).text()).toBe("dev chunk");
+    const releaseChunk = await fetch(`${origin}/assets/app-abc.js`, { headers: devCookie });
+    expect(await releaseChunk.text()).toBe("bundle");
+    expect(releaseChunk.headers.get("Cache-Control")).toContain("immutable");
+  });
+
+  it("reports and sets this browser's choice", async () => {
+    const { store, publish } = await makeOta();
+    publish("update-1", goodArchive("<dev-shell>"));
+    await store.refresh();
+    const { origin } = await startServer({ devBundles: store });
+    const endpoint = `${origin}${DEV_UPDATES_HUB_PATH}`;
+    const post = (body: string, contentType = "application/json") =>
+      fetch(endpoint, { method: "POST", body, headers: { "Content-Type": contentType } });
+    const running = {
+      updateId: "update-1",
+      commit: "update-10000000000",
+      createdAt: "2026-11-15T00:00:00.000Z",
+    };
+
+    const off = await fetch(endpoint);
+    expect(off.headers.get("Cache-Control")).toBe("no-store");
+    expect(await off.json()).toEqual({
+      enabled: false,
+      runtimeVersion: release,
+      running: null,
+      pending: null,
+    });
+    expect(await (await fetch(endpoint, { headers: devCookie })).json()).toEqual({
+      enabled: true,
+      runtimeVersion: release,
+      running,
+      pending: null,
+    });
+
+    const enabled = await post('{"enabled":true}');
+    expect(await enabled.json()).toMatchObject({ enabled: true, running });
+    expect(enabled.headers.get("Set-Cookie")).toMatch(
+      /^t3_dev_updates=1; Max-Age=\d+; Path=\/; Secure; HttpOnly; SameSite=Lax$/,
+    );
+    const disabled = await post('{"enabled":false}');
+    expect(await disabled.json()).toMatchObject({ enabled: false, running: null });
+    expect(disabled.headers.get("Set-Cookie")).toMatch(/^t3_dev_updates=; Max-Age=0; /);
+
+    expect((await post('{"enabled":"yes"}')).status).toBe(400);
+    expect((await post("enabled=true", "application/x-www-form-urlencoded")).status).toBe(415);
+  });
+
+  it("answers 404 and serves the release bundle when the lane is off", async () => {
+    const { origin } = await startServer();
+    expect((await fetch(`${origin}${DEV_UPDATES_HUB_PATH}`)).status).toBe(404);
+    expect(await (await fetch(`${origin}/`, { headers: devCookie })).text()).toBe("<app-shell>");
+  });
+
+  it("serves the release bundle to opted-in browsers until a dev bundle exists", async () => {
+    const { store } = await makeOta();
+    await store.refresh();
+    const { origin } = await startServer({ devBundles: store });
+    expect(await (await fetch(`${origin}/`, { headers: devCookie })).text()).toBe("<app-shell>");
+    expect(
+      await (await fetch(`${origin}${DEV_UPDATES_HUB_PATH}`, { headers: devCookie })).json(),
+    ).toMatchObject({ enabled: true, running: null });
+  });
+
+  it.each<[string, (ota: Awaited<ReturnType<typeof makeOta>>) => void]>([
+    [
+      "an unsigned manifest",
+      ({ ota }) => {
+        const body = manifestFor("bad", goodArchive("<bad>"));
+        ota.archives.set("bad", goodArchive("<bad>"));
+        ota.manifest = () => multipart("manifest", body);
+      },
+    ],
+    [
+      "a manifest signed by another key",
+      ({ ota }) => {
+        const body = manifestFor("bad", goodArchive("<bad>"));
+        ota.archives.set("bad", goodArchive("<bad>"));
+        ota.manifest = () => multipart("manifest", body, signature(body, otherKeys.privateKey));
+      },
+    ],
+    [
+      "a manifest changed after signing",
+      ({ ota }) => {
+        const signed = manifestFor("bad", goodArchive("<bad>"));
+        const tampered = manifestFor("bad", goodArchive("<evil>"));
+        ota.archives.set("bad", goodArchive("<evil>"));
+        ota.manifest = () => multipart("manifest", tampered, signature(signed));
+      },
+    ],
+    [
+      "an archive that does not match its hash",
+      ({ ota, publish }) => {
+        publish("bad", goodArchive("<bad>"));
+        ota.archives.set("bad", goodArchive("<swapped>"));
+      },
+    ],
+    [
+      "a manifest for another release",
+      ({ publish }) => publish("bad", goodArchive("<bad>"), { runtimeVersion: "1.2.79" }),
+    ],
+    [
+      "an archive that writes outside its directory",
+      ({ publish }) => publish("bad", tarGz({ "./index.html": "<bad>", "../escape.txt": "x" })),
+    ],
+    ["an archive without an app shell", ({ publish }) => publish("bad", tarGz({ "a.txt": "x" }))],
+    [
+      "an unsigned rollback directive",
+      ({ ota }) => {
+        const body = Buffer.from('{"type":"rollBackToEmbedded"}');
+        ota.manifest = () => multipart("directive", body);
+      },
+    ],
+    [
+      "an OTA server error",
+      ({ ota }) => (ota.manifest = () => new Response(null, { status: 502 })),
+    ],
+  ])("keeps the current bundle when given %s", async (_label, serve) => {
+    const ota = await makeOta();
+    ota.publish("good", goodArchive("<good>"));
+    await ota.store.refresh();
+
+    serve(ota);
+    await ota.store.refresh();
+
+    expect(ota.store.current()?.bundle.updateId).toBe("good");
+    expect(await NodeFSP.readdir(NodePath.join(ota.directory, "bundles"))).toEqual(["good"]);
+  });
+
+  it.each(["rollBackToEmbedded", "noUpdateAvailable"])(
+    "drops the dev bundle on a signed %s directive",
+    async (type) => {
+      const { ota, store, directory, publish } = await makeOta();
+      publish("good", goodArchive("<good>"));
+      await store.refresh();
+
+      const body = Buffer.from(JSON.stringify({ type }));
+      ota.manifest = () => multipart("directive", body, signature(body));
+      await store.refresh();
+
+      expect(store.current()).toBeNull();
+      expect(await NodeFSP.readdir(NodePath.join(directory, "bundles"))).toEqual([]);
+    },
+  );
+
+  it("replaces the bundle with a newer one and restores it after a restart of the same release", async () => {
+    const first = await makeOta();
+    first.publish("update-1", goodArchive("<one>"));
+    await first.store.refresh();
+    first.publish("update-2", goodArchive("<two>"));
+    await first.store.refresh();
+    expect(await NodeFSP.readdir(NodePath.join(first.directory, "bundles"))).toEqual(["update-2"]);
+
+    const restarted = await makeOta({ directory: first.directory });
+    await restarted.store.load();
+    expect(restarted.store.current()?.bundle.updateId).toBe("update-2");
+
+    const upgraded = await makeOta({ directory: first.directory, release: "1.2.81" });
+    await upgraded.store.load();
+    expect(upgraded.store.current()).toBeNull();
   });
 });

@@ -1,29 +1,23 @@
 #!/usr/bin/env node
-// @effect-diagnostics nodeBuiltinImport:off globalConsole:off globalDate:off globalFetch:off - Runs alone in a Node-only image, without workspace dependencies.
+// @effect-diagnostics nodeBuiltinImport:off globalConsole:off globalDate:off globalFetch:off globalTimers:off - Runs alone in a Node-only image, without workspace dependencies.
 /**
- * Serves a static web build together with one shared connection catalog, so a
- * self-hosted T3 Code web app shows the same environments in every browser.
- * Build the web app with `VITE_SHARED_CATALOG_PATH=/__t3code/shared-catalog`.
- *
- * Environment:
- * - `WEB_ROOT`: built `apps/web/dist` directory.
- * - `CATALOG_DIR`: writable directory for `catalog.json` and `history/`.
- * - `PORT`: listen port, default 8080.
- * - `HISTORY_LIMIT`: saved catalog versions to keep, default 100.
- * - `CF_ACCESS_TEAM_DOMAIN` and `CF_ACCESS_AUD`: catalog requests must carry a
- *   valid Cloudflare Access JWT for that application. Without them the catalog
- *   refuses every request, unless `ALLOW_UNVERIFIED_CATALOG=true` (local use).
- *
- * The catalog holds bearer tokens for every paired environment, so run this
- * only behind an access gate. Every accepted write is kept in `history/`; to
- * roll back, copy a history file over `catalog.json`.
+ * The web hub: a hosted web build, one shared connection catalog, and, with
+ * `T3CODE_RELEASE` set, the dev OTA lane's bundle for browsers that opt in. The
+ * catalog holds bearer tokens for every paired environment: keep it behind Access.
  */
 import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeHttp from "node:http";
 import * as NodePath from "node:path";
+import * as NodeZlib from "node:zlib";
 
 export const SHARED_CATALOG_PATH = "/__t3code/shared-catalog";
+// Mirrors `@t3tools/shared/devUpdates`, which this image cannot import; server.test.ts keeps them equal.
+export const DEV_UPDATES_HUB_PATH = "/__t3code/dev-updates";
+export const DEV_UPDATES_MANIFEST_URL = "https://ota.clusters.work/t3code/manifest";
+export const DEV_UPDATES_CHANNEL = "dev";
+const DEV_UPDATES_COOKIE = "t3_dev_updates";
+const DEV_UPDATES_POLL_MS = 5 * 60 * 1000;
 const MAX_CATALOG_BYTES = 4 * 1024 * 1024;
 
 const CONTENT_TYPES: Record<string, string> = {
@@ -49,6 +43,8 @@ export interface SelfHostedServerOptions {
   readonly catalogDir: string;
   readonly historyLimit: number;
   readonly access: AccessVerifier;
+  /** Absent when the dev lane is off: the dev-updates endpoint then answers 404. */
+  readonly devBundles?: DevBundleStore | undefined;
 }
 
 export type AccessVerifier = (request: NodeHttp.IncomingMessage) => Promise<boolean>;
@@ -57,10 +53,19 @@ export function createSelfHostedServer(options: SelfHostedServerOptions): NodeHt
   const catalog = makeCatalogFile(options.catalogDir, options.historyLimit);
   return NodeHttp.createServer((request, response) => {
     const pathname = new URL(request.url ?? "/", "http://localhost").pathname;
+    const devRoot = options.devBundles?.current()?.root;
+    const roots =
+      devRoot === undefined
+        ? [options.webRoot]
+        : hasDevUpdatesCookie(request)
+          ? [devRoot, options.webRoot]
+          : [options.webRoot, devRoot];
     const handled =
       pathname === SHARED_CATALOG_PATH
         ? handleCatalog(request, response, catalog, options.access)
-        : serveStatic(request, response, options.webRoot, pathname);
+        : pathname === DEV_UPDATES_HUB_PATH
+          ? handleDevUpdates(request, response, options.devBundles)
+          : serveStatic(request, response, roots, pathname);
     handled.catch((error: unknown) => {
       console.error(error);
       if (!response.headersSent) response.writeHead(500);
@@ -146,6 +151,7 @@ function etagOf(raw: string) {
 
 function makeCatalogFile(directory: string, historyLimit: number): CatalogFile {
   const currentPath = NodePath.join(directory, "catalog.json");
+  // Every accepted write stays here; to roll back, copy one over catalog.json.
   const historyDir = NodePath.join(directory, "history");
   // Serializes read-compare-write so two saves can never both match one ETag.
   let queue: Promise<unknown> = Promise.resolve();
@@ -190,28 +196,43 @@ function makeCatalogFile(directory: string, historyLimit: number): CatalogFile {
   return { read, write };
 }
 
+/**
+ * Serves from the first root that has the file, so a page loaded from one bundle
+ * still finds its lazy chunks after the browser switches to the other.
+ */
 async function serveStatic(
   request: NodeHttp.IncomingMessage,
   response: NodeHttp.ServerResponse,
-  webRoot: string,
+  roots: ReadonlyArray<string>,
   pathname: string,
 ) {
   if (request.method !== "GET" && request.method !== "HEAD") {
     response.writeHead(405, { Allow: "GET, HEAD" }).end();
     return;
   }
-  const root = NodePath.resolve(webRoot);
-  let filePath = NodePath.resolve(root, `.${decodeURIComponent(pathname)}`);
-  if (!filePath.startsWith(`${root}${NodePath.sep}`) || !(await isFile(filePath))) {
-    // Client-side routes resolve to the app shell.
-    filePath = NodePath.join(root, "index.html");
+  let root = NodePath.resolve(roots[0]!);
+  // Client-side routes resolve to the app shell.
+  let filePath = NodePath.join(root, "index.html");
+  for (const candidateRoot of roots.map((path) => NodePath.resolve(path))) {
+    const candidate = NodePath.resolve(candidateRoot, `.${decodeURIComponent(pathname)}`);
+    if (candidate.startsWith(`${candidateRoot}${NodePath.sep}`) && (await isFile(candidate))) {
+      root = candidateRoot;
+      filePath = candidate;
+      break;
+    }
   }
   const body = await NodeFSP.readFile(filePath);
+  const extension = NodePath.extname(filePath).toLowerCase();
   const hashedAsset = filePath.startsWith(NodePath.join(root, "assets") + NodePath.sep);
   response.writeHead(200, {
-    "Content-Type":
-      CONTENT_TYPES[NodePath.extname(filePath).toLowerCase()] ?? "application/octet-stream",
-    "Cache-Control": hashedAsset ? "public, max-age=31536000, immutable" : "no-cache",
+    "Content-Type": CONTENT_TYPES[extension] ?? "application/octet-stream",
+    // The app shell names a different bundle per dev-updates cookie, so no cache may keep it.
+    "Cache-Control": hashedAsset
+      ? "public, max-age=31536000, immutable"
+      : extension === ".html"
+        ? "no-store"
+        : "no-cache",
+    ...(hashedAsset ? {} : { Vary: "Cookie" }),
   });
   response.end(request.method === "HEAD" ? undefined : body);
 }
@@ -221,6 +242,340 @@ async function isFile(path: string) {
     return (await NodeFSP.stat(path)).isFile();
   } catch {
     return false;
+  }
+}
+
+interface DevBundle {
+  readonly updateId: string;
+  readonly commit: string | null;
+  readonly createdAt: string;
+}
+
+/** Mirrors `DevUpdatesState` from `@t3tools/shared/devUpdates`. */
+export interface DevUpdatesState {
+  readonly enabled: boolean;
+  readonly runtimeVersion: string;
+  readonly running: DevBundle | null;
+  readonly pending: DevBundle | null;
+}
+
+export interface DevBundleStore {
+  readonly release: string;
+  readonly current: () => { readonly root: string; readonly bundle: DevBundle } | null;
+  /** Restores the bundle a previous run installed for this release. */
+  readonly load: () => Promise<void>;
+  /** Asks the OTA server for the newest dev bundle and installs it, keeping the current one on failure. */
+  readonly refresh: () => Promise<void>;
+}
+
+function hasDevUpdatesCookie(request: NodeHttp.IncomingMessage) {
+  return (request.headers.cookie ?? "")
+    .split(";")
+    .some((pair) => pair.trim() === `${DEV_UPDATES_COOKIE}=1`);
+}
+
+async function handleDevUpdates(
+  request: NodeHttp.IncomingMessage,
+  response: NodeHttp.ServerResponse,
+  devBundles: DevBundleStore | undefined,
+) {
+  response.setHeader("Cache-Control", "no-store");
+  if (devBundles === undefined) {
+    response.writeHead(404).end();
+    return;
+  }
+  const stateFor = (enabled: boolean): DevUpdatesState => ({
+    enabled,
+    runtimeVersion: devBundles.release,
+    running: enabled ? (devBundles.current()?.bundle ?? null) : null,
+    pending: null,
+  });
+  if (request.method === "GET") {
+    response
+      .writeHead(200, { "Content-Type": "application/json" })
+      .end(JSON.stringify(stateFor(hasDevUpdatesCookie(request))));
+    return;
+  }
+  if (request.method !== "POST") {
+    response.writeHead(405, { Allow: "GET, POST" }).end();
+    return;
+  }
+  // A cross-site form cannot send JSON without a CORS preflight, which this server never grants.
+  if (!request.headers["content-type"]?.startsWith("application/json")) {
+    response.writeHead(415).end();
+    return;
+  }
+  let enabled: unknown;
+  try {
+    enabled = (JSON.parse((await readBody(request)) ?? "") as { enabled?: unknown }).enabled;
+  } catch {
+    enabled = undefined;
+  }
+  if (typeof enabled !== "boolean") {
+    response.writeHead(400).end();
+    return;
+  }
+  const attributes = "Path=/; Secure; HttpOnly; SameSite=Lax";
+  response
+    .writeHead(200, {
+      "Content-Type": "application/json",
+      "Set-Cookie": enabled
+        ? `${DEV_UPDATES_COOKIE}=1; Max-Age=${400 * 24 * 60 * 60}; ${attributes}`
+        : `${DEV_UPDATES_COOKIE}=; Max-Age=0; ${attributes}`,
+    })
+    .end(JSON.stringify(stateFor(enabled)));
+}
+
+interface ManifestAsset {
+  readonly hash: string;
+  readonly url: string;
+}
+
+interface DevManifest {
+  readonly id: string;
+  readonly createdAt: string;
+  readonly runtimeVersion: string;
+  readonly launchAsset: ManifestAsset;
+  readonly metadata?: { readonly gitCommit?: string };
+}
+
+interface InstalledBundle {
+  readonly runtimeVersion: string;
+  readonly bundle: DevBundle;
+}
+
+/**
+ * Installs dev-channel web bundles from an expo-updates (protocol 1) server.
+ * Every manifest and directive must carry a valid `expo-signature`, and the
+ * archive must match the signed hash, before anything changes on disk.
+ */
+export function makeDevBundleStore(input: {
+  readonly release: string;
+  readonly directory: string;
+  readonly verificationKey: NodeCrypto.KeyObject;
+  readonly manifestUrl?: string;
+  readonly fetch?: typeof fetch;
+}): DevBundleStore {
+  const fetchOta = input.fetch ?? ((url, init) => globalThis.fetch(url, init));
+  const bundlesDir = NodePath.join(input.directory, "bundles");
+  const currentPath = NodePath.join(input.directory, "current.json");
+  let current: InstalledBundle | null = null;
+  let running: Promise<void> = Promise.resolve();
+
+  const bundleRoot = (updateId: string) => NodePath.join(bundlesDir, updateId);
+
+  const removeOtherBundles = async (keep: string | null) => {
+    const names = await NodeFSP.readdir(bundlesDir).catch(() => []);
+    await Promise.all(
+      names
+        .filter((name) => name !== keep)
+        .map((name) =>
+          NodeFSP.rm(NodePath.join(bundlesDir, name), { recursive: true, force: true }),
+        ),
+    );
+  };
+
+  const install = async (manifest: DevManifest) => {
+    if (manifest.runtimeVersion !== input.release) {
+      throw new Error(`manifest is for release ${manifest.runtimeVersion}`);
+    }
+    if (!/^[\w-]+$/.test(manifest.id)) throw new Error("manifest id is not a plain name");
+    if (current?.bundle.updateId === manifest.id) return;
+
+    const response = await fetchOta(manifest.launchAsset.url, {
+      signal: AbortSignal.timeout(5 * 60 * 1000),
+    });
+    if (!response.ok) throw new Error(`bundle download: HTTP ${response.status}`);
+    const archive = Buffer.from(await response.arrayBuffer());
+    const hash = NodeCrypto.createHash("sha256").update(archive).digest("base64url");
+    if (hash !== manifest.launchAsset.hash) throw new Error("bundle does not match its hash");
+
+    const staging = NodePath.join(bundlesDir, `.${manifest.id}.${process.pid}.partial`);
+    await NodeFSP.rm(staging, { recursive: true, force: true });
+    try {
+      await extractTarGz(archive, staging);
+      if (!(await isFile(NodePath.join(staging, "index.html")))) {
+        throw new Error("bundle has no index.html at its root");
+      }
+      await NodeFSP.rm(bundleRoot(manifest.id), { recursive: true, force: true });
+      await NodeFSP.rename(staging, bundleRoot(manifest.id));
+    } catch (error) {
+      await NodeFSP.rm(staging, { recursive: true, force: true });
+      throw error;
+    }
+    const installed: InstalledBundle = {
+      runtimeVersion: manifest.runtimeVersion,
+      bundle: {
+        updateId: manifest.id,
+        commit: manifest.metadata?.gitCommit ?? null,
+        createdAt: manifest.createdAt,
+      },
+    };
+    await writeFileAtomically(currentPath, JSON.stringify(installed));
+    current = installed;
+    await removeOtherBundles(manifest.id);
+  };
+
+  const uninstall = async () => {
+    current = null;
+    await NodeFSP.rm(currentPath, { force: true });
+    await removeOtherBundles(null);
+  };
+
+  const poll = async () => {
+    const response = await fetchOta(input.manifestUrl ?? DEV_UPDATES_MANIFEST_URL, {
+      headers: {
+        accept: "multipart/mixed",
+        "expo-platform": "web",
+        "expo-runtime-version": input.release,
+        "expo-channel-name": DEV_UPDATES_CHANNEL,
+        "expo-protocol-version": "1",
+        "expo-expect-signature": 'sig, keyid="main", alg="rsa-v1_5-sha256"',
+      },
+      signal: AbortSignal.timeout(60 * 1000),
+    });
+    // Protocol 1 answers 204 when the channel has nothing for this release.
+    if (response.status === 204) return uninstall();
+    if (!response.ok) throw new Error(`manifest: HTTP ${response.status}`);
+    const boundary = /boundary="?([^";]+)"?/.exec(response.headers.get("content-type") ?? "")?.[1];
+    if (boundary === undefined) throw new Error("manifest response is not multipart");
+    const parts = parseMultipart(Buffer.from(await response.arrayBuffer()), boundary);
+    const part = parts.find(({ name }) => name === "manifest" || name === "directive");
+    if (part === undefined) throw new Error("manifest response has no manifest or directive");
+    verifyExpoSignature(part.body, part.headers["expo-signature"], input.verificationKey);
+    const body = JSON.parse(part.body.toString("utf8")) as unknown;
+    if (part.name === "manifest") return install(body as DevManifest);
+    const directive = (body as { type?: unknown }).type;
+    if (directive === "rollBackToEmbedded" || directive === "noUpdateAvailable") return uninstall();
+    throw new Error(`unknown directive ${String(directive)}`);
+  };
+
+  return {
+    release: input.release,
+    current: () =>
+      current ? { root: bundleRoot(current.bundle.updateId), bundle: current.bundle } : null,
+    load: async () => {
+      try {
+        const saved = JSON.parse(await NodeFSP.readFile(currentPath, "utf8")) as InstalledBundle;
+        // A dev bundle is built against one release; a new image starts over.
+        if (
+          saved.runtimeVersion === input.release &&
+          (await isFile(NodePath.join(bundleRoot(saved.bundle.updateId), "index.html")))
+        ) {
+          current = saved;
+          return;
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      await uninstall();
+    },
+    refresh: () => {
+      running = running.then(poll).catch((error: unknown) => {
+        console.warn("Dev updates: keeping the current bundle.", error);
+      });
+      return running;
+    },
+  };
+}
+
+async function writeFileAtomically(path: string, contents: string) {
+  await NodeFSP.mkdir(NodePath.dirname(path), { recursive: true });
+  const temporaryPath = `${path}.${process.pid}.tmp`;
+  await NodeFSP.writeFile(temporaryPath, contents);
+  await NodeFSP.rename(temporaryPath, path);
+}
+
+interface MultipartPart {
+  readonly name: string | null;
+  readonly headers: Record<string, string>;
+  readonly body: Buffer;
+}
+
+/** Splits a multipart/mixed body, keeping each part's exact bytes for signature checks. */
+function parseMultipart(body: Buffer, boundary: string): ReadonlyArray<MultipartPart> {
+  const parts: MultipartPart[] = [];
+  const delimiter = Buffer.from(`\r\n--${boundary}`);
+  let start = body.indexOf(`--${boundary}`);
+  if (start < 0) return parts;
+  start += boundary.length + 2;
+  while (body.subarray(start, start + 2).toString() === "\r\n") {
+    const end = body.indexOf(delimiter, start + 2);
+    if (end < 0) break;
+    const part = body.subarray(start + 2, end);
+    const headerEnd = part.indexOf("\r\n\r\n");
+    if (headerEnd < 0) break;
+    const headers: Record<string, string> = {};
+    for (const line of part.subarray(0, headerEnd).toString("utf8").split("\r\n")) {
+      const colon = line.indexOf(":");
+      if (colon > 0)
+        headers[line.slice(0, colon).trim().toLowerCase()] = line.slice(colon + 1).trim();
+    }
+    const name = /name="([^"]*)"/.exec(headers["content-disposition"] ?? "")?.[1] ?? null;
+    parts.push({ name, headers, body: part.subarray(headerEnd + 4) });
+    start = end + delimiter.length;
+  }
+  return parts;
+}
+
+function verifyExpoSignature(body: Buffer, header: string | undefined, key: NodeCrypto.KeyObject) {
+  const fields = Object.fromEntries(
+    [...(header ?? "").matchAll(/(\w+)="([^"]*)"/g)].map((match) => [match[1], match[2]]),
+  );
+  if (fields.sig === undefined || fields.alg !== "rsa-v1_5-sha256") {
+    throw new Error("manifest is not signed");
+  }
+  if (!NodeCrypto.verify("RSA-SHA256", body, key, Buffer.from(fields.sig, "base64"))) {
+    throw new Error("manifest signature does not verify");
+  }
+}
+
+/**
+ * Extracts the regular files and directories of a gzipped ustar archive (with
+ * pax and GNU long names), refusing any entry that would land outside `target`.
+ */
+async function extractTarGz(archive: Buffer, target: string) {
+  const tar = NodeZlib.gunzipSync(archive);
+  const root = NodePath.resolve(target);
+  await NodeFSP.mkdir(root, { recursive: true });
+  const text = (start: number, length: number) => {
+    const field = tar.subarray(start, start + length);
+    const end = field.indexOf(0);
+    return field.subarray(0, end < 0 ? length : end).toString("utf8");
+  };
+  let longName: string | null = null;
+  let offset = 0;
+  while (offset + 512 <= tar.length) {
+    if (tar.subarray(offset, offset + 512).every((byte) => byte === 0)) break;
+    const size = Number.parseInt(text(offset + 124, 12).trim() || "0", 8);
+    const type = text(offset + 156, 1) || "0";
+    const prefix = text(offset + 257, 6) === "ustar" ? text(offset + 345, 155) : "";
+    const headerName = prefix ? `${prefix}/${text(offset, 100)}` : text(offset, 100);
+    const data = tar.subarray(offset + 512, offset + 512 + size);
+    offset += 512 + Math.ceil(size / 512) * 512;
+
+    if (type === "L") {
+      longName = data.toString("utf8").replace(/\0+$/, "");
+      continue;
+    }
+    if (type === "x") {
+      longName = /(?:^|\n)\d+ path=([^\n]*)\n/.exec(data.toString("utf8"))?.[1] ?? longName;
+      continue;
+    }
+    const name = longName ?? headerName;
+    longName = null;
+    if (type !== "0" && type !== "5") continue;
+    const destination = NodePath.resolve(root, name);
+    if (destination === root) continue;
+    if (!destination.startsWith(`${root}${NodePath.sep}`)) {
+      throw new Error(`archive entry ${name} leaves the bundle`);
+    }
+    if (type === "5") {
+      await NodeFSP.mkdir(destination, { recursive: true });
+    } else {
+      await NodeFSP.mkdir(NodePath.dirname(destination), { recursive: true });
+      await NodeFSP.writeFile(destination, data);
+    }
   }
 }
 
@@ -289,6 +644,32 @@ export function makeCloudflareAccessVerifier(input: {
   };
 }
 
+async function startDevBundles(catalogDir: string): Promise<DevBundleStore | undefined> {
+  const release = process.env.T3CODE_RELEASE?.trim();
+  if (!release) return undefined;
+  const certificatePath =
+    process.env.OTA_CERTIFICATE?.trim() ||
+    NodePath.join(import.meta.dirname, "ota-certificate.pem");
+  let verificationKey: NodeCrypto.KeyObject;
+  try {
+    verificationKey = new NodeCrypto.X509Certificate(await NodeFSP.readFile(certificatePath))
+      .publicKey;
+  } catch (error) {
+    // The release bundle matters more than the dev lane, so a missing certificate only turns the lane off.
+    console.error(`Dev updates are off: cannot read ${certificatePath}.`, error);
+    return undefined;
+  }
+  const store = makeDevBundleStore({
+    release,
+    directory: NodePath.join(catalogDir, "dev-updates"),
+    verificationKey,
+  });
+  await store.load();
+  void store.refresh();
+  setInterval(() => void store.refresh(), DEV_UPDATES_POLL_MS);
+  return store;
+}
+
 if (import.meta.main) {
   const required = (name: string) => {
     const value = process.env[name]?.trim();
@@ -310,11 +691,14 @@ if (import.meta.main) {
     );
     access = async () => false;
   }
+  const catalogDir = required("CATALOG_DIR");
+  const devBundles = await startDevBundles(catalogDir);
   createSelfHostedServer({
     webRoot: required("WEB_ROOT"),
-    catalogDir: required("CATALOG_DIR"),
+    catalogDir,
     historyLimit: Number(process.env.HISTORY_LIMIT ?? 100),
     access,
+    devBundles,
   }).listen(port, () => {
     console.log(`Serving T3 Code web with a shared connection catalog on :${port}`);
   });

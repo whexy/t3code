@@ -1,0 +1,290 @@
+# Publishes dev's client bundles over the air, on channel `dev` of the fork's
+# OTA server: the iOS app's JavaScript, the desktop renderer and the hub's web
+# client, each for the release its devices run (scripts/self-hosted/dev-ota.ts
+# finds them). A client gets a bundle only when dev differs from its release in
+# client code alone; server and native changes wait for self-hosted-build.yml.
+# Runs again after each release build, so the new release gets dev's bundles.
+# Nothing here deploys a server, and a failure never starts the repair task.
+name: self-hosted-dev-ota
+
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+  workflow_run:
+    workflows: [self-hosted-build]
+    types: [completed]
+    branches: [self-hosted-nightly]
+
+# Only the newest dev matters: each publish replaces the last on the channel.
+concurrency:
+  group: self-hosted-dev-ota
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      plan: ${{ steps.plan.outputs.plan }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: scripts/self-hosted
+          filter: blob:none
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HAS_OTA_PUBLISH_TOKEN: ${{ secrets.OTA_PUBLISH_TOKEN != '' }}
+        run: node scripts/self-hosted/dev-ota.ts
+
+  # The web-hub job's build; the bundle's root is what the hub image serves from /app/web.
+  web:
+    needs: plan
+    if: fromJSON(needs.plan.outputs.plan).web.publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ fromJSON(needs.plan.outputs.plan).commit }}
+          sparse-checkout: |
+            /*
+            !/.repos/
+            !/apps/mobile/modules/t3-terminal/Vendor/**/*.a
+          sparse-checkout-cone-mode: false
+
+      - uses: ./.github/actions/setup-ci-deps
+        with:
+          install: "false"
+
+      - name: Install
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
+        run: |
+          vp install --lockfile-only
+          vp install --frozen-lockfile --filter=@t3tools/scripts... --filter=@t3tools/web...
+
+      - name: Build
+        env:
+          VITE_HOSTED_APP_CHANNEL: nightly
+          VITE_SHARED_CATALOG_PATH: /__t3code/shared-catalog
+          T3CODE_FEATURE_SECRETS: "1"
+        run: |
+          vp run --filter @t3tools/web build
+          node scripts/apply-web-brand-assets.ts --channel nightly
+
+      - name: Pack
+        run: |
+          mkdir -p "$RUNNER_TEMP/stage" "$RUNNER_TEMP/out"
+          tar -C apps/web/dist -czf "$RUNNER_TEMP/stage/bundle.tgz" .
+          echo '{"version":0,"bundler":"vite","fileMetadata":{"web":{"bundle":"bundle.tgz","assets":[]}}}' > "$RUNNER_TEMP/stage/metadata.json"
+          tar -C "$RUNNER_TEMP/stage" -czf "$RUNNER_TEMP/out/dist.tgz" .
+          echo '{}' > "$RUNNER_TEMP/out/expo-config.json"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dev-ota-web
+          path: ${{ runner.temp }}/out
+          if-no-files-found: error
+          retention-days: 1
+
+  # The desktop-bundle job's build, versioned as the release, since the
+  # renderer compares its version with the bundled server's. The packaged app
+  # serves its renderer from the server bundle's dist/client.
+  desktop:
+    needs: plan
+    if: fromJSON(needs.plan.outputs.plan).desktop.publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ fromJSON(needs.plan.outputs.plan).commit }}
+          sparse-checkout: |
+            /*
+            !/.repos/
+            !/apps/mobile/modules/t3-terminal/Vendor/**/*.a
+          sparse-checkout-cone-mode: false
+
+      - uses: ./.github/actions/setup-ci-deps
+        with:
+          install: "false"
+
+      - name: Install
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
+        run: |
+          vp install --lockfile-only
+          vp install --frozen-lockfile --filter=t3... --filter=@t3tools/web... --filter=@t3tools/desktop... --filter=@t3tools/scripts...
+
+      - name: Build
+        env:
+          VERSION: ${{ fromJSON(needs.plan.outputs.plan).desktop.runtimeVersion }}
+          T3CODE_TELEMETRY_CHANNEL: dev
+        run: |
+          node scripts/update-release-package-versions.ts "$VERSION"
+          vp run build:desktop:bundle
+
+      - name: Pack
+        run: |
+          mkdir -p "$RUNNER_TEMP/stage" "$RUNNER_TEMP/out"
+          tar -C apps/server/dist/client -czf "$RUNNER_TEMP/stage/bundle.tgz" .
+          echo '{"version":0,"bundler":"vite","fileMetadata":{"desktop":{"bundle":"bundle.tgz","assets":[]}}}' > "$RUNNER_TEMP/stage/metadata.json"
+          tar -C "$RUNNER_TEMP/stage" -czf "$RUNNER_TEMP/out/dist.tgz" .
+          echo '{}' > "$RUNNER_TEMP/out/expo-config.json"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dev-ota-desktop
+          path: ${{ runner.temp }}/out
+          if-no-files-found: error
+          retention-days: 1
+
+  # The ios-testflight job's config. Its fingerprint must equal the one the
+  # release recorded, computed with the same env, or the bundle could call
+  # native code the build does not have.
+  ios:
+    needs: plan
+    if: fromJSON(needs.plan.outputs.plan).ios.publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      skipped: ${{ steps.fingerprint.outputs.skipped }}
+    env:
+      APP_VARIANT: preview
+      EXPO_NO_GIT_STATUS: "1"
+      EXPO_NO_TELEMETRY: "1"
+      NODE_OPTIONS: --max-old-space-size=8192
+      T3CODE_FORK_IOS: "1"
+      T3CODE_FORK_IOS_RUNTIME_VERSION: ${{ fromJSON(needs.plan.outputs.plan).ios.runtimeVersion }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ fromJSON(needs.plan.outputs.plan).commit }}
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - uses: ./.github/actions/setup-ci-deps
+        with:
+          install: "false"
+
+      - name: Install
+        run: |
+          vp install --lockfile-only
+          vp install --frozen-lockfile --filter=@t3tools/mobile...
+
+      - id: fingerprint
+        working-directory: apps/mobile
+        env:
+          COMMIT: ${{ fromJSON(needs.plan.outputs.plan).commit }}
+          RECORDED: ${{ fromJSON(needs.plan.outputs.plan).ios.fingerprint }}
+        run: |
+          # Shown in Settings, About.
+          export T3CODE_MOBILE_VERSION="$T3CODE_FORK_IOS_RUNTIME_VERSION-dev.${COMMIT::7}"
+          echo "T3CODE_MOBILE_VERSION=$T3CODE_MOBILE_VERSION" >> "$GITHUB_ENV"
+          fingerprint="$(./node_modules/.bin/expo-updates fingerprint:generate --platform ios --workflow managed | tail -1 | jq -r .hash)"
+          echo "fingerprint $fingerprint, ios/$T3CODE_FORK_IOS_RUNTIME_VERSION recorded $RECORDED"
+          if [[ "$fingerprint" != "$RECORDED" ]]; then
+            echo "skipped=native fingerprint changed" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Export
+        if: steps.fingerprint.outputs.skipped == ''
+        working-directory: apps/mobile
+        run: |
+          mkdir -p "$RUNNER_TEMP/out"
+          ./node_modules/.bin/expo export --platform ios --output-dir "$RUNNER_TEMP/dist"
+          ./node_modules/.bin/expo config --type public --json > "$RUNNER_TEMP/out/expo-config.json"
+          tar -C "$RUNNER_TEMP/dist" -czf "$RUNNER_TEMP/out/dist.tgz" .
+
+      - if: steps.fingerprint.outputs.skipped == ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: dev-ota-ios
+          path: ${{ runner.temp }}/out
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: [plan, ios, desktop, web]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - id: ready
+        env:
+          PLAN: ${{ needs.plan.outputs.plan }}
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          : > "$RUNNER_TEMP/status"
+          platforms=
+          for platform in ios desktop web; do
+            if [[ -z "$PLAN" ]]; then
+              status="failed(plan)"
+            elif [[ "$(jq -r ".$platform.publish" <<< "$PLAN")" != true ]]; then
+              status="skipped($(jq -r ".$platform.reason" <<< "$PLAN"))"
+            elif [[ "$(jq -r ".$platform.result" <<< "$NEEDS")" != success ]]; then
+              status="failed(build $(jq -r ".$platform.result" <<< "$NEEDS"))"
+            elif skipped="$(jq -r ".$platform.outputs.skipped // \"\"" <<< "$NEEDS")" && [[ -n "$skipped" ]]; then
+              status="skipped($skipped)"
+            else
+              platforms+=" $platform"
+              continue
+            fi
+            echo "$platform=$status" >> "$RUNNER_TEMP/status"
+          done
+          echo "platforms=${platforms# }" >> "$GITHUB_OUTPUT"
+
+      - if: steps.ready.outputs.platforms != ''
+        uses: actions/download-artifact@v8
+        with:
+          pattern: dev-ota-*
+          path: ota
+
+      - name: Publish
+        if: steps.ready.outputs.platforms != ''
+        env:
+          PLAN: ${{ needs.plan.outputs.plan }}
+          PLATFORMS: ${{ steps.ready.outputs.platforms }}
+          OTA_PUBLISH_TOKEN: ${{ secrets.OTA_PUBLISH_TOKEN }}
+        run: |
+          commit="$(jq -r .commit <<< "$PLAN")"
+          message="$(jq -r .message <<< "$PLAN")"
+          for platform in $PLATFORMS; do
+            dir="ota/dev-ota-$platform"
+            # The token reaches curl on a descriptor, never in a process's arguments.
+            if response="$(curl -fsS --retry 3 -H @<(printf 'Authorization: Bearer %s\n' "$OTA_PUBLISH_TOKEN") \
+              --form-string runtimeVersion="$(jq -r ".$platform.runtimeVersion" <<< "$PLAN")" \
+              -F "dist=@$dir/dist.tgz;type=application/gzip" \
+              -F "expoConfig=@$dir/expo-config.json;type=application/json" \
+              --form-string message="$message" --form-string gitCommit="$commit" \
+              https://ota.clusters.work/api/apps/t3code/channels/dev/updates)"; then
+              echo "$platform=published($(jq -r '[.updates[].id] | join(",")' <<< "$response"))" >> "$RUNNER_TEMP/status"
+            else
+              echo "$platform=failed(publish)" >> "$RUNNER_TEMP/status"
+            fi
+          done
+
+      - name: Summary
+        if: always()
+        run: |
+          line="dev-ota:"
+          for platform in ios desktop web; do
+            line+=" $(grep -m1 "^$platform=" "$RUNNER_TEMP/status" || echo "$platform=failed")"
+          done
+          echo "$line" | tee -a "$GITHUB_STEP_SUMMARY"
+          [[ "$line" != *"=failed"* ]]
