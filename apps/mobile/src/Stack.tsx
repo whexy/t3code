@@ -79,6 +79,7 @@ import {
 import { McpAppFullscreenScreen } from "./features/threads/McpAppFullscreenScreen";
 import { ConnectionsRouteScreen } from "./features/connection/ConnectionsRouteScreen";
 import { ConnectionsNewRouteScreen } from "./features/connection/ConnectionsNewRouteScreen";
+import { PairAnotherDeviceRouteScreen } from "./features/connection/PairAnotherDeviceRouteScreen";
 import { AddProjectDestinationRoute } from "./features/projects/AddProjectDestinationRoute";
 import { AddProjectLocalRoute } from "./features/projects/AddProjectLocalRoute";
 import { AddProjectNewRoute } from "./features/projects/AddProjectNewRoute";
@@ -165,6 +166,7 @@ const ROUTE_TITLES: Readonly<Record<string, string>> = {
   Settings: msg("Settings"),
   SettingsEnvironments: msg("Environments"),
   SettingsEnvironmentDetail: msg("Environment"),
+  SettingsPairDevice: msg("Pair another device"),
   SettingsEnvironmentNewThreads: msg("Threads"),
   SettingsEnvironmentSourceControl: msg("Source control & issues"),
   SettingsSourceControlProvider: msg("Provider", {
@@ -243,6 +245,11 @@ const SETTINGS_SCREENS = {
   SettingsEnvironmentDetail: createNativeStackScreen({
     screen: SettingsEnvironmentDetailRouteScreen,
     linking: "settings/environments/:environmentId",
+    options: settingsPage(),
+  }),
+  SettingsPairDevice: createNativeStackScreen({
+    screen: PairAnotherDeviceRouteScreen,
+    linking: "settings/pair-device",
     options: settingsPage(),
   }),
   // Old links to New threads and Agent behavior open Threads, which absorbed them.

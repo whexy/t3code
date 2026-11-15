@@ -50,6 +50,8 @@ import {
   connectPairing as connectPairingAtom,
   connectSshEnvironment as connectSshEnvironmentAtom,
 } from "~/connection/onboarding";
+import { FleetPairing } from "@t3tools/client-runtime/connection";
+import { useRedeemPastedPairingBundle } from "~/hooks/usePairingBundle";
 import { useEnvironmentQuery } from "~/state/query";
 import { desktopSshHostsStateAtom, filterDiscoveredSshHosts } from "~/state/desktopSshHosts";
 import { type EnvironmentPresentation, useRelayEnvironmentDiscovery } from "~/state/environments";
@@ -101,6 +103,7 @@ export function AddEnvironmentDialog({
     reportFailure: false,
   });
   const relayDiscoveryState = useRelayEnvironmentDiscovery();
+  const redeemPastedPairingBundle = useRedeemPastedPairingBundle();
   const savedDesktopSshEnvironmentKeys = (() => {
     const keys = new Set<string>();
     for (const environment of savedEnvironments) {
@@ -217,6 +220,13 @@ export function AddEnvironmentDialog({
       await connectSavedBackendSshTarget(target);
       return;
     }
+    const bundleDialog = {
+      setBusy: setIsAddingSavedBackend,
+      onError: onErrorChange,
+      onPaired: () => handleOpenChange(false),
+      addingRoute: routeTarget !== null,
+    };
+    if (await redeemPastedPairingBundle(savedBackendHost, bundleDialog)) return;
 
     setIsAddingSavedBackend(true);
     onErrorChange(null);
@@ -361,7 +371,7 @@ export function AddEnvironmentDialog({
   };
 
   const handleSavedBackendHostChange = (value: string) => {
-    const parsedPairingUrl = parsePairingUrlFields(value);
+    const parsedPairingUrl = parsePairingUrlFields(FleetPairing.unwrapSingleHostLink(value));
     if (parsedPairingUrl) {
       setSavedBackendHost(parsedPairingUrl.host);
       setSavedBackendPairingCode(parsedPairingUrl.pairingCode);
