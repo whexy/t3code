@@ -20,12 +20,14 @@ it("signs every iOS target for the fork and takes updates from its server", asyn
   const config = await loadConfig({
     T3CODE_FORK_IOS: "1",
     T3CODE_FORK_IOS_BUILD_NUMBER: "42",
+    T3CODE_FORK_IOS_RUNTIME_VERSION: "1.2.42",
     T3CODE_MOBILE_UPDATES_ENABLED: "0",
   });
 
   expect(config.ios?.appleTeamId).toBe("26DMRHRW6Z");
   expect(config.ios?.bundleIdentifier).toBe("dev.whexy.t3code");
   expect(config.ios?.buildNumber).toBe("42");
+  expect(config.runtimeVersion).toBe("1.2.42");
   expect(config.ios?.entitlements).toEqual({
     "keychain-access-groups": ["$(AppIdentifierPrefix)dev.whexy.t3code"],
   });
@@ -49,4 +51,5 @@ it("leaves the upstream build alone without T3CODE_FORK_IOS", async () => {
   expect(config.ios?.appleTeamId).toBe("ARK85ZXQ4Z");
   expect(config.ios?.bundleIdentifier).toBe("com.t3tools.t3code.preview");
   expect(config.updates?.url).toMatch(/^https:\/\/u\.expo\.dev\//);
+  expect(config.runtimeVersion).toEqual({ policy: "fingerprint" });
 });
