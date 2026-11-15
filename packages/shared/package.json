@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./devUpdates": {
+      "types": "./src/devUpdates.ts",
+      "import": "./src/devUpdates.ts"
+    },
     "./png": {
       "types": "./src/png.ts",
       "import": "./src/png.ts"
