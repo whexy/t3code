@@ -23,6 +23,7 @@ import { connectPairing } from "../../connection/onboarding";
 import { isLocalEnvironmentDisabled } from "../../localEnvironment";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { useNewThreadHandler } from "../../hooks/useHandleNewThread";
+import { useOpenPairingBundleLink } from "../../hooks/usePairingBundle";
 import { useScratchProject } from "../../hooks/useScratchProject";
 import { useClientSettings } from "../../hooks/useSettings";
 import { useOpenChangeRequestLink } from "../../lib/openPullRequestLink";
@@ -95,6 +96,7 @@ export function DesktopWebLinkCoordinator() {
     refresh: true,
   });
   const connectPairingEnvironment = useAtomCommand(connectPairing, { reportFailure: false });
+  const openPairingBundleLink = useOpenPairingBundleLink();
   const httpBaseUrl = useEnvironmentHttpBaseUrl(primaryEnvironment?.environmentId ?? null);
   const queueRef = useRef(Promise.resolve());
   const pairedUrlsRef = useRef(new Set<string>());
@@ -206,6 +208,7 @@ export function DesktopWebLinkCoordinator() {
   });
 
   const openLink = useEffectEvent(async (url: string) => {
+    if (await openPairingBundleLink(url)) return;
     const pairingUrl = readPairingAppLink(url);
     if (pairingUrl !== null) {
       await pairFromLink(pairingUrl);

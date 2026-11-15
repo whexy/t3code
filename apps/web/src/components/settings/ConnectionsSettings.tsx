@@ -152,6 +152,7 @@ import {
   SavedBackendListRow,
 } from "./SavedEnvironmentRows";
 import { AddEnvironmentDialog } from "./AddEnvironmentDialog";
+import { PairDeviceDialog } from "./PairDeviceDialog";
 import {
   type ConnectDeviceRevokeRequest,
   RevokeConnectDeviceDialog,
@@ -1860,6 +1861,7 @@ function ConnectionsSettingsContent({
               <ServerUpdatesAction targets={savedServerUpdateTargets} variant="ghost-muted" />
             ) : null}
             {/* Actions on several machines at once, such as linking several, go here. */}
+            <PairDeviceDialog savedEnvironments={savedEnvironments} />
             <AddEnvironmentDialog
               key={`${addPrefill?.environmentId ?? "any"}:${addBackendHost}`}
               open={addBackendDialogOpen || addPrefill !== null}

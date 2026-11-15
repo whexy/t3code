@@ -25,7 +25,12 @@ import { SettingsScreen } from "../settings/components/SettingsScreen";
 import { AppText as Text, AppTextInput, type AppTextInputProps } from "../../components/ui/AppText";
 import { FrostedCutout } from "../../components/ui/FrostedCutout";
 import { buildPairingUrl, extractPairingUrlFromQrPayload, parsePairingUrl } from "./pairing";
-import { useRemoteConnections } from "../../state/use-remote-environment-registry";
+import { FleetPairing } from "@t3tools/client-runtime/connection";
+import { FleetPairingScanStatus, useFleetPairingScan } from "./useFleetPairingScan";
+import {
+  type PairingOutcome,
+  useRemoteConnections,
+} from "../../state/use-remote-environment-registry";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { hasCloudPublicConfig } from "../cloud/publicConfig";
 import { CloudEnvironmentRows } from "./CloudEnvironmentRows";
@@ -101,6 +106,11 @@ function PairingForm({
   const [scannerLocked, setScannerLocked] = useState(false);
   // A good scan parks the camera so it can't re-read the code over later edits.
   const [scanComplete, setScanComplete] = useState(false);
+  const fleetScan = useFleetPairingScan(() => {
+    setHostInput("");
+    setCodeInput("");
+    onChangeConnectionPairingUrl("");
+  }, routeFor !== undefined);
 
   const headerIconColor = useUniwindTheme()["--color-icon"];
 
@@ -149,6 +159,8 @@ function PairingForm({
       return;
     }
 
+    // A fleet code parks the camera too, so the code still in view is not redeemed again.
+    if (fleetScan.take(data, handleSubmit)) return setScanComplete(true);
     setScannerLocked(true);
 
     try {
@@ -173,13 +185,14 @@ function PairingForm({
     }
   };
 
-  const handleSubmit = async () => {
-    const pairingUrl = buildPairingUrl(hostInput, codeInput);
+  const handleSubmit = async (redeemFleet?: () => Promise<PairingOutcome>) => {
+    if (!redeemFleet && fleetScan.take(hostInput, handleSubmit)) return;
+    const pairingUrl = buildPairingUrl(FleetPairing.unwrapSingleHostLink(hostInput), codeInput);
     setOwnAttempt(true);
     setSubmitError(null);
     setIsSubmitting(true);
-    onChangeConnectionPairingUrl(pairingUrl);
-    const outcome = await onConnectPress(pairingUrl, routeFor);
+    if (!redeemFleet) onChangeConnectionPairingUrl(pairingUrl);
+    const outcome = redeemFleet ? await redeemFleet() : await onConnectPress(pairingUrl, routeFor);
     setIsSubmitting(false);
     setSubmitError(outcome.error);
     void Haptics.notificationAsync(
@@ -240,6 +253,7 @@ function PairingForm({
               void handleScanPress();
             }}
           />
+          <FleetPairingScanStatus status={fleetScan.status} />
 
           <View collapsable={false} className="gap-2">
             <Text className="px-4 text-sm font-t3-medium text-foreground-muted">

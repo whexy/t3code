@@ -87,6 +87,10 @@ vi.mock("./devAutoConnect", () => ({
   devAutoConnectAttemptAtom: {},
   pairingLinksAllowed: () => __DEV__,
 }));
+vi.mock("./useFleetPairingScan", () => ({
+  FleetPairingScanStatus: () => null,
+  useFleetPairingScan: () => ({ take: () => false, status: null }),
+}));
 vi.mock("../../state/use-remote-environment-registry", () => ({
   setPendingConnectionError: (message: string | null) => {
     harness.pendingConnectionError = message;
