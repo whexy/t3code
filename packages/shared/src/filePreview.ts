@@ -87,7 +87,7 @@ export function filePreviewKind(
   }
   if (
     mime.startsWith("text/") ||
-    /^(application\/(json|.*\+json|xml|.*\+xml|javascript|x-javascript|yaml|x-yaml|toml|sql))$/.test(
+    /^(application\/(json|.*\+json|x-ndjson|jsonl|xml|.*\+xml|javascript|x-javascript|yaml|x-yaml|toml|sql))$/.test(
       mime,
     )
   )

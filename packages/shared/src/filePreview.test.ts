@@ -185,6 +185,8 @@ describe("attachment preview classification", () => {
     ["recording.webm-audio", "", "audio"],
     ["recording.webm", "audio/webm", "audio"],
     ["payload", "application/problem+json", "text"],
+    ["thread.jsonl", "application/x-ndjson", "text"],
+    ["events", "application/jsonl", "text"],
     ["archive.zip", "application/zip", "archive"],
     ["misleading.json", "application/pdf", "pdf"],
     ["misleading.pdf", "application/zip", "archive"],
