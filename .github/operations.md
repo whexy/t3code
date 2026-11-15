@@ -44,21 +44,18 @@ new TestFlight build. Without the secret, push stays off.
 
 ### Over-the-air updates
 
-The app takes JavaScript updates from `ota.clusters.work` (app `t3code`,
-channel `production`; operating the server is clusters-work's `docs/ota.md`).
-To ship a change without a new build, run this from a tailnet machine with
-dependencies installed and the publish token in `~/.config/ota/publish-token`:
+The app takes JavaScript updates from `ota.clusters.work` (app `t3code`;
+operating the server is clusters-work's `docs/ota.md`). Builds follow channel
+`production`, where nothing is published, so they run their own bundle. Turning
+on Settings → About → Dev updates moves one phone to channel `dev`, which
+[`self-hosted-dev-ota.yml`](workflows/self-hosted-dev-ota.yml) fills from each
+push to `dev`; see [Trying `dev` before it ships](README.md#trying-dev-before-it-ships).
+Turning it off returns to the build's bundle at the next launch.
 
-```sh
-scripts/self-hosted/ios-ota-publish.sh
-```
-
-The phone downloads the update at its next launch and runs it at the one
-after; Settings → About then shows `1.2-ota.<commit>`. An update reaches only
-builds with the same runtime version, the fingerprint of the native side, which
-the script prints and each build's run summary records. When upstream changes
-a native dependency, patch, plugin or the app config, the next TestFlight build
-carries it, and updates for older builds stop matching.
+An update reaches only builds with the same runtime version, `1.2.<run>` of
+the TestFlight build. The workflow publishes for the newest `ios/1.2.<run>` tag
+only when `dev`'s native fingerprint equals the one that tag records, so a
+native change waits for the next TestFlight build.
 
 ### iOS signing
 

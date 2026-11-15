@@ -13,6 +13,10 @@ inputs:
   context:
     description: Build context directory
     required: true
+  build-args:
+    description: Build arguments, one KEY=value per line
+    required: false
+    default: ""
 outputs:
   digest:
     description: The pushed image's digest; empty on pull requests
@@ -34,6 +38,7 @@ runs:
       with:
         context: ${{ inputs.context }}
         file: ${{ inputs.dockerfile }}
+        build-args: ${{ inputs.build-args }}
         platforms: linux/amd64
         # One manifest per tag, so ghcr.io's untagged versions are only superseded builds.
         provenance: false
