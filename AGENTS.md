@@ -74,6 +74,7 @@ See [00_development.md](docs/operations/00_development.md) for setup, ports, see
 - **Sharing (`vp run dev --share`):** Wait for `pairingUrl:` and hand the full URL to the user. Never wire `tailscale serve` by hand, open the URL yourself, or consume the user's one-time pairing link. Mint another with `node apps/server/src/bin.ts pair` if needed.
 - **Test data:** Always copy in (never symlink) and refresh `statev2.sqlite`, not `state.sqlite`. Bring `secrets` / `settings.json` only if the flow under test needs them.
 - **Extra checkouts:** Put `git worktree add` next to this worktree, not in `/tmp`, and remove it when done.
+- **Dev desktop app (this fork only):** `nix run -f nix/desktop-dev.nix` builds this checkout, uncommitted changes included, as T3 Code (Dev): a separate macOS app in /Applications with its own T3 home (`~/.t3-devapp`), Electron profile, keychain key, and link scheme, so it runs beside the developer's real install and starts with no projects or connections. Each run quits and replaces the running Dev app, so check with the developer first. `nix run -f nix/desktop-dev.nix '' uninstall` removes it. If a rebase changes a line `nix/desktop-dev.sh` patches, the build stops and names it; update the edit there.
 
 ## Verifying
 
