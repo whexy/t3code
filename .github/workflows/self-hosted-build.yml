@@ -91,6 +91,7 @@ jobs:
           node scripts/apply-web-brand-assets.ts --channel nightly
           mkdir -p "$RUNNER_TEMP/context"
           cp scripts/self-hosted/server.ts "$RUNNER_TEMP/context/"
+          cp apps/mobile/forkOtaCertificate.pem "$RUNNER_TEMP/context/ota-certificate.pem"
           cp -R apps/web/dist "$RUNNER_TEMP/context/web"
 
       - id: image
@@ -99,6 +100,7 @@ jobs:
           name: hub
           dockerfile: scripts/self-hosted/Dockerfile
           context: ${{ runner.temp }}/context
+          build-args: T3CODE_RELEASE=1.2.${{ github.run_number }}
 
   mcp:
     runs-on: ubuntu-latest
@@ -636,25 +638,26 @@ jobs:
           fi
 
   # The preview app signed for the fork's Apple team (apps/mobile/forkIos.ts),
-  # uploaded to TestFlight as 1.2.<run_number>. Archiving signs with the
-  # Development identity and profiles Xcode makes through the API key; the
-  # export re-signs with Distribution and the App Store profiles that
-  # scripts/self-hosted/ios-profiles.ts installs. Without the signing secrets
-  # the job only says so and succeeds.
+  # uploaded to TestFlight as 1.2.<run_number>, which is also its OTA runtime
+  # version, so an update reaches only the build it was checked against.
+  # Archiving signs with the Development identity and profiles Xcode makes
+  # through the API key; the export re-signs with Distribution and the App
+  # Store profiles that scripts/self-hosted/ios-profiles.ts installs. Without
+  # the signing secrets the job only says so and succeeds.
   ios-testflight:
     needs: gate
     if: needs.gate.outputs.current == 'true'
     runs-on: xcode-27
     timeout-minutes: 120
+    outputs:
+      fingerprint: ${{ steps.upload.outputs.fingerprint }}
     env:
       APP_VARIANT: preview
       EXPO_NO_GIT_STATUS: "1"
-      # scripts/self-hosted/ios-ota-publish.sh resolves the runtime version the
-      # same way; a build that computes another one never receives an update.
-      EXPO_UPDATES_WORKFLOW_OVERRIDE: managed
       NODE_OPTIONS: --max-old-space-size=8192
       T3CODE_FORK_IOS: "1"
       T3CODE_FORK_IOS_BUILD_NUMBER: ${{ github.run_number }}
+      T3CODE_FORK_IOS_RUNTIME_VERSION: 1.2.${{ github.run_number }}
       T3CODE_MOBILE_VERSION: 1.2.${{ github.run_number }}
     steps:
       - id: secrets
@@ -726,10 +729,11 @@ jobs:
           T3CODE_PUSH_URL: https://t3-push.clusters.work
           T3CODE_PUSH_TOKEN: ${{ secrets.T3_PUSH_PHONE_TOKEN }}
         run: |
-          runtime="$(./node_modules/.bin/expo-updates runtimeversion:resolve --platform ios --workflow managed | tail -1 | jq -r .runtimeVersion)"
+          # self-hosted-dev-ota.yml computes HEAD's the same way, with this job's env, to compare.
+          fingerprint="$(./node_modules/.bin/expo-updates fingerprint:generate --platform ios --workflow managed | tail -1 | jq -r .hash)"
           team="$(./node_modules/.bin/expo config --json | jq -r .ios.appleTeamId)"
           echo "IOS_TEAM_ID=$team" >> "$GITHUB_ENV"
-          echo "IOS_RUNTIME_VERSION=$runtime" >> "$GITHUB_ENV"
+          echo "IOS_FINGERPRINT=$fingerprint" >> "$GITHUB_ENV"
           ./node_modules/.bin/expo prebuild --platform ios --clean
           workspace="$(echo ios/*.xcworkspace)"
           # The share extension's target carries no team of its own.
@@ -741,9 +745,9 @@ jobs:
             -allowProvisioningUpdates \
             -authenticationKeyPath "$RUNNER_TEMP/AuthKey_$ASC_KEY_ID.p8" \
             -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID"
-          built="$(cat "$RUNNER_TEMP"/T3Code.xcarchive/Products/Applications/*.app/EXUpdates.bundle/fingerprint)"
-          if [[ "$built" != "$runtime" ]]; then
-            echo "::error::The archive's runtime version is $built, not $runtime; no over-the-air update would reach it."
+          built="$(/usr/libexec/PlistBuddy -c 'Print :EXUpdatesRuntimeVersion' "$RUNNER_TEMP"/T3Code.xcarchive/Products/Applications/*.app/Expo.plist)"
+          if [[ "$built" != "$T3CODE_FORK_IOS_RUNTIME_VERSION" ]]; then
+            echo "::error::The archive's runtime version is $built, not $T3CODE_FORK_IOS_RUNTIME_VERSION; no over-the-air update would reach it."
             exit 1
           fi
 
@@ -752,6 +756,7 @@ jobs:
         uses: ./.github/actions/self-hosted-current
 
       - name: Upload to TestFlight
+        id: upload
         if: steps.current.outputs.current == 'true'
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
@@ -765,7 +770,29 @@ jobs:
             -exportPath "$RUNNER_TEMP/export" \
             -authenticationKeyPath "$RUNNER_TEMP/AuthKey_$ASC_KEY_ID.p8" \
             -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID"
-          echo "testflight: $T3CODE_MOBILE_VERSION ($T3CODE_FORK_IOS_BUILD_NUMBER) runtime $IOS_RUNTIME_VERSION" >> "$GITHUB_STEP_SUMMARY"
+          echo "fingerprint=$IOS_FINGERPRINT" >> "$GITHUB_OUTPUT"
+          echo "testflight: $T3CODE_MOBILE_VERSION ($T3CODE_FORK_IOS_BUILD_NUMBER) fingerprint $IOS_FINGERPRINT" >> "$GITHUB_STEP_SUMMARY"
+
+  # The dev OTA lane (self-hosted-dev-ota.yml) targets the newest ios/1.2.N tag
+  # and compares HEAD's native fingerprint with the one its message records.
+  ios-tag:
+    needs: ios-testflight
+    if: needs.ios-testflight.outputs.fingerprint != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Tag the build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FINGERPRINT: ${{ needs.ios-testflight.outputs.fingerprint }}
+          VERSION: 1.2.${{ github.run_number }}
+        run: |
+          object="$(gh api "repos/$GITHUB_REPOSITORY/git/tags" -f tag="ios/$VERSION" -f object="$GITHUB_SHA" -f type=commit \
+            -f message="$(printf 'TestFlight %s\n\nfingerprint: %s\n' "$VERSION" "$FINGERPRINT")" --jq .sha)"
+          gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/ios/$VERSION" -f sha="$object" > /dev/null
+          echo "ios tag: ios/$VERSION fingerprint $FINGERPRINT" >> "$GITHUB_STEP_SUMMARY"
 
   # The prerelease is the feed the desktop updater follows: a build made in
   # this repository points at its releases (resolveGitHubPublishConfig in
