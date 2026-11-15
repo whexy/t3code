@@ -86,6 +86,7 @@ The most common defect in this repo is a change that works on the path you teste
 - Stop what you started, by the PID you tracked. See rule 1. `vp` does not pass SIGTERM on, so signalling the `vp run dev` PID alone leaves Vite and the server running. Stop the background task with your harness's own stop, which ends the whole tree.
 - Run dev servers, Metro, and builds from your own shell so they end with your session. Do not detach them with `systemd-run`, `nohup`, `setsid`, or `tmux` unless the user asks for one that outlives the session. Detached servers ran for weeks and filled RAM and swap. The dev runner stops itself above `--memory-limit-gb` (half of RAM, at most 16 GiB) on Linux.
 - Need a second checkout? `git worktree add` it next to this worktree, not in `/tmp`. Remove it when done.
+- To try a change in the installed macOS desktop app, run `nix run -f nix/desktop-dev.nix` from the checkout (this fork only). It builds that checkout, uncommitted changes included, as T3 Code (Dev): a separate app in /Applications with its own T3 home (`~/.t3-devapp`), Electron profile, keychain key, and link scheme, so it runs beside the developer's real install and starts with no projects or connections. Each run quits and replaces the running Dev app, so check with the developer before you run it. `nix run -f nix/desktop-dev.nix '' uninstall` removes it. If a rebase changes a line `nix/desktop-dev.sh` patches, the build stops and names it; update the edit there.
 
 ## Test data
 
