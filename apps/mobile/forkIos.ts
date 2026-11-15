@@ -32,6 +32,8 @@ export function withForkIos(config: ExpoConfig, env = process.env): ExpoConfig {
       buildNumber: env.T3CODE_FORK_IOS_BUILD_NUMBER?.trim() || ios?.buildNumber,
     },
     plugins: rewrite(config.plugins),
+    // The release (1.2.N), so an update reaches only the build it was checked against.
+    runtimeVersion: env.T3CODE_FORK_IOS_RUNTIME_VERSION?.trim() || config.runtimeVersion,
     updates: { ...config.updates, ...UPDATES, enabled: true },
   };
 }
