@@ -85,6 +85,7 @@ LaunchOnlyMembership launch AtMostOneGroup
 LaunchOnlyMembership launch EachThreadPlacedOnce
 ExcludeDelegates launch MembersOnlyOwnLaunches
 GuardSettleByRun settle NoUnwarnedSettle
+GuardEverySettle settle NoUnwarnedSettle
 SectionFromAnyUnsettled settle UnsettledMemberStaysVisible
 SettledMembersLeaveSection settle EachThreadPlacedOnce
 HeaderLeavesShelf settle EachThreadPlacedOnce
