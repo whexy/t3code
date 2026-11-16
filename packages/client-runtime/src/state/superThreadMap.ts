@@ -70,6 +70,7 @@ export function resolveSuperThreadMapNodeState(
 
 export const SUPER_THREAD_MAP_NODE_WIDTH = 220;
 export const SUPER_THREAD_MAP_NODE_HEIGHT = 64;
+const MIN_NODE_WIDTH = 176;
 const COLUMN_GAP = 72;
 const ROW_GAP = 14;
 const LANE_GAP = 16;
@@ -77,6 +78,9 @@ const LANE_HEADER = 26;
 const LANE_PADDING = 12;
 const MARGIN = 8;
 const ROW_PITCH = SUPER_THREAD_MAP_NODE_HEIGHT + ROW_GAP;
+const SIDE_BEND = 40;
+/** How far a label beside a side bend may run, in px. */
+export const SUPER_THREAD_MAP_SIDE_LABEL_WIDTH = 180;
 
 export interface SuperThreadMapLayoutNode {
   readonly node: SuperThreadMapNode;
@@ -97,13 +101,20 @@ export interface SuperThreadMapLayoutEdge {
   readonly label: string | undefined;
   /** An SVG path in layout coordinates. */
   readonly path: string;
+  /** The path's midpoint. */
   readonly labelX: number;
   readonly labelY: number;
+  /**
+   * "side": the edge joins two nodes of one column and bends out between them, so a label
+   * centred on the midpoint covers the line; start it just right of labelX instead.
+   */
+  readonly labelAnchor: "center" | "side";
 }
 
 export interface SuperThreadMapLayout {
   readonly width: number;
   readonly height: number;
+  readonly nodeWidth: number;
   readonly lanes: ReadonlyArray<SuperThreadMapLayoutLane>;
   /** In reading order: lane by lane, then column by column, top to bottom. */
   readonly nodes: ReadonlyArray<SuperThreadMapLayoutNode>;
@@ -138,8 +149,8 @@ function rankNodes(map: Pick<SuperThreadMap, "nodes" | "edges">): Map<string, nu
 function edgePath(
   from: { readonly x: number; readonly y: number },
   to: { readonly x: number; readonly y: number },
+  w: number,
 ) {
-  const w = SUPER_THREAD_MAP_NODE_WIDTH;
   const midY = SUPER_THREAD_MAP_NODE_HEIGHT / 2;
   let start: readonly [number, number];
   let end: readonly [number, number];
@@ -154,28 +165,31 @@ function edgePath(
   } else if (to.x === from.x) {
     start = [from.x + w, from.y + midY];
     end = [to.x + w, to.y + midY];
-    c1 = [start[0] + 40, start[1]];
-    c2 = [end[0] + 40, end[1]];
+    c1 = [start[0] + SIDE_BEND, start[1]];
+    c2 = [end[0] + SIDE_BEND, end[1]];
   } else {
     start = [from.x, from.y + midY];
     end = [to.x + w, to.y + midY];
-    c1 = [start[0] - 40, start[1]];
-    c2 = [end[0] + 40, end[1]];
+    c1 = [start[0] - SIDE_BEND, start[1]];
+    c2 = [end[0] + SIDE_BEND, end[1]];
   }
   const path = `M${start[0]},${start[1]} C${c1[0]},${c1[1]} ${c2[0]},${c2[1]} ${end[0]},${end[1]}`;
   return {
     path,
     labelX: (start[0] + 3 * c1[0] + 3 * c2[0] + end[0]) / 8,
     labelY: (start[1] + 3 * c1[1] + 3 * c2[1] + end[1]) / 8,
+    labelAnchor: to.x === from.x ? ("side" as const) : ("center" as const),
   };
 }
 
 /**
  * Lays the map out left to right in one lane per group. It reads only ids, groups and edges,
- * so a status change never moves a node.
+ * so a status change never moves a node. Given `availableWidth`, nodes narrow down to a
+ * readable minimum so the map fits without scrolling sideways.
  */
 export function layoutSuperThreadMap(
   map: Pick<SuperThreadMap, "nodes" | "edges">,
+  options: { readonly availableWidth?: number } = {},
 ): SuperThreadMapLayout {
   const rank = rankNodes(map);
   const order = new Map(map.nodes.map((node, index) => [node.id, index]));
@@ -190,6 +204,23 @@ export function layoutSuperThreadMap(
     predecessors.set(edge.to, [...(predecessors.get(edge.to) ?? []), edge.from]);
   }
   const columns = Math.max(0, ...rank.values()) + 1;
+  // An edge within the last column bends out past it, with its label beside the bend.
+  const bendsOut = map.edges.filter(
+    (edge) => rank.get(edge.from) === columns - 1 && rank.get(edge.to) === columns - 1,
+  );
+  const outerRoom = bendsOut.some((edge) => edge.label !== undefined)
+    ? SIDE_BEND + 12 + SUPER_THREAD_MAP_SIDE_LABEL_WIDTH
+    : bendsOut.length > 0
+      ? 48
+      : 0;
+  const fixedWidth = MARGIN * 2 + LANE_PADDING * 2 + (columns - 1) * COLUMN_GAP + outerRoom;
+  const nodeWidth =
+    options.availableWidth === undefined
+      ? SUPER_THREAD_MAP_NODE_WIDTH
+      : Math.min(
+          SUPER_THREAD_MAP_NODE_WIDTH,
+          Math.max(MIN_NODE_WIDTH, Math.floor((options.availableWidth - fixedWidth) / columns)),
+        );
   const position = new Map<string, { x: number; y: number }>();
   const laidOut: Array<SuperThreadMapLayoutNode> = [];
   const lanes: Array<SuperThreadMapLayoutLane> = [];
@@ -216,7 +247,7 @@ export function layoutSuperThreadMap(
         .sort((a, b) => a.key - b.key || order.get(a.node.id)! - order.get(b.node.id)!);
       sorted.forEach(({ node }, row) => {
         const placed = {
-          x: MARGIN + LANE_PADDING + column * (SUPER_THREAD_MAP_NODE_WIDTH + COLUMN_GAP),
+          x: MARGIN + LANE_PADDING + column * (nodeWidth + COLUMN_GAP),
           y: top + row * ROW_PITCH,
         };
         position.set(node.id, placed);
@@ -234,28 +265,18 @@ export function layoutSuperThreadMap(
     const to = position.get(edge.to);
     if (from === undefined || to === undefined) return [];
     return [
-      { from: edge.from, to: edge.to, kind: edge.kind, label: edge.label, ...edgePath(from, to) },
+      {
+        from: edge.from,
+        to: edge.to,
+        kind: edge.kind,
+        label: edge.label,
+        ...edgePath(from, to, nodeWidth),
+      },
     ];
   });
-  // An edge within the last column bends out past it, with its label centred on the bend.
-  const lastColumnX =
-    MARGIN + LANE_PADDING + (columns - 1) * (SUPER_THREAD_MAP_NODE_WIDTH + COLUMN_GAP);
-  const bendsOut = map.edges.filter(
-    (edge) =>
-      position.get(edge.from)?.x === lastColumnX && position.get(edge.to)?.x === lastColumnX,
-  );
-  const outerRoom = bendsOut.some((edge) => edge.label !== undefined)
-    ? 120
-    : bendsOut.length > 0
-      ? 48
-      : 0;
   return {
-    width:
-      MARGIN * 2 +
-      LANE_PADDING * 2 +
-      columns * SUPER_THREAD_MAP_NODE_WIDTH +
-      (columns - 1) * COLUMN_GAP +
-      outerRoom,
+    width: fixedWidth + columns * nodeWidth,
+    nodeWidth,
     height: laneTop - LANE_GAP + MARGIN,
     lanes,
     nodes: laidOut,
