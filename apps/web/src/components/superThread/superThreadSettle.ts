@@ -2,7 +2,7 @@ import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/model
 import { buildSuperThreadSettleConfirmation } from "@t3tools/client-runtime/state/super-thread-presentation";
 import { planSuperThreadSettle } from "@t3tools/client-runtime/state/super-threads";
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
-import type { RunId, ScopedThreadRef } from "@t3tools/contracts";
+import type { ScopedThreadRef } from "@t3tools/contracts";
 
 import { readLocalApi } from "../../localApi";
 import { appAtomRegistry } from "../../rpc/atomRegistry";
@@ -12,12 +12,9 @@ import { toastManager } from "../ui/toast";
 
 type SettleOne = (
   ref: ScopedThreadRef,
-  expectedLatestRunId: RunId | null | undefined,
 ) => Promise<{ readonly _tag: "Success" | "Failure" | "Initial" }>;
 
 export interface SuperThreadSettle {
-  /** Guards the header's own settle with the run the confirmation showed. */
-  readonly expectedLatestRunId: RunId | null | undefined;
   /** Settles the members once the header has settled. */
   readonly settleMembers: (settleOne: SettleOne) => Promise<void>;
 }
@@ -36,8 +33,7 @@ export async function confirmSuperThreadSettle(
     readThreadShells(),
     new Set(appAtomRegistry.get(environmentSummaries.connectedEnvironmentIdsAtom)),
   );
-  const header = plan.settles.find((entry) => scopedThreadKey(entry.ref) === headerKey);
-  const members = plan.settles.filter((entry) => scopedThreadKey(entry.ref) !== headerKey);
+  const members = plan.settles.filter((ref) => scopedThreadKey(ref) !== headerKey);
   const message = buildSuperThreadSettleConfirmation({
     title: shell.title,
     warnings: plan.warnings,
@@ -49,20 +45,16 @@ export async function confirmSuperThreadSettle(
     if (!confirmed) return "cancelled";
   }
   return {
-    expectedLatestRunId: header?.expectedLatestRunId,
     settleMembers: async (settleOne) => {
       const results = await Promise.all(
-        members.map((member) =>
-          settleOne(member.ref, member.expectedLatestRunId).catch(() => null),
-        ),
+        members.map((member) => settleOne(member).catch(() => null)),
       );
       const kept = results.filter((result) => result?._tag !== "Success").length;
-      // A member that started new work since the confirmation refuses on purpose and keeps the section.
       if (kept > 0) {
         toastManager.add({
           type: "info",
           title: `${kept} thread${kept === 1 ? "" : "s"} stayed open`,
-          description: "They started new work or could not be settled.",
+          description: "They are still working or could not be settled.",
         });
       }
     },

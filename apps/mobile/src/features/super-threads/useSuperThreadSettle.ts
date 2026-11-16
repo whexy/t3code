@@ -1,7 +1,6 @@
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { buildSuperThreadSettleConfirmation } from "@t3tools/client-runtime/state/super-thread-presentation";
 import { planSuperThreadSettle } from "@t3tools/client-runtime/state/super-threads";
-import type { RunId } from "@t3tools/contracts";
 
 import * as Dialog from "../../components/ui/Dialog";
 import { scopedThreadKey } from "../../lib/scopedEntities";
@@ -11,8 +10,6 @@ import { environmentThreadShells, threadEnvironment } from "../../state/threads"
 import { useAtomCommand } from "../../state/use-atom-command";
 
 export interface SuperThreadSettle {
-  /** Guards the header's own settle with the run the confirmation showed. */
-  readonly expectedLatestRunId: RunId | null | undefined;
   /** Settles the members once the header has settled. */
   readonly settleMembers: () => void;
 }
@@ -48,9 +45,9 @@ export function useSuperThreadSettle() {
       new Set(appAtomRegistry.get(connectedEnvironmentIdsAtom)),
     );
     const headerKey = scopedThreadKey(thread.environmentId, thread.id);
-    const isHeader = (entry: (typeof plan.settles)[number]) =>
-      scopedThreadKey(entry.ref.environmentId, entry.ref.threadId) === headerKey;
-    const members = plan.settles.filter((entry) => !isHeader(entry));
+    const members = plan.settles.filter(
+      (ref) => scopedThreadKey(ref.environmentId, ref.threadId) !== headerKey,
+    );
     const titleByKey = new Map(
       shells.map((shell) => [scopedThreadKey(shell.environmentId, shell.id), shell.title]),
     );
@@ -63,16 +60,12 @@ export function useSuperThreadSettle() {
     const stopsWork = plan.warnings.some((warning) => warning.reason === "running");
     if (message !== null && !(await confirmSettle(message, stopsWork))) return "cancelled";
     return {
-      expectedLatestRunId: plan.settles.find(isHeader)?.expectedLatestRunId,
-      // A member that started new work since the confirmation refuses and keeps the section.
+      // A member the server refuses, such as one still working, stays and keeps the section.
       settleMembers: () => {
         for (const member of members) {
           void settle({
-            environmentId: member.ref.environmentId,
-            input: {
-              threadId: member.ref.threadId,
-              expectedLatestRunId: member.expectedLatestRunId,
-            },
+            environmentId: member.environmentId,
+            input: { threadId: member.threadId },
           });
         }
       },
