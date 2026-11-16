@@ -316,6 +316,7 @@ describe("V2 environment commands", () => {
         ["auto", "start_immediately"],
         ["steer", "start_immediately"],
         ["restart", "start_immediately"],
+        ["start", "start_immediately"],
       ] as const) {
         yield* startThreadTurn({
           commandId: CommandId.make(`command-${mode}`),
@@ -326,6 +327,7 @@ describe("V2 environment commands", () => {
             text: mode,
             attachments: [],
           },
+          titleSeed: mode,
           runtimeMode: "full-access",
           interactionMode: "default",
           dispatchMode: mode,
@@ -334,7 +336,8 @@ describe("V2 environment commands", () => {
         expect(commands.at(-1)).toMatchObject({
           type: "message.dispatch",
           dispatchMode: { type: expectedType },
-          ...(mode === "queue" ? {} : { deliveryIntent: mode }),
+          titleSeed: mode,
+          ...(mode === "queue" || mode === "start" ? {} : { deliveryIntent: mode }),
         });
       }
       expect(projectionRequests).toEqual([]);
