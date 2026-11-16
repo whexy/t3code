@@ -31,6 +31,8 @@ defaults:
 
 jobs:
   plan:
+    # A manual run on another branch would publish that branch to every opted-in device.
+    if: github.ref == 'refs/heads/dev'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
@@ -221,7 +223,7 @@ jobs:
 
   publish:
     needs: [plan, ios, desktop, web]
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && needs.plan.result != 'skipped' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
