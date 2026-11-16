@@ -44,6 +44,7 @@ import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as OrchestrationMcp from "../../OrchestratorMcpService.ts";
 import { newCommandId, readCaller, resolveProjectId, unavailable } from "../../threadAccess.ts";
 import { ProjectToolkit } from "./tools.ts";
+import { recordForwardedLaunch, recordLocalLaunch } from "../superThread/handlers.ts";
 
 const isAboveCeilingError = Schema.is(OrchestratorRuntimeModeAboveCeilingError);
 
@@ -455,6 +456,7 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
             )?.supportedRuntimeModes,
           });
         }
+        yield* recordLocalLaunch(context, threadId);
         const result = yield* ThreadMessageIntake.launchThread({
           commandId,
           threadId,
@@ -523,6 +525,7 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
       }),
     // The launched thread carries the caller's link, if it has one.
     "stamped",
+    recordForwardedLaunch,
   ),
   t3_project_list: McpToolAccess.reads((input) =>
     Effect.gen(function* () {

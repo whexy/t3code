@@ -110,6 +110,7 @@ import {
   JAVASCRIPT_TRIM_WHITESPACE,
 } from "./deferredCommandMessage.ts";
 import { readableSearchText } from "./messageSearchIndex.ts";
+import { superThreadShellFields } from "../superThread/superThreadState.ts";
 import {
   isFoldableWorkItem,
   isThreadHistoryUserTurn,
@@ -2038,6 +2039,7 @@ export function threadShellFromProjection(
     autoSettleDisabledAt: projection.thread.autoSettleDisabledAt ?? null,
     pinOrderKey: projection.thread.pinOrderKey ?? null,
     ...(projection.thread.tags?.length ? { tags: projection.thread.tags } : {}),
+    ...superThreadShellFields(projection.thread),
     lastVisitedAt: projection.thread.lastVisitedAt,
     opens: projection.thread.opens ?? null,
     titleRegeneration: projection.thread.titleRegeneration ?? null,
@@ -2343,6 +2345,7 @@ function shellFromState(input: {
     autoSettleDisabledAt: input.state.thread.autoSettleDisabledAt ?? null,
     pinOrderKey: input.state.thread.pinOrderKey ?? null,
     ...(input.state.thread.tags?.length ? { tags: input.state.thread.tags } : {}),
+    ...superThreadShellFields(input.state.thread),
     lastVisitedAt: input.state.thread.lastVisitedAt,
     opens: input.state.thread.opens ?? null,
     titleRegeneration: input.state.thread.titleRegeneration ?? null,

@@ -142,6 +142,7 @@ import { WITHHELD, withoutWebhookUrlToken } from "../scheduledTasks/webhookUrlTo
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as PeerForwarding from "../peer/PeerForwarding.ts";
 import * as RemoteDelegation from "../peer/RemoteDelegation.ts";
+import { recordLaunchedMember } from "../superThread/superThreadMembers.ts";
 
 // Return recoverable handles before common MCP client timeouts expire.
 const DEFAULT_WAIT_TIMEOUT_MS = 30_000;
@@ -3396,6 +3397,17 @@ const make = Effect.gen(function* () {
                       text: request.prompt,
                       attachments: [],
                     };
+              yield* recordLaunchedMember(threadManagement, parent.thread, {
+                environmentId: scope.environmentId,
+                threadId,
+              }).pipe(
+                Effect.mapError((error) =>
+                  failure(
+                    "orchestration_error",
+                    `Unable to add thread ${index + 1} to this super thread: ${userFacingDispatchErrorMessage(error) ?? errorMessage(error)}`,
+                  ),
+                ),
+              );
               const created = yield* threadManagement
                 .dispatch({
                   type: "thread.create",

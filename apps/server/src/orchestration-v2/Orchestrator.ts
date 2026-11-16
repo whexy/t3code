@@ -226,6 +226,7 @@ import {
   ThreadForkServiceV2,
 } from "./ThreadForkService.ts";
 import { planThreadDeletion } from "./ThreadDeletion.ts";
+import * as SuperThreadState from "../superThread/superThreadState.ts";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ServerSettings from "../serverSettings.ts";
 
@@ -644,6 +645,8 @@ export function threadHasUnfinishedWork(records: {
 
 function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
   switch (command.type) {
+    case "super_thread.member.record":
+    case "super_thread.board.set":
     case "thread.create":
     case "thread.archive":
     case "thread.unarchive":
@@ -4144,6 +4147,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ? {}
         : { delegatedFrom: command.delegatedFrom }),
       ...(command.workflowRun === undefined ? {} : { workflowRun: command.workflowRun }),
+      ...(command.superThread === true ? { superThread: { members: [], board: null } } : {}),
       lineage: {
         parentThreadId: null,
         relationshipToParent: null,
@@ -16021,6 +16025,24 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       | undefined;
     let updateDelegatedCompletionOnlyRunId: RunId | undefined;
     switch (command.type) {
+      case "super_thread.member.record":
+      case "super_thread.board.set": {
+        const thread = yield* projectionStore
+          .getThread(command.threadId)
+          .pipe(mapDispatchError(command));
+        const now = yield* DateTime.now;
+        const next = SuperThreadState.applySuperThreadCommand(thread, command, now);
+        if ("refused" in next) {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: next.refused,
+          });
+        }
+        // A member already listed still writes the thread, since a command must commit an event.
+        yield* emit(events, command)(SuperThreadState.superThreadUpdatedEvent(next, now));
+        break;
+      }
       case "thread.create": {
         yield* dispatchThreadCreate(command, events);
         const initialMessage = threadCreateInitialMessage(command);
