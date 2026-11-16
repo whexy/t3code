@@ -1,4 +1,4 @@
-import type { EnvironmentId, RunId, ScopedThreadRef } from "@t3tools/contracts";
+import type { EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
 import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 
 import { scopedThreadKey, scopeThreadRef } from "../environment/scoped.ts";
@@ -22,15 +22,9 @@ export interface SuperThreadSettleWarning {
   readonly reason: "running" | "needs-input" | "unreachable";
 }
 
-export interface SuperThreadSettle {
-  readonly ref: ScopedThreadRef;
-  /** Sent as `thread.settle`'s `expectedLatestRunId`, so work started after confirming refuses. */
-  readonly expectedLatestRunId: RunId | null;
-}
-
 export interface SuperThreadSettlePlan {
   readonly warnings: ReadonlyArray<SuperThreadSettleWarning>;
-  readonly settles: ReadonlyArray<SuperThreadSettle>;
+  readonly settles: ReadonlyArray<ScopedThreadRef>;
 }
 
 const shellKey = (shell: EnvironmentThreadShell) =>
@@ -144,9 +138,9 @@ export function deriveSuperThreadSections<T extends EnvironmentThreadShell>(
 }
 
 /**
- * What settling a super thread does: settle the header and every held, unsettled member, each
- * guarded by the latest run the client saw. Members that are busy or out of reach are listed
- * for confirmation; unreachable ones are not settled.
+ * What settling a super thread does: settle the header and every held, unsettled member, each as
+ * an ordinary settle. Members that are busy or out of reach are listed for confirmation;
+ * unreachable ones are not settled.
  */
 export function planSuperThreadSettle(
   superShell: EnvironmentThreadShell,
@@ -155,12 +149,9 @@ export function planSuperThreadSettle(
 ): SuperThreadSettlePlan {
   const byKey = new Map(shells.map((shell) => [shellKey(shell), shell] as const));
   const warnings: SuperThreadSettleWarning[] = [];
-  const settles: SuperThreadSettle[] = [];
+  const settles: ScopedThreadRef[] = [];
   const settle = (shell: EnvironmentThreadShell) =>
-    settles.push({
-      ref: scopeThreadRef(shell.environmentId, shell.id),
-      expectedLatestRunId: shell.latestRun?.runId ?? null,
-    });
+    settles.push(scopeThreadRef(shell.environmentId, shell.id));
 
   settle(superShell);
   const seen = new Set<string>([shellKey(superShell)]);
