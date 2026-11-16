@@ -12,7 +12,7 @@ export function newSuperThreadPaletteAction(
   return {
     kind: "action",
     value: "action:new-super-thread",
-    searchTerms: ["new super thread", "coordinate", "goal board", "across projects"],
+    searchTerms: ["new super thread", "coordinate", "task map", "across projects"],
     title: "New super thread",
     icon: <NetworkIcon className={ITEM_ICON_CLASS} />,
     run: () => startSuperThreadDraft(environmentId, handleNewThread),

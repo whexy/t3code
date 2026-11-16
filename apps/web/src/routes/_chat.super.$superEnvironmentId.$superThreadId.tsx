@@ -13,6 +13,7 @@ function SuperThreadRoute() {
   const { superEnvironmentId, superThreadId } = Route.useParams();
   return (
     <SuperThreadPage
+      key={`${superEnvironmentId}:${superThreadId}`}
       threadRef={scopeThreadRef(
         EnvironmentId.make(superEnvironmentId),
         ThreadId.make(superThreadId),

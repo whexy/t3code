@@ -72,7 +72,8 @@ export type T3McpToolSummaryAction =
   | "html-preview"
   | "html-render"
   | "send-to-user"
-  | "super-thread-board";
+  | "super-thread-map"
+  | "super-thread-map-read";
 
 export interface T3McpToolDefinition {
   readonly displayName: string;
@@ -379,10 +380,11 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
   html_preview: tool(["Preview", "Previewing", "Previewed", "an HTML page"], "html-preview"),
   html_render: tool(["Render", "Rendering", "Rendered", "an HTML page"], "html-render"),
   send_to_user: tool(["Send", "Sending", "Sent", "a message"], "send-to-user"),
-  super_thread_board_set: tool(
-    ["Update", "Updating", "Updated", "the goal board"],
-    "super-thread-board",
+  super_thread_map_update: tool(
+    ["Update", "Updating", "Updated", "the task map"],
+    "super-thread-map",
   ),
+  super_thread_map_read: tool(["Read", "Reading", "Read", "the task map"], "super-thread-map-read"),
 };
 
 export const T3_MCP_TOOL_NAMES: ReadonlySet<string> = new Set(Object.keys(T3_MCP_TOOLS));

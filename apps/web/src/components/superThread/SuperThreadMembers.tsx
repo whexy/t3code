@@ -50,8 +50,11 @@ const SuperThreadMemberItem = memo(function SuperThreadMemberItem(props: {
   );
 });
 
-/** Every member, settled ones included; the sidebar shows only unsettled ones. */
-export function SuperThreadMembers(props: { readonly members: ReadonlyArray<SuperThreadMember> }) {
+/** Members, settled ones included; the sidebar shows only unsettled ones. */
+export function SuperThreadMembers(props: {
+  readonly members: ReadonlyArray<SuperThreadMember>;
+  readonly title: "Threads" | "Not on the map";
+}) {
   const projectGroups = useSidebarProjectGroups();
   const environments = useEnvironmentIdentities();
   const projectDisplayNameByKey = new Map(
@@ -64,9 +67,10 @@ export function SuperThreadMembers(props: { readonly members: ReadonlyArray<Supe
   const environmentLabelById = new Map(
     environments.map((environment) => [environment.environmentId, environment.label] as const),
   );
+  if (props.title === "Not on the map" && props.members.length === 0) return null;
   return (
-    <section aria-label="Threads" className="flex flex-col gap-2">
-      <h2 className="text-sm font-medium text-foreground">Threads</h2>
+    <section aria-label={props.title} className="flex flex-col gap-2">
+      <h2 className="text-sm font-medium text-foreground">{props.title}</h2>
       {props.members.length === 0 ? (
         <p className="text-sm text-muted-foreground">
           Threads the agent launches show up here and in the sidebar.

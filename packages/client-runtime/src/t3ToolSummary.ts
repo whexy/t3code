@@ -481,8 +481,11 @@ export function summarizeT3ToolCalls(
     case "send-to-user":
       label = phrase("Sent", "send", quantity(selected.length, "message"));
       break;
-    case "super-thread-board":
-      label = phrase("Updated", "update", `the goal board ${times}`);
+    case "super-thread-map":
+      label = phrase("Updated", "update", `the task map ${times}`);
+      break;
+    case "super-thread-map-read":
+      label = phrase("Read", "read", `the task map ${times}`);
       break;
     case "capabilities":
       label = phrase("Checked", "check", `orchestration capabilities ${times}`);
