@@ -194,10 +194,10 @@ describe("planSuperThreadSettle", () => {
       new Set([local, remote]),
     );
     expect(plan.settles).toEqual([
-      { ref: scopeThreadRef(local, ThreadId.make("super")), expectedLatestRunId: "run-1" },
-      { ref: scopeThreadRef(local, ThreadId.make("idle")), expectedLatestRunId: null },
-      { ref: scopeThreadRef(local, ThreadId.make("busy")), expectedLatestRunId: "run-w" },
-      { ref: scopeThreadRef(remote, ThreadId.make("asking")), expectedLatestRunId: null },
+      scopeThreadRef(local, ThreadId.make("super")),
+      scopeThreadRef(local, ThreadId.make("idle")),
+      scopeThreadRef(local, ThreadId.make("busy")),
+      scopeThreadRef(remote, ThreadId.make("asking")),
     ]);
     expect(plan.warnings).toEqual([
       { ref: scopeThreadRef(local, ThreadId.make("busy")), reason: "running" },
@@ -206,12 +206,10 @@ describe("planSuperThreadSettle", () => {
     ]);
   });
 
-  it("guards an already settled header too, and warns about and skips unreachable members", () => {
+  it("settles an already settled header too, and warns about and skips unreachable members", () => {
     const header = superShell("super", [member("a", remote)], settled);
     const plan = planSuperThreadSettle(header, [header, shell("a", {}, remote)], new Set([local]));
-    expect(plan.settles).toEqual([
-      { ref: scopeThreadRef(local, ThreadId.make("super")), expectedLatestRunId: null },
-    ]);
+    expect(plan.settles).toEqual([scopeThreadRef(local, ThreadId.make("super"))]);
     expect(plan.warnings).toEqual([
       { ref: scopeThreadRef(remote, ThreadId.make("a")), reason: "unreachable" },
     ]);
