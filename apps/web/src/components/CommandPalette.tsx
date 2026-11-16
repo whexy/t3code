@@ -130,7 +130,10 @@ import { useAtomCommand } from "../state/use-atom-command";
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 import { useScratchProject } from "../hooks/useScratchProject";
-import { newSuperThreadPaletteAction } from "./superThread/superThreadPaletteAction";
+import {
+  newSuperThreadPaletteAction,
+  superThreadPanelPaletteActions,
+} from "./superThread/superThreadPaletteAction";
 import { useStartTriage } from "../hooks/useStartTriage";
 import { pickTriageEnvironment } from "../lib/triageTarget";
 import { useNewProject } from "../hooks/useNewProject";
@@ -1394,6 +1397,7 @@ function OpenCommandPaletteDialog(props: {
     });
     actionItems.push(newSuperThreadPaletteAction(scratchTargetEnvironmentId, handleNewThread));
   }
+  actionItems.push(...superThreadPanelPaletteActions(activeThread));
 
   if (triageEnvironmentId !== null && canTriage) {
     actionItems.push({

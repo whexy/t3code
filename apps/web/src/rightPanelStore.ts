@@ -22,6 +22,7 @@ import type { ChatFileAttachment } from "./types";
 
 const RIGHT_PANEL_KINDS = [
   "diff",
+  "super-thread",
   "files",
   "file",
   "preview",
@@ -57,6 +58,7 @@ export type RightPanelSurface =
       splitDirection?: "horizontal" | "vertical";
     }
   | { id: "diff"; kind: "diff" }
+  | { id: "super-thread"; kind: "super-thread" }
   | {
       id: "files";
       kind: "files";
@@ -293,6 +295,8 @@ const singletonSurface = (
   switch (kind) {
     case "diff":
       return { id: "diff", kind };
+    case "super-thread":
+      return { id: "super-thread", kind };
     case "files":
       return { id: "files", kind };
     case "pull-requests":

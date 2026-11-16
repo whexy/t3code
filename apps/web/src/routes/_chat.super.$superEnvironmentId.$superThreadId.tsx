@@ -1,23 +1,22 @@
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, redirect } from "@tanstack/react-router";
 
-import { SuperThreadPage } from "../components/superThread/SuperThreadPage";
+import { openSuperThreadPanel } from "../components/superThread/superThreadPanelActions";
 
-// Not `environmentId`/`threadId`: the chat layout reads those params as an open chat route.
+// Old super page links open the conversation with the goal and map panel showing.
 export const Route = createFileRoute("/_chat/super/$superEnvironmentId/$superThreadId")({
-  component: SuperThreadRoute,
+  beforeLoad: ({ params }) => {
+    openSuperThreadPanel(
+      scopeThreadRef(
+        EnvironmentId.make(params.superEnvironmentId),
+        ThreadId.make(params.superThreadId),
+      ),
+    );
+    throw redirect({
+      to: "/$environmentId/$threadId",
+      params: { environmentId: params.superEnvironmentId, threadId: params.superThreadId },
+      replace: true,
+    });
+  },
 });
-
-function SuperThreadRoute() {
-  const { superEnvironmentId, superThreadId } = Route.useParams();
-  return (
-    <SuperThreadPage
-      key={`${superEnvironmentId}:${superThreadId}`}
-      threadRef={scopeThreadRef(
-        EnvironmentId.make(superEnvironmentId),
-        ThreadId.make(superThreadId),
-      )}
-    />
-  );
-}
