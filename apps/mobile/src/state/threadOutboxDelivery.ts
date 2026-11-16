@@ -28,6 +28,7 @@ import { AsyncResult, Atom } from "effect/reactivity";
 import { createDebugLogger } from "../lib/debugLog";
 import { scopedThreadKey } from "../lib/scopedEntities";
 import { buildProjectThreadStartTurnInput } from "../lib/projectThreadStartTurn";
+import { superThreadCreationSpec } from "../features/super-threads/superThreadCreations";
 import { serializeComposerMessageForServer, uploadedComposerContext } from "../lib/composerContext";
 import { prepareTurnAttachments, type PreparedTurnAttachments } from "../lib/attachmentUpload";
 import { randomHex } from "../lib/uuid";
@@ -1144,6 +1145,7 @@ export function createThreadOutboxDelivery(): {
         worktreePath: workspace.worktreePath,
         startFromOrigin: workspace.startFromOrigin ?? false,
         worktreeBranchName: buildTemporaryWorktreeBranchName(randomHex),
+        ...(await superThreadCreationSpec(queuedMessage.threadId)),
       }),
     });
     if (AsyncResult.isFailure(deliveryResult) && !hasAccess()) return true;

@@ -102,6 +102,8 @@ import { holdLaunchSplashForHomeRows, settleLaunchSplashHomeRows } from "./home-
 import { useWorkspaceTabs } from "../layout/workspace/WorkspaceTabsContext";
 import { ThreadListFilters } from "./ThreadListFilters";
 import { deriveHomeEmptyState } from "./home-empty-state";
+import { SuperThreadListSections } from "../super-threads/SuperThreadListSections";
+import { useSuperThreadList } from "../super-threads/useSuperThreadList";
 
 interface HomeScreenProps {
   /** Whether this list is the one on screen; see `useHomeRouteVisible`. */
@@ -406,13 +408,20 @@ export function HomeScreen(props: HomeScreenProps) {
   } = listEnvironments;
   const resolveProviderInstance = useThreadRowProviderInstanceResolver(providersByEnvironmentId);
   const pendingOrder = usePendingThreadOrder();
+  const superThreadList = useSuperThreadList({
+    threads: props.threads,
+    environmentId: props.selectedEnvironmentId,
+    projectRefs: v2ScopedProjectGroup?.projectRefs,
+    searchQuery: props.searchQuery,
+    loadedEnvironmentIds: settlementEnvironmentIds,
+  });
   const {
     layout: threadListV2Layout,
     items: threadListV2Items,
     contentOnlyThreadKeys,
     olderSettledShelf,
   } = useThreadListV2({
-    threads: props.threads,
+    threads: superThreadList.unclaimedThreads,
     pendingTasks: props.pendingTasks,
     environmentId: props.selectedEnvironmentId,
     projectRefs: v2ScopedProjectGroup === null ? null : v2ScopedProjectGroup.projectRefs,
@@ -697,6 +706,13 @@ export function HomeScreen(props: HomeScreenProps) {
           onProjectChange={props.onProjectChange}
         />
       ) : null}
+      <SuperThreadListSections
+        sections={superThreadList.sections}
+        pane={sidebarSurface ? "sidebar" : "screen"}
+        selectedThreadKey={selectedThreadKey}
+        onSelectThread={selectThread}
+        onSettleThread={handleSettleThread}
+      />
     </>
   );
 
@@ -733,7 +749,11 @@ export function HomeScreen(props: HomeScreenProps) {
       />
     );
 
-  if (Platform.OS === "android" && threadListV2Items.length === 0) {
+  if (
+    Platform.OS === "android" &&
+    threadListV2Items.length === 0 &&
+    superThreadList.sections.length === 0
+  ) {
     return (
       <ScreenContent surface="screen">
         <View
@@ -791,7 +811,7 @@ export function HomeScreen(props: HomeScreenProps) {
                     />
                   ) : null
                 }
-                ListEmptyComponent={v2ListEmpty}
+                ListEmptyComponent={superThreadList.sections.length > 0 ? null : v2ListEmpty}
                 style={{ flex: 1 }}
                 automaticallyAdjustsScrollIndicatorInsets={Platform.OS === "ios"}
                 contentInsetAdjustmentBehavior="never"
