@@ -79,3 +79,21 @@ export function resolveSuperThreadRowStatus(
       return status;
   }
 }
+
+/**
+ * The shell of a member row shown in a super thread section, which the sidebar's own lists leave
+ * out. Its menu has no pin or snooze: the section lists every unsettled member, so those would
+ * change nothing on screen.
+ */
+export function findSuperThreadMember(
+  sections: ReadonlyArray<SuperThreadSection<EnvironmentThreadShell>>,
+  threadKey: string,
+): EnvironmentThreadShell | undefined {
+  for (const section of sections) {
+    const member = section.rows.find(
+      (row) => scopedThreadKey(scopeThreadRef(row.environmentId, row.id)) === threadKey,
+    );
+    if (member !== undefined) return member;
+  }
+  return undefined;
+}
