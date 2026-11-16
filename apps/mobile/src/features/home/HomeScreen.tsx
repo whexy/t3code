@@ -102,6 +102,7 @@ import { useWorkspaceTabs } from "../layout/workspace/WorkspaceTabsContext";
 import { ThreadListFilters } from "./ThreadListFilters";
 import { deriveHomeEmptyState } from "./home-empty-state";
 import { SuperThreadListSections } from "../super-threads/SuperThreadListSections";
+import { superThreadLevelItems } from "../super-threads/superThreadLevel";
 import { useSuperThreadList } from "../super-threads/useSuperThreadList";
 
 interface HomeScreenProps {
@@ -706,11 +707,18 @@ export function HomeScreen(props: HomeScreenProps) {
         />
       ) : null}
       <SuperThreadListSections
-        sections={superThreadList.sections}
+        list={superThreadList}
         pane={sidebarSurface ? "sidebar" : "screen"}
         selectedThreadKey={selectedThreadKey}
         onSelectThread={selectThread}
-        onSettleThread={handleSettleThread}
+        memberRowHost={{
+          fullSwipeWidth,
+          onSwipeableWillOpen: handleSwipeableWillOpen,
+          onSwipeableClose: handleSwipeableClose,
+          simultaneousSwipeGesture: homeScrollGesture,
+          onOpenThreadPullRequests: handleOpenThreadPullRequests,
+          onNewThreadOnBranch: props.onNewThreadOnBranch,
+        }}
       />
     </>
   );
@@ -782,7 +790,7 @@ export function HomeScreen(props: HomeScreenProps) {
                 onTouchEnd={(event) => trackListTouches(event, false)}
                 onTouchCancel={(event) => trackListTouches(event, false)}
                 renderScrollComponent={Platform.OS === "ios" ? renderHomeScrollView : undefined}
-                data={threadListV2Items}
+                data={superThreadLevelItems(superThreadList, threadListV2Items)}
                 renderItem={renderV2Item}
                 keyExtractor={v2KeyExtractor}
                 getItemType={(item) => item.type}
@@ -795,7 +803,9 @@ export function HomeScreen(props: HomeScreenProps) {
                 // Lifted above the rows so an iOS filter menu's dismissal morph is not covered.
                 ListHeaderComponentStyle={{ zIndex: 1 }}
                 ListFooterComponent={
-                  settledShelfExpanded && threadListV2Layout.hiddenSettledCount > 0 ? (
+                  superThreadList.open === null &&
+                  settledShelfExpanded &&
+                  threadListV2Layout.hiddenSettledCount > 0 ? (
                     <ThreadListV2ShowMoreRow
                       hiddenCount={threadListV2Layout.hiddenSettledCount}
                       {...(olderSettledShelf.loading

@@ -1,7 +1,8 @@
 import type { EnvironmentId, RunId, ScopedThreadRef } from "@t3tools/contracts";
+import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 
 import { scopedThreadKey, scopeThreadRef } from "../environment/scoped.ts";
-import type { EnvironmentThreadShell } from "./models.ts";
+import { type EnvironmentThreadShell, threadRuntimeIsActive } from "./models.ts";
 import { isThreadWorking } from "./threadInbox.ts";
 import { toSortableTimestamp } from "./threadSort.ts";
 
@@ -41,7 +42,17 @@ const isSettled = (shell: EnvironmentThreadShell) => shell.settledOverride === "
 const isGone = (shell: EnvironmentThreadShell) =>
   shell.archivedAt !== null || shell.deletedAt !== null;
 
-function needsInput(shell: EnvironmentThreadShell): boolean {
+type SuperThreadMemberStateInput = Pick<
+  EnvironmentThreadShell,
+  | "hasPendingApprovals"
+  | "hasPendingUserInput"
+  | "pendingSubagentRequest"
+  | "pendingGuestMessageCount"
+  | "pendingBackgroundTasks"
+  | "runtime"
+>;
+
+export function superThreadMemberNeedsInput(shell: SuperThreadMemberStateInput): boolean {
   return (
     shell.hasPendingApprovals ||
     shell.hasPendingUserInput ||
@@ -50,10 +61,23 @@ function needsInput(shell: EnvironmentThreadShell): boolean {
   );
 }
 
-/** Needing the person first, then done, then working. */
+/** A thread holding on work it awaits parks its runtime at idle; the sidebar shows it as Waiting. */
+export function superThreadMemberIsWorking(shell: SuperThreadMemberStateInput): boolean {
+  return (
+    threadRuntimeIsActive(shell.runtime) ||
+    backgroundWorkHoldsCompletion(shell.pendingBackgroundTasks)
+  );
+}
+
+/** A member waiting on the person, or one whose run failed; a folded section still counts it. */
+export function superThreadMemberNeedsYou(shell: SuperThreadMemberStateInput): boolean {
+  return superThreadMemberNeedsInput(shell) || shell.runtime?.status === "failed";
+}
+
+/** Needing the person first, then working, then finished. */
 function rowRank(shell: EnvironmentThreadShell): number {
-  if (needsInput(shell) || shell.runtime?.status === "failed") return 0;
-  return isThreadWorking(shell) ? 2 : 1;
+  if (superThreadMemberNeedsYou(shell)) return 0;
+  return superThreadMemberIsWorking(shell) ? 1 : 2;
 }
 
 function latestActivity(shell: EnvironmentThreadShell): number {
@@ -151,7 +175,7 @@ export function planSuperThreadSettle(
       warnings.push({ ref, reason: "unreachable" });
       continue;
     }
-    if (needsInput(shell)) warnings.push({ ref, reason: "needs-input" });
+    if (superThreadMemberNeedsInput(shell)) warnings.push({ ref, reason: "needs-input" });
     else if (isThreadWorking(shell)) warnings.push({ ref, reason: "running" });
     settle(shell);
   }

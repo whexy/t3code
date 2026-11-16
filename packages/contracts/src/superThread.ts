@@ -4,6 +4,7 @@ import {
   CommandId,
   EnvironmentId,
   IsoDateTime,
+  RunId,
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
@@ -14,6 +15,22 @@ export const SuperThreadMember = Schema.Struct({
   threadId: ThreadId,
 });
 export type SuperThreadMember = typeof SuperThreadMember.Type;
+
+/** One run of a member. */
+export const SuperThreadMemberRun = Schema.Struct({
+  ...SuperThreadMember.fields,
+  runId: RunId,
+});
+export type SuperThreadMemberRun = typeof SuperThreadMemberRun.Type;
+
+/** What a member's run did that wakes its super thread; `stopped` only ends a follow. */
+export const SuperThreadMemberOutcome = Schema.Literals([
+  "completed",
+  "failed",
+  "waiting",
+  "stopped",
+]);
+export type SuperThreadMemberOutcome = typeof SuperThreadMemberOutcome.Type;
 
 const MapNodeId = TrimmedNonEmptyString.check(Schema.isMaxLength(64));
 
@@ -98,6 +115,24 @@ export const SuperThreadMapUpdate = Schema.Struct({
 });
 export type SuperThreadMapUpdate = typeof SuperThreadMapUpdate.Type;
 
+/** One launch request: the caller's request namespace scopes its key before it leaves for the link. */
+export const SuperThreadLaunchKey = Schema.Struct({
+  environmentId: EnvironmentId,
+  requestNamespace: Schema.String,
+  clientRequestId: Schema.String,
+});
+export type SuperThreadLaunchKey = typeof SuperThreadLaunchKey.Type;
+
+/**
+ * A launch forwarded to a linked environment, written down before it goes so a restart can replay
+ * it. `input` is the `t3_thread_launch` arguments without `environmentId`.
+ */
+export const SuperThreadPendingLaunch = Schema.Struct({
+  ...SuperThreadLaunchKey.fields,
+  input: Schema.Record(Schema.String, Schema.Unknown),
+});
+export type SuperThreadPendingLaunch = typeof SuperThreadPendingLaunch.Type;
+
 /**
  * Present only on a super thread, fixed at creation. `members` is append-only and holds only
  * threads this thread launched itself, which is what keeps every thread in at most one group.
@@ -106,6 +141,13 @@ export const SuperThreadState = Schema.Struct({
   members: Schema.Array(SuperThreadMember),
   /** Absent until the agent draws one. */
   map: Schema.optionalKey(SuperThreadMap),
+  /** Absent while no forwarded launch awaits its answer. */
+  pendingLaunches: Schema.optionalKey(Schema.Array(SuperThreadPendingLaunch)),
+  /**
+   * Runs it started on members in linked environments, followed until they end, so a restart
+   * here still wakes it for them.
+   */
+  following: Schema.optionalKey(Schema.Array(SuperThreadMemberRun)),
 });
 export type SuperThreadState = typeof SuperThreadState.Type;
 
@@ -125,12 +167,45 @@ export const SuperThreadInternalCommand = Schema.Union([
     commandId: CommandId,
     threadId: ThreadId,
     member: SuperThreadMember,
+    /** The pending launch this record answers, which it ends. */
+    launch: Schema.optional(SuperThreadLaunchKey),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("super_thread.launch.pending"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    launch: SuperThreadPendingLaunch,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("super_thread.launch.end"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    launch: SuperThreadLaunchKey,
   }),
   Schema.Struct({
     type: Schema.Literal("super_thread.map.update"),
     commandId: CommandId,
     threadId: ThreadId,
     update: SuperThreadMapUpdate,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("super_thread.member.follow"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    run: SuperThreadMemberRun,
+  }),
+  /**
+   * A member's run outcome, which wakes the super thread unless it is settled or archived. The
+   * command id names the outcome, so each wakes it once; outcomes that arrive while a wake is
+   * still queued join that wake.
+   */
+  Schema.Struct({
+    type: Schema.Literal("super_thread.member.wake"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    run: SuperThreadMemberRun,
+    outcome: SuperThreadMemberOutcome,
+    title: Schema.optional(Schema.String),
   }),
 ]);
 export type SuperThreadInternalCommand = typeof SuperThreadInternalCommand.Type;

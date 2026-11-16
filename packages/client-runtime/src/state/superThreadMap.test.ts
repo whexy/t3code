@@ -2,8 +2,10 @@ import type { SuperThreadMap, SuperThreadMapNode } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  SUPER_THREAD_MAP_METRICS,
   layoutSuperThreadMap,
   resolveSuperThreadMapNodeState,
+  SUPER_THREAD_MAP_SIDE_LABEL_WIDTH,
   superThreadMapChangesSince,
 } from "./superThreadMap.ts";
 
@@ -14,6 +16,7 @@ const thread = (overrides: Partial<NonNullable<Linked>> = {}): NonNullable<Linke
   hasPendingUserInput: false,
   pendingSubagentRequest: null,
   pendingGuestMessageCount: 0,
+  pendingBackgroundTasks: [],
   runtime: null,
   latestRun: null,
   settledOverride: null,
@@ -30,6 +33,12 @@ describe("resolveSuperThreadMapNodeState", () => {
     runtime: runtime("idle"),
     latestRun: { status: "completed" } as NonNullable<Linked>["latestRun"],
   });
+  const awaitingOwnWork = thread({
+    ...finished,
+    pendingBackgroundTasks: [
+      { kind: "command", taskId: "tlc", awaited: true },
+    ] as NonNullable<Linked>["pendingBackgroundTasks"],
+  });
   const notStarted = thread({ runtime: runtime("idle") });
   const settled = thread({ settledOverride: "settled" });
 
@@ -38,6 +47,12 @@ describe("resolveSuperThreadMapNodeState", () => {
     ["a failed thread outranks the agent's word", "dropped", [failed], "failed"],
     ["dropped outranks a thread still running", "dropped", [running], "dropped"],
     ["a running thread outranks blocked and done", "done", [running], "working"],
+    [
+      "a thread awaiting its own background work is still working",
+      "active",
+      [awaitingOwnWork, settled],
+      "working",
+    ],
     ["the agent's blocked shows once threads stop", "blocked", [finished], "blocked"],
     ["the agent's done shows once threads stop", "done", [finished], "done"],
     ["every linked thread finished reads as done", "active", [finished, settled], "done"],
@@ -92,12 +107,46 @@ describe("layoutSuperThreadMap", () => {
     expect(layout.edges.map((edge) => edge.label)).toContain("same bucket");
   });
 
+  it("spaces columns and lanes by the metrics it is given", () => {
+    const metrics = { ...SUPER_THREAD_MAP_METRICS, nodeWidth: 140, columnGap: 28, margin: 0 };
+    const layout = layoutSuperThreadMap(map, { metrics });
+    const at = where(layout);
+    expect(at.wdl![0]! - at.rgw![0]!).toBe(140 + 28);
+    expect(layout.width).toBeLessThan(layoutSuperThreadMap(map).width);
+    const [ceph, apps] = layout.lanes;
+    expect(apps!.y).toBe(ceph!.y + ceph!.height + metrics.laneGap);
+  });
+
   it("keeps every position when only statuses and text change", () => {
     const changed = {
       ...map,
       nodes: map.nodes.map((n) => ({ ...n, status: "done" as const, title: `${n.id}!` })),
     };
     expect(where(layoutSuperThreadMap(changed))).toEqual(where(layoutSuperThreadMap(map)));
+  });
+
+  it("narrows nodes to fit a given width, but not below a readable minimum", () => {
+    const full = layoutSuperThreadMap(map);
+    const fitted = layoutSuperThreadMap(map, { availableWidth: full.width - 40 });
+    expect(fitted.width).toBeLessThanOrEqual(full.width - 40);
+    expect(fitted.nodeWidth).toBeLessThan(full.nodeWidth);
+    expect(layoutSuperThreadMap(map, { availableWidth: 9999 })).toEqual(full);
+    expect(layoutSuperThreadMap(map, { availableWidth: 100 }).nodeWidth).toBeGreaterThan(100);
+  });
+
+  it("puts the label of a bend between two nodes of one column beside the bend", () => {
+    const layout = layoutSuperThreadMap({
+      nodes: [node("a"), node("b")],
+      edges: [{ from: "a", to: "b", kind: "relates", label: "shared file" }],
+    });
+    const [edge] = layout.edges;
+    expect(edge!.labelAnchor).toBe("side");
+    expect(edge!.labelX).toBeGreaterThan(layout.nodes[0]!.x + layout.nodeWidth);
+    expect(layout.width).toBeGreaterThanOrEqual(edge!.labelX + SUPER_THREAD_MAP_SIDE_LABEL_WIDTH);
+    const anchors = Object.fromEntries(
+      layoutSuperThreadMap(map).edges.map((e) => [`${e.from}>${e.to}`, e.labelAnchor]),
+    );
+    expect(anchors).toMatchObject({ "rgw>wdl": "center", "wdl>ota": "side" });
   });
 
   it("lays out a dependency cycle instead of looping", () => {

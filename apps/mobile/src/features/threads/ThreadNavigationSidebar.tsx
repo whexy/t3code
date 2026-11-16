@@ -77,6 +77,7 @@ import {
 import { useSelectWorkspaceDetail } from "../layout/workspace/useSelectWorkspaceDetail";
 import { NativeScrollView } from "../../native/NativeScrollViewMarker";
 import { SuperThreadListSections } from "../super-threads/SuperThreadListSections";
+import { superThreadLevelItems } from "../super-threads/superThreadLevel";
 import { useSuperThreadList } from "../super-threads/useSuperThreadList";
 
 type SidebarListItem =
@@ -569,11 +570,18 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
   );
   const superThreadSections = (
     <SuperThreadListSections
-      sections={superThreadList.sections}
+      list={superThreadList}
       pane="sidebar"
       selectedThreadKey={activeNewTask ? null : props.selectedThreadKey}
       onSelectThread={handleSelectThread}
-      onSettleThread={settleThread}
+      memberRowHost={{
+        fullSwipeWidth: props.width - 20,
+        onSwipeableWillOpen: handleSwipeableWillOpen,
+        onSwipeableClose: handleSwipeableClose,
+        simultaneousSwipeGesture: sidebarScrollGesture,
+        onOpenThreadPullRequests: handleOpenThreadPullRequests,
+        onNewThreadOnBranch: props.onNewThreadOnBranch,
+      }}
     />
   );
   const showAddEnvironment =
@@ -625,7 +633,7 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
               <AnimatedLegendList
                 renderScrollComponent={NativeScrollView}
                 itemLayoutAnimation={THREAD_SIDEBAR_ROW_LAYOUT}
-                data={listItems}
+                data={superThreadLevelItems(superThreadList, listItems)}
                 drawDistance={500}
                 estimatedItemSize={64}
                 extraData={listExtraData}
@@ -683,7 +691,7 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
               {/* oxlint-disable-next-line t3code/require-registered-list-scroll -- The Android sidebar has no native header to register with. */}
               <AnimatedLegendList
                 itemLayoutAnimation={THREAD_SIDEBAR_ROW_LAYOUT}
-                data={listItems}
+                data={superThreadLevelItems(superThreadList, listItems)}
                 drawDistance={500}
                 estimatedItemSize={64}
                 extraData={listExtraData}

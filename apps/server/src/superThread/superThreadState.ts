@@ -5,6 +5,7 @@ import {
   type OrchestrationV2AppThread,
   type OrchestrationV2ThreadShell,
   type SuperThreadInternalCommand,
+  type SuperThreadLaunchKey,
   type SuperThreadMap,
   type SuperThreadMapEdgeRef,
   type SuperThreadMapUpdate,
@@ -14,10 +15,16 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 
+/** Followed runs beyond this drop the oldest, so an unreachable environment cannot grow the list. */
+const SUPER_THREAD_MAX_FOLLOWING = 50;
+
+export const isSameMember = (left: SuperThreadMember, right: SuperThreadMember) =>
+  left.environmentId === right.environmentId && left.threadId === right.threadId;
+
 /** The thread a super thread command leaves, or why it refuses. */
 export function applySuperThreadCommand(
   thread: OrchestrationV2AppThread,
-  command: SuperThreadInternalCommand,
+  command: Exclude<SuperThreadInternalCommand, { readonly type: "super_thread.member.wake" }>,
   now: DateTime.Utc,
 ): OrchestrationV2AppThread | { readonly refused: string } {
   const state = thread.superThread;
@@ -26,15 +33,45 @@ export function applySuperThreadCommand(
   switch (command.type) {
     case "super_thread.member.record": {
       const { environmentId, threadId } = command.member;
-      if (
-        state.members.some(
-          (member) => member.environmentId === environmentId && member.threadId === threadId,
-        )
-      ) {
+      const listed = state.members.some((member) =>
+        isSameMember(member, { environmentId, threadId }),
+      );
+      const recorded = listed ? state : { ...state, members: [...state.members, command.member] };
+      return {
+        ...thread,
+        superThread: command.launch ? withoutLaunch(recorded, command.launch) : recorded,
+      };
+    }
+    case "super_thread.member.follow": {
+      const { run } = command;
+      if (!state.members.some((member) => isSameMember(member, run))) {
+        return { refused: `Thread ${run.threadId} is not a member of ${thread.id}.` };
+      }
+      const following = state.following ?? [];
+      if (following.some((entry) => isSameMember(entry, run) && entry.runId === run.runId)) {
         return thread;
       }
-      return { ...thread, superThread: { ...state, members: [...state.members, command.member] } };
+      return {
+        ...thread,
+        superThread: {
+          ...state,
+          following: [...following, run].slice(-SUPER_THREAD_MAX_FOLLOWING),
+        },
+      };
     }
+    case "super_thread.launch.pending":
+      return {
+        ...thread,
+        superThread: {
+          ...state,
+          pendingLaunches: [
+            ...(withoutLaunch(state, command.launch).pendingLaunches ?? []),
+            command.launch,
+          ],
+        },
+      };
+    case "super_thread.launch.end":
+      return { ...thread, superThread: withoutLaunch(state, command.launch) };
     case "super_thread.map.update": {
       const map = applySuperThreadMapUpdate(
         state.map,
@@ -46,6 +83,21 @@ export function applySuperThreadCommand(
     }
   }
 }
+
+const sameLaunch = (a: SuperThreadLaunchKey, b: SuperThreadLaunchKey) =>
+  a.environmentId === b.environmentId &&
+  a.requestNamespace === b.requestNamespace &&
+  a.clientRequestId === b.clientRequestId;
+
+/** Leaves the key out rather than empty, so a super thread with nothing pending stores nothing. */
+const withoutLaunch = (
+  state: NonNullable<OrchestrationV2AppThread["superThread"]>,
+  launch: SuperThreadLaunchKey,
+): NonNullable<OrchestrationV2AppThread["superThread"]> => {
+  const { pendingLaunches, ...rest } = state;
+  const left = (pendingLaunches ?? []).filter((pending) => !sameLaunch(pending, launch));
+  return left.length === 0 ? rest : { ...rest, pendingLaunches: left };
+};
 
 const edgeKey = (edge: SuperThreadMapEdgeRef) => JSON.stringify([edge.from, edge.to]);
 const memberKey = (member: SuperThreadMember) =>

@@ -65,6 +65,9 @@ import {
   CHILD_PULL_REQUEST_REPORT_NEXT,
   PullRequestsToolkit,
 } from "../../apps/server/src/mcp/toolkits/pullRequests/tools.ts";
+import { SuperThreadToolkit } from "../../apps/server/src/mcp/toolkits/superThread/tools.ts";
+import { ThreadWaitAnyToolkit } from "../../apps/server/src/mcp/toolkits/threadWaitAny/tools.ts";
+import { superThreadRoleContext } from "../../apps/server/src/superThread/superThreadRole.ts";
 import { ThemeToolkit } from "../../apps/server/src/mcp/toolkits/theme/tools.ts";
 import { ThreadToolkit } from "../../apps/server/src/mcp/toolkits/thread/tools.ts";
 import { WorktreeToolkit } from "../../apps/server/src/mcp/toolkits/worktree/tools.ts";
@@ -100,6 +103,9 @@ const MODELS = {
   "claude-opus-5-5": "Opus 5.5",
   "gpt-6.1-sol": "GPT-6.1 Sol",
   "gpt-6-astra": "GPT-6 Astra",
+  "claude-haiku-5-5": "Haiku 5.5",
+  "gpt-6-luna": "GPT-6 Luna",
+  "gpt-6.1-terra": "GPT-6.1 Terra",
 } as const;
 type Model = keyof typeof MODELS;
 /** GPT models replay a Codex capture through CLIProxyAPI, the rest a Claude Code capture. */
@@ -309,6 +315,8 @@ export const McpToolUseCase = Schema.Struct({
     harness: Schema.optional(Schema.Literals(["claude", "codex"])),
     /** The Linked environments beta is on, so T3 lists its link tools. */
     linkedEnvironments: Schema.optional(Schema.Boolean),
+    /** The thread is a super thread: T3 lists its map tools and puts its role ahead of `prompt`. */
+    superThread: Schema.optional(Schema.Boolean),
     /** delegate_task `role` for a delegated child. T3 builds the child's first message from it. */
     delegateRole: Schema.optional(OrchestratorMcpTaskRole),
     context: Schema.optional(Schema.String),
@@ -460,6 +468,8 @@ const t3SourceTools: ReadonlyArray<Tool.Any> = [
   DeviceToolkit,
   HtmlToolkit,
   MessageToolkit,
+  SuperThreadToolkit,
+  ThreadWaitAnyToolkit,
 ].flatMap((toolkit): ReadonlyArray<Tool.Any> => Object.values(toolkit.tools));
 // McpHttpServer decodes arguments with each tool's JSON codec, which drops undeclared keys.
 const t3InputDecoders = new Map(
@@ -515,10 +525,19 @@ const pastedSecret = (name: string, input: Readonly<Record<string, unknown>>) =>
 const hiddenFromSubagents = enabledWhen(McpInvocationContext.hiddenFromSubagents);
 // The Linked environments beta starts off, and T3 lists its tools only while it is on.
 const hiddenWhileLinksOff = enabledWhen(McpInvocationContext.hiddenWhileLinksOff);
-const visibleT3Tools = (options: { readonly subagent?: boolean; readonly links?: boolean }) =>
+// T3 lists the map tools only on a super thread.
+const superThreadOnly = new Set(
+  Object.keys(SuperThreadToolkit.tools).map((name) => `${T3_PREFIX}${name}`),
+);
+const visibleT3Tools = (options: {
+  readonly subagent?: boolean;
+  readonly links?: boolean;
+  readonly superThread?: boolean;
+}) =>
   t3Tools.filter(
     (tool) =>
       (options.links === true || !hiddenWhileLinksOff.has(tool.name)) &&
+      (options.superThread === true || !superThreadOnly.has(tool.name)) &&
       !(options.subagent === true && hiddenFromSubagents.has(tool.name)),
   );
 
@@ -629,6 +648,7 @@ export const buildBase = (
     readonly keepUserInstructions: boolean;
     readonly subagent?: boolean;
     readonly links?: boolean;
+    readonly superThread?: boolean;
     /** A native subagent starts from its task: T3 appends nothing to its system prompt. */
     readonly nativeSubagent?: boolean;
     /** false: the thread has no agent device access, so T3's text leaves devices out. */
@@ -725,6 +745,7 @@ const buildCodexBase = (
     readonly effort?: string | undefined;
     readonly subagent?: boolean;
     readonly links?: boolean;
+    readonly superThread?: boolean;
     /** false: the thread has no agent device access, so T3's text leaves devices out. */
     readonly deviceAccess?: boolean;
     /** false: the thread has no agent browser access, so T3's text leaves the browser out. */
@@ -1098,8 +1119,13 @@ export const buildMessages = (sample: Sample) => {
     testCase.promptContext === undefined
       ? testCase.prompt
       : projectComposerContextForProvider({ text: testCase.prompt, ...testCase.promptContext });
-  const prompt =
-    sideChatContext === undefined ? userText : withInlineContext(sideChatContext, userText);
+  const inlineContext = [
+    superThreadRoleContext(testCase.setup.superThread ? { superThread: { members: [] } } : {}),
+    sideChatContext ?? "",
+  ]
+    .filter((part) => part !== "")
+    .join("\n\n");
+  const prompt = inlineContext === "" ? userText : withInlineContext(inlineContext, userText);
   const childPrompt = () => taskPrompt({ task: prompt, role: delegateRole });
   if (testCase.prompt !== "")
     push("user", text(role === "delegated-child" ? childPrompt() : prompt));
@@ -2559,6 +2585,7 @@ const main = Effect.gen(function* () {
     deviceAccess: boolean,
     browserAccess: boolean,
     links: boolean,
+    superThread: boolean,
   ): Effect.Effect<Base, Schema.SchemaError> =>
     codex
       ? decodeCodexCapture(template).pipe(
@@ -2569,6 +2596,7 @@ const main = Effect.gen(function* () {
               effort: flags.effort,
               subagent: role === "delegated-child",
               links,
+              superThread,
               deviceAccess,
               browserAccess,
             }),
@@ -2582,6 +2610,7 @@ const main = Effect.gen(function* () {
               subagent: role === "delegated-child",
               nativeSubagent: role === "native-subagent",
               links,
+              superThread,
               deviceAccess,
               browserAccess,
             });
@@ -2594,19 +2623,29 @@ const main = Effect.gen(function* () {
         );
   // Codex has no native subagents; its cases with that role run as top-level threads.
   const baseKey = ({ setup }: McpToolUseCase) =>
-    `${codex && setup.role === "native-subagent" ? "top" : setup.role}:${setup.world?.deviceAgentAccess !== false}:${setup.world?.browserAgentAccess !== false}:${setup.linkedEnvironments === true}`;
-  const base = yield* buildFor("top", true, true, false);
-  const bases = new Map<string, Base>([["top:true:true:false", base]]);
+    `${codex && setup.role === "native-subagent" ? "top" : setup.role}:${setup.world?.deviceAgentAccess !== false}:${setup.world?.browserAgentAccess !== false}:${setup.linkedEnvironments === true}:${setup.superThread === true}`;
+  const base = yield* buildFor("top", true, true, false, false);
+  const bases = new Map<string, Base>([["top:true:true:false:false", base]]);
   for (const testCase of selected) {
     const key = baseKey(testCase);
     if (bases.has(key)) continue;
-    const [role = "top", device, browser, links] = key.split(":") as [
+    const [role = "top", device, browser, links, superThread] = key.split(":") as [
       McpToolUseCase["setup"]["role"],
       string,
       string,
       string,
+      string,
     ];
-    bases.set(key, yield* buildFor(role, device === "true", browser === "true", links === "true"));
+    bases.set(
+      key,
+      yield* buildFor(
+        role,
+        device === "true",
+        browser === "true",
+        links === "true",
+        superThread === "true",
+      ),
+    );
   }
   const baseFor = (testCase: McpToolUseCase) => bases.get(baseKey(testCase)) ?? base;
   const effort = flags.effort ?? base.codex?.reasoning.effort ?? "high";
