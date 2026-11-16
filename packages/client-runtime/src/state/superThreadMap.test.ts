@@ -2,6 +2,7 @@ import type { SuperThreadMap, SuperThreadMapNode } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  SUPER_THREAD_MAP_METRICS,
   layoutSuperThreadMap,
   resolveSuperThreadMapNodeState,
   SUPER_THREAD_MAP_SIDE_LABEL_WIDTH,
@@ -104,6 +105,16 @@ describe("layoutSuperThreadMap", () => {
     }
     expect(apps!.y).toBeGreaterThanOrEqual(ceph!.y + ceph!.height);
     expect(layout.edges.map((edge) => edge.label)).toContain("same bucket");
+  });
+
+  it("spaces columns and lanes by the metrics it is given", () => {
+    const metrics = { ...SUPER_THREAD_MAP_METRICS, nodeWidth: 140, columnGap: 28, margin: 0 };
+    const layout = layoutSuperThreadMap(map, { metrics });
+    const at = where(layout);
+    expect(at.wdl![0]! - at.rgw![0]!).toBe(140 + 28);
+    expect(layout.width).toBeLessThan(layoutSuperThreadMap(map).width);
+    const [ceph, apps] = layout.lanes;
+    expect(apps!.y).toBe(ceph!.y + ceph!.height + metrics.laneGap);
   });
 
   it("keeps every position when only statuses and text change", () => {

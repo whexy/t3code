@@ -1,14 +1,11 @@
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
-import {
-  layoutSuperThreadMap,
-  superThreadMapChangesSince,
-} from "@t3tools/client-runtime/state/super-thread-map";
+import { superThreadMapChangesSince } from "@t3tools/client-runtime/state/super-thread-map";
 import type {
   ScopedThreadRef,
   SuperThreadMap as SuperThreadMapState,
   SuperThreadMember,
 } from "@t3tools/contracts";
-import { use, useMemo, useState } from "react";
+import { use, useState } from "react";
 import { Pressable, ScrollView, View } from "react-native";
 
 import { AppBar } from "../../components/ui/AppBar";
@@ -52,13 +49,26 @@ export function SuperThreadPanel(props: {
   const superThread = detail?.projection.thread.superThread;
   const members = superThread?.members ?? shell?.source.superThread?.members ?? [];
   const map = superThread?.map ?? null;
-  const layout = useMemo(() => (map === null ? null : layoutSuperThreadMap(map)), [map]);
   const shownNode = map?.nodes.find((node) => node.id === shownNodeId) ?? null;
   const since = map === null ? null : superThreadMapChangesSince(map, seenAt);
 
   return (
     <SheetPane>
-      <AppBar title={shownNode?.title ?? "Super thread"} />
+      <AppBar
+        title={shownNode?.title ?? "Super thread"}
+        subtitle={shownNode === null ? shell?.title : undefined}
+        actions={
+          shownNode === null && map !== null && map.nodes.length > 0
+            ? [
+                {
+                  accessibilityLabel: "Open the map full screen",
+                  icon: "arrow.up.left.and.arrow.down.right",
+                  onPress: () => setFullScreen(true),
+                },
+              ]
+            : []
+        }
+      />
       <ScreenContent>
         <ScrollView
           className="flex-1"
@@ -75,14 +85,12 @@ export function SuperThreadPanel(props: {
             />
           ) : (
             <>
-              <View className="gap-1 px-2">
+              <View className="gap-1.5 px-2">
                 <Text textRole="footnote" className="font-t3-medium text-foreground-muted">
                   Goal
                 </Text>
                 {map !== null && map.goal.trim().length > 0 ? (
-                  <Text selectable className="text-base text-foreground">
-                    {map.goal}
-                  </Text>
+                  <SuperThreadGoal goal={map.goal} />
                 ) : (
                   <Text className="text-sm text-foreground-muted">
                     {detail === null
@@ -112,32 +120,13 @@ export function SuperThreadPanel(props: {
                   ))}
                 </View>
               ) : null}
-              {map !== null && layout !== null && since !== null ? (
+              {map !== null && since !== null ? (
                 <View className="gap-2">
-                  <View className="flex-row items-center justify-between px-2">
-                    <Text textRole="footnote" className="font-t3-medium text-foreground-muted">
-                      Map
-                    </Text>
-                    {map.nodes.length > 0 ? (
-                      <Pressable
-                        accessibilityRole="button"
-                        accessibilityLabel="Open the map full screen"
-                        onPress={() => setFullScreen(true)}
-                        className="min-h-11 flex-row items-center gap-1.5 pl-3"
-                        style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
-                      >
-                        <SymbolView
-                          name="arrow.up.left.and.arrow.down.right"
-                          size={13}
-                          tintColorClassName="accent-primary"
-                        />
-                        <Text className="text-sm font-t3-medium text-primary">Full screen</Text>
-                      </Pressable>
-                    ) : null}
-                  </View>
+                  <Text textRole="footnote" className="px-2 font-t3-medium text-foreground-muted">
+                    Task map
+                  </Text>
                   <SuperThreadMap
                     map={map}
-                    layout={layout}
                     addedNodeIds={since.addedNodeIds}
                     onOpenThread={props.onOpenThread}
                     onShowNode={setShownNodeId}
@@ -153,7 +142,7 @@ export function SuperThreadPanel(props: {
           )}
         </ScrollView>
         {/* Covers the map rather than replacing it, so the map keeps its zoom and scroll. */}
-        {shownNode !== null ? (
+        {shownNode !== null && map !== null ? (
           <View className="absolute inset-0 bg-sheet-solid">
             <ScrollView
               className="flex-1"
@@ -170,16 +159,15 @@ export function SuperThreadPanel(props: {
                 <SymbolView name="chevron.left" size={14} tintColorClassName="accent-primary" />
                 <Text className="text-base text-primary">Map</Text>
               </Pressable>
-              <SuperThreadNodeDetail node={shownNode} onOpenThread={props.onOpenThread} />
+              <SuperThreadNodeDetail node={shownNode} map={map} onOpenThread={props.onOpenThread} />
             </ScrollView>
           </View>
         ) : null}
-        {map !== null && layout !== null ? (
+        {map !== null ? (
           <SuperThreadMapFullScreen
             visible={fullScreen}
             title={shell?.title ?? "Super thread"}
             map={map}
-            layout={layout}
             addedNodeIds={since?.addedNodeIds ?? new Set()}
             onClose={() => setFullScreen(false)}
             onOpenThread={props.onOpenThread}
@@ -187,6 +175,48 @@ export function SuperThreadPanel(props: {
         ) : null}
       </ScreenContent>
     </SheetPane>
+  );
+}
+
+const GOAL_LINES = 3;
+
+/** Long goals fold to a few lines, like long messages in the conversation. */
+function SuperThreadGoal(props: { readonly goal: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const [clamped, setClamped] = useState(false);
+  return (
+    <View className="items-start gap-1">
+      {/* Measures the whole goal unclamped; a clamped Text reports only the lines it shows. */}
+      <Text
+        textRole="body"
+        aria-hidden
+        pointerEvents="none"
+        className="absolute inset-x-0 top-0 opacity-0"
+        onTextLayout={(event) => setClamped(event.nativeEvent.lines.length > GOAL_LINES)}
+      >
+        {props.goal}
+      </Text>
+      <Text
+        selectable
+        textRole="body"
+        className="text-foreground"
+        numberOfLines={expanded ? undefined : GOAL_LINES}
+      >
+        {props.goal}
+      </Text>
+      {clamped ? (
+        <Pressable
+          accessibilityRole="button"
+          hitSlop={8}
+          onPress={() => setExpanded(!expanded)}
+          style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
+        >
+          <Text textRole="footnote" className="font-t3-medium text-primary">
+            {expanded ? "Show less" : "Show full goal"}
+          </Text>
+        </Pressable>
+      ) : null}
+    </View>
   );
 }
 
