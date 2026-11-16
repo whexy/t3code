@@ -12,6 +12,10 @@ linked machines.
 
 Only you can start a super thread. An agent can't turn its own thread into one.
 
+The super thread's agent hands the work to the threads it starts instead of doing it itself. If your
+own agent instructions or skills say how a super thread should coordinate, for example that it may
+make small changes itself, the agent follows them.
+
 ## The section and the panel
 
 Each super thread gets its own sidebar section, above your other threads. The super thread is the
