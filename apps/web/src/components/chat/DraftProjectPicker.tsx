@@ -3,7 +3,7 @@ import { composerDraftHasUserContent, useComposerDraftStore } from "~/composerDr
 import { resolveEnvironmentMachineKind, type ScopedProjectRef } from "@t3tools/contracts";
 import { scopedProjectKey, scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
-import { FolderIcon, FolderPlusIcon } from "lucide-react";
+import { FolderIcon, FolderPlusIcon, NetworkIcon } from "lucide-react";
 import { useAtomValue } from "@effect/atom-react";
 import { useRef, useState } from "react";
 
@@ -54,9 +54,15 @@ import { DraftProjectName } from "./DraftProjectName";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { resolveProjectDefaultProviderModelSelection } from "../../providerInstances";
 import { resolveNewThreadModelSelection } from "@t3tools/shared/usageLimits";
+import {
+  setSuperThreadDraft,
+  startSuperThreadDraft,
+  useIsSuperThreadDraft,
+} from "../superThread/superThreadDrafts";
 
 const ADD_PROJECT_VALUE = "add-project";
 const NO_PROJECT_VALUE = "no-project";
+const SUPER_THREAD_VALUE = "super-thread";
 
 interface PickerItem {
   readonly value: string;
@@ -98,6 +104,7 @@ export function DraftProjectPicker({
   const highlightedPickerValueRef = useRef<string | null>(null);
   const { canPinProjectGroup, toggleProjectGroupPin } = useProjectPin();
   const composerFloatingLayerProps = useComposerMenuProps();
+  const isSuperDraft = useIsSuperThreadDraft(draftId);
 
   const environmentLabelById = new Map(
     environments.map((environment) => [environment.environmentId, environment.label] as const),
@@ -161,7 +168,12 @@ export function DraftProjectPicker({
   const pickerItems: readonly PickerItem[] = useOrderWhileOpen(
     [
       ...menuEntries.map(({ group }) => ({ value: group.projectKey, label: group.displayName })),
-      ...(scratchWorkspaceRoot === null ? [] : [{ value: NO_PROJECT_VALUE, label: "No project" }]),
+      ...(scratchWorkspaceRoot === null
+        ? []
+        : [
+            { value: NO_PROJECT_VALUE, label: "No project" },
+            { value: SUPER_THREAD_VALUE, label: "Super thread" },
+          ]),
       { value: ADD_PROJECT_VALUE, label: "Add project" },
     ],
     (item) => item.value,
@@ -176,7 +188,11 @@ export function DraftProjectPicker({
             item.value !== ADD_PROJECT_VALUE &&
             pickerFilter.contains(item, pickerSearch, (candidate) => candidate.label),
         );
-  const selectedValue = isScratchDraft ? NO_PROJECT_VALUE : activeProjectKey;
+  const selectedValue = isSuperDraft
+    ? SUPER_THREAD_VALUE
+    : isScratchDraft
+      ? NO_PROJECT_VALUE
+      : activeProjectKey;
   const selectedPickerItem = pickerItems.find((item) => item.value === selectedValue) ?? null;
   const noProjectShortcut = shortcutLabelForCommand(keybindings, "chat.newWithoutProject");
 
@@ -202,6 +218,7 @@ export function DraftProjectPicker({
       void openProjectDraft(scopeProjectRef(project.environmentId, project.id));
       return;
     }
+    setSuperThreadDraft(draftId, false);
     setLogicalProjectDraftThreadId(
       logicalProjectKey,
       scopeProjectRef(project.environmentId, project.id),
@@ -259,13 +276,28 @@ export function DraftProjectPicker({
     return true;
   };
 
-  const triggerName = isScratchDraft ? "No project" : (activeProjectTitle ?? "Choose a project");
-  const triggerIcon =
-    activeProjectGroup && !isScratchDraft ? (
-      <ProjectFavicon project={activeProjectGroup} className="size-3 shrink-0" />
-    ) : (
-      <FolderIcon className="size-3 shrink-0" aria-hidden="true" />
-    );
+  const startSuperThread = () => {
+    if (draftId && isScratchDraft) {
+      setSuperThreadDraft(draftId, true);
+      return;
+    }
+    if (scratchTargetEnvironmentId !== null) {
+      void startSuperThreadDraft(scratchTargetEnvironmentId, openProjectDraft);
+    }
+  };
+
+  const triggerName = isSuperDraft
+    ? "Super thread"
+    : isScratchDraft
+      ? "No project"
+      : (activeProjectTitle ?? "Choose a project");
+  const triggerIcon = isSuperDraft ? (
+    <NetworkIcon className="size-3 shrink-0" aria-hidden="true" />
+  ) : activeProjectGroup && !isScratchDraft ? (
+    <ProjectFavicon project={activeProjectGroup} className="size-3 shrink-0" />
+  ) : (
+    <FolderIcon className="size-3 shrink-0" aria-hidden="true" />
+  );
 
   if (!canChooseProject) {
     return (
@@ -304,7 +336,15 @@ export function DraftProjectPicker({
           openAddProject();
           return;
         }
+        if (item.value === SUPER_THREAD_VALUE) {
+          startSuperThread();
+          return;
+        }
         if (item.value === NO_PROJECT_VALUE) {
+          if (isSuperDraft && draftId) {
+            setSuperThreadDraft(draftId, false);
+            return;
+          }
           void startScratch();
           return;
         }
@@ -357,7 +397,10 @@ export function DraftProjectPicker({
         <ComboboxEmpty>No matching projects.</ComboboxEmpty>
         <ComboboxList
           footerItems={filteredPickerItems.filter(
-            (item) => item.value === NO_PROJECT_VALUE || item.value === ADD_PROJECT_VALUE,
+            (item) =>
+              item.value === NO_PROJECT_VALUE ||
+              item.value === SUPER_THREAD_VALUE ||
+              item.value === ADD_PROJECT_VALUE,
           )}
         >
           {(item: PickerItem) => {
@@ -368,6 +411,8 @@ export function DraftProjectPicker({
                   <FolderPlusIcon className="size-4 shrink-0" />
                 ) : item.value === NO_PROJECT_VALUE ? (
                   <FolderIcon className="size-4 shrink-0" />
+                ) : item.value === SUPER_THREAD_VALUE ? (
+                  <NetworkIcon className="size-4 shrink-0" />
                 ) : entry ? (
                   <ProjectFavicon project={entry.group} className="size-4 shrink-0" />
                 ) : null}
