@@ -11,7 +11,11 @@ import * as DateTime from "effect/DateTime";
 import { describe, expect, it } from "vite-plus/test";
 
 import { makeThreadFixture } from "../../test-fixtures";
-import { deriveSuperThreadSidebar, resolveSuperThreadRowStatus } from "./superThread.logic";
+import {
+  deriveSuperThreadSidebar,
+  findSuperThreadSectionThread,
+  resolveSuperThreadRowStatus,
+} from "./superThread.logic";
 
 const local = EnvironmentId.make("env-local");
 const remote = EnvironmentId.make("env-remote");
@@ -76,6 +80,18 @@ describe("deriveSuperThreadSidebar", () => {
       rows === null ? [] : [rows],
     );
     expect(result.unclaimedThreads.map((thread) => thread.id)).toEqual(unclaimed);
+  });
+
+  it("finds the header and the members it draws, for their context menus", () => {
+    const { sections } = deriveSuperThreadSidebar({
+      threads,
+      scopedProjectKeys: null,
+      delegatedUnderParent: new Set(),
+      serverConfigs: configs(local),
+    });
+    const find = (thread: typeof header) =>
+      findSuperThreadSectionThread(sections, `${thread.environmentId}:${thread.id}`)?.id;
+    expect([find(header), find(memberA), find(loose)]).toEqual([header.id, memberA.id, undefined]);
   });
 });
 
