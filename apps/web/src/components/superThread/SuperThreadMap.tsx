@@ -2,72 +2,38 @@ import { useAtomValue } from "@effect/atom-react";
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
   SUPER_THREAD_MAP_NODE_HEIGHT,
-  SUPER_THREAD_MAP_NODE_WIDTH,
+  SUPER_THREAD_MAP_SIDE_LABEL_WIDTH,
   SUPER_THREAD_MAP_STATE_LABELS,
   layoutSuperThreadMap,
   resolveSuperThreadMapNodeState,
   superThreadMapChangesSince,
   type SuperThreadMapLayoutNode,
-  type SuperThreadMapNodeState,
 } from "@t3tools/client-runtime/state/super-thread-map";
-import type {
-  EnvironmentId,
-  SuperThreadMap as SuperThreadMapState,
-  SuperThreadMember,
-  ThreadId,
-} from "@t3tools/contracts";
+import type { SuperThreadMap as SuperThreadMapState } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
-import { Atom } from "effect/reactivity";
-import {
-  CircleAlertIcon,
-  CircleCheckIcon,
-  CircleDashedIcon,
-  CircleDotIcon,
-  CircleIcon,
-  CircleSlash2Icon,
-  MessageCircleQuestionIcon,
-  OctagonMinusIcon,
-  UnplugIcon,
-} from "lucide-react";
+import { HistoryIcon, LayersIcon, UnplugIcon, WorkflowIcon } from "lucide-react";
 import { memo, useState } from "react";
 
+import { observeResize } from "~/lib/observeResize";
 import { cn } from "~/lib/utils";
-import { environmentThreadShells } from "../../state/threads";
 import { PreviewCard, PreviewCardPopup, PreviewCardTrigger } from "../ui/preview-card";
+import { linkedShellsAtom, STATE_PRESENTATION, threadsKey } from "./superThreadMapState";
+import { SuperThreadPanelHeading } from "./SuperThreadPanelHeading";
 import { SuperThreadStatus } from "./SuperThreadStatus";
 
-const STATE_PRESENTATION: Record<
-  SuperThreadMapNodeState,
-  { readonly icon: typeof CircleIcon; readonly className: string }
-> = {
-  "needs-you": {
-    icon: MessageCircleQuestionIcon,
-    className: "text-indigo-600 dark:text-indigo-300",
-  },
-  failed: { icon: CircleAlertIcon, className: "text-error-foreground" },
-  dropped: { icon: CircleSlash2Icon, className: "text-muted-foreground" },
-  working: { icon: CircleDashedIcon, className: "text-info-foreground" },
-  blocked: { icon: OctagonMinusIcon, className: "text-warning-foreground" },
-  done: { icon: CircleCheckIcon, className: "text-success-foreground" },
-  active: { icon: CircleDotIcon, className: "text-info-foreground" },
-  planned: { icon: CircleIcon, className: "text-muted-foreground" },
-};
+interface Relation {
+  readonly title: string;
+  readonly label: string | undefined;
+}
 
-// One atom per node's thread list, so a thread's update repaints only the nodes that link it.
-const linkedShellsAtom = Atom.family((key: string) => {
-  const refs = (JSON.parse(key) as Array<[EnvironmentId, ThreadId]>).map(([environmentId, id]) =>
-    scopeThreadRef(environmentId, id),
-  );
-  return Atom.make((get) =>
-    refs.map((ref) => get(environmentThreadShells.quietThreadShellAtom(ref))),
-  );
-});
-
-const threadsKey = (threads: ReadonlyArray<SuperThreadMember> | undefined) =>
-  JSON.stringify((threads ?? []).map((thread) => [thread.environmentId, thread.threadId]));
+// The app's inline boxes (composer context, tool tiles), with the panel rows' hover.
+const NODE_CLASS =
+  "absolute flex flex-col justify-center gap-0.5 rounded-lg border border-border/70 bg-card px-2.5 text-left outline-none hover:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset";
 
 const SuperThreadMapNode = memo(function SuperThreadMapNode(props: {
   readonly placed: SuperThreadMapLayoutNode;
+  readonly width: number;
+  readonly relates: ReadonlyArray<Relation>;
   readonly isNew: boolean;
 }) {
   const { node, x, y } = props.placed;
@@ -76,46 +42,40 @@ const SuperThreadMapNode = memo(function SuperThreadMapNode(props: {
   const [open, setOpen] = useState(false);
   const { icon: Icon, className } = STATE_PRESENTATION[state];
   const only = node.threads?.length === 1 ? node.threads[0]! : null;
-  const box = cn(
-    "absolute flex flex-col justify-center gap-1 rounded-lg border bg-background px-3 text-left outline-none hover:bg-accent/40 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
-    state === "planned" && "border-dashed",
-    state === "needs-you" ? cn(className, "border-current") : "border-border",
-    state === "dropped" && "opacity-55",
-  );
-  const style = {
-    left: x,
-    top: y,
-    width: SUPER_THREAD_MAP_NODE_WIDTH,
-    height: SUPER_THREAD_MAP_NODE_HEIGHT,
-  };
+  const style = { left: x, top: y, width: props.width, height: SUPER_THREAD_MAP_NODE_HEIGHT };
   const content = (
     <>
-      <span className={cn("flex items-center gap-1 text-xs font-medium", className)}>
-        <Icon aria-hidden className="size-3 shrink-0" />
-        {SUPER_THREAD_MAP_STATE_LABELS[state]}
+      <span
+        className={cn(
+          "line-clamp-2 text-sm leading-snug",
+          state === "dropped"
+            ? "font-normal text-foreground/75 line-through"
+            : "font-medium text-foreground",
+        )}
+      >
+        {node.title}
+      </span>
+      <span className="flex min-w-0 items-center gap-1.5 text-xs">
+        <span className={cn("inline-flex shrink-0 items-center gap-1 font-medium", className)}>
+          <Icon aria-hidden className="size-3" />
+          {SUPER_THREAD_MAP_STATE_LABELS[state]}
+        </span>
         {node.threads !== undefined && node.threads.length > 1 ? (
-          <span className="text-muted-foreground">· {node.threads.length} threads</span>
+          <span className="truncate text-secondary-label">· {node.threads.length} threads</span>
         ) : null}
         {unreachable ? (
           <UnplugIcon
             aria-label="A thread can't be reached"
-            className="size-3 text-muted-foreground"
+            className="size-3 shrink-0 text-muted-foreground"
           />
         ) : null}
         {props.isNew ? (
           <span
+            role="img"
             aria-label="New since you looked"
-            className="ml-auto size-1.5 rounded-full bg-primary"
+            className="ml-auto size-1.5 shrink-0 rounded-full bg-primary"
           />
         ) : null}
-      </span>
-      <span
-        className={cn(
-          "line-clamp-2 text-sm leading-snug font-medium text-foreground",
-          state === "dropped" && "line-through",
-        )}
-      >
-        {node.title}
       </span>
     </>
   );
@@ -126,12 +86,17 @@ const SuperThreadMapNode = memo(function SuperThreadMapNode(props: {
         closeDelay={150}
         render={
           only === null ? (
-            <button type="button" className={box} style={style} onClick={() => setOpen(true)} />
+            <button
+              type="button"
+              className={NODE_CLASS}
+              style={style}
+              onClick={() => setOpen(true)}
+            />
           ) : (
             <Link
               to="/$environmentId/$threadId"
               params={{ environmentId: only.environmentId, threadId: only.threadId }}
-              className={box}
+              className={NODE_CLASS}
               style={style}
             />
           )
@@ -146,6 +111,16 @@ const SuperThreadMapNode = memo(function SuperThreadMapNode(props: {
             <p className="whitespace-pre-wrap text-muted-foreground">{node.detail}</p>
           ) : null}
           {node.note ? <p className="whitespace-pre-wrap text-foreground">{node.note}</p> : null}
+          {props.relates.length > 0 ? (
+            <ul className="flex flex-col gap-0.5 text-xs text-muted-foreground">
+              {props.relates.map((relation) => (
+                <li key={relation.title}>
+                  Related to {relation.title}
+                  {relation.label ? `: ${relation.label}` : null}
+                </li>
+              ))}
+            </ul>
+          ) : null}
           {node.threads !== undefined && node.threads.length > 0 ? (
             <ul className="flex flex-col gap-1 border-t border-border pt-2">
               {node.threads.map((thread, index) => {
@@ -159,8 +134,11 @@ const SuperThreadMapNode = memo(function SuperThreadMapNode(props: {
                     ) : (
                       <Link
                         to="/$environmentId/$threadId"
-                        params={{ environmentId: thread.environmentId, threadId: thread.threadId }}
-                        className="flex items-center gap-2 rounded-md px-1 py-0.5 outline-none hover:bg-accent/40 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+                        params={{
+                          environmentId: thread.environmentId,
+                          threadId: thread.threadId,
+                        }}
+                        className="flex items-center gap-2 rounded-md px-1 py-0.5 outline-none hover:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
                       >
                         <span className="min-w-0 flex-1 truncate">{shell.title}</span>
                         <SuperThreadStatus thread={shell} />
@@ -184,20 +162,29 @@ export function SuperThreadMap(props: {
   readonly seenAt: string | null | undefined;
 }) {
   const { map } = props;
-  const layout = layoutSuperThreadMap(map);
+  const [availableWidth, setAvailableWidth] = useState<number>();
   const since = superThreadMapChangesSince(map, props.seenAt);
-
+  const layout = layoutSuperThreadMap(map, availableWidth === undefined ? {} : { availableWidth });
+  const titleById = new Map(map.nodes.map((node) => [node.id, node.title]));
+  const relates = new Map<string, Array<Relation>>();
+  for (const edge of map.edges) {
+    if (edge.kind !== "relates") continue;
+    const from = titleById.get(edge.from) ?? edge.from;
+    const to = titleById.get(edge.to) ?? edge.to;
+    relates.set(edge.from, [...(relates.get(edge.from) ?? []), { title: to, label: edge.label }]);
+    relates.set(edge.to, [...(relates.get(edge.to) ?? []), { title: from, label: edge.label }]);
+  }
+  const labelled = layout.lanes.some((lane) => lane.group !== null);
   return (
-    <section aria-label="Task map" className="flex min-w-0 flex-col gap-2">
-      <h2 className="text-sm font-medium text-foreground">Map</h2>
+    <>
       {since.changes.length > 0 ? (
-        <div className="flex flex-col gap-1 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs">
-          <p className="font-medium text-foreground">
-            {since.changes.length === 1
-              ? "The plan changed since you looked"
-              : `The plan changed ${since.changes.length} times since you looked`}
-          </p>
-          <ul className="flex flex-col gap-0.5 text-muted-foreground">
+        <section aria-label="Changed since you looked" className="space-y-0.5">
+          <SuperThreadPanelHeading
+            icon={HistoryIcon}
+            title="Changed since you looked"
+            count={since.changes.length}
+          />
+          <ul className="flex flex-col gap-0.5 px-2.5 text-xs text-muted-foreground">
             {since.changes.map((change) => (
               <li key={change.revision}>
                 {change.reason}
@@ -207,82 +194,114 @@ export function SuperThreadMap(props: {
               </li>
             ))}
           </ul>
-        </div>
+        </section>
       ) : null}
-      {map.nodes.length === 0 ? (
-        <p className="text-sm text-muted-foreground">The agent has not drawn any work yet.</p>
-      ) : (
-        // min-w-0: a flex item otherwise widens to the whole map and the page clips its right edge.
-        <div className="max-h-[70vh] min-w-0 overflow-auto rounded-xl border border-border/70 bg-muted/20">
-          <div className="relative" style={{ width: layout.width, height: layout.height }}>
-            {layout.lanes.map((lane) =>
-              lane.group === null ? null : (
-                <div
-                  key={lane.group}
-                  aria-hidden
-                  className="absolute inset-x-2 rounded-lg border border-border/60"
-                  style={{ top: lane.y, height: lane.height }}
-                >
-                  <span className="absolute top-1 left-3 text-xs font-medium text-muted-foreground">
-                    {lane.group}
-                  </span>
-                </div>
-              ),
-            )}
-            <svg
-              aria-hidden
-              className="pointer-events-none absolute inset-0 text-muted-foreground"
-              width={layout.width}
-              height={layout.height}
+      <section aria-label="Task map" className="space-y-0.5">
+        {labelled ? null : (
+          <SuperThreadPanelHeading icon={WorkflowIcon} title="Task map" count={map.nodes.length} />
+        )}
+        {map.nodes.length === 0 ? (
+          <p className="px-2.5 py-1 text-sm text-muted-foreground">
+            The agent has not drawn any work yet.
+          </p>
+        ) : (
+          // -ml-2.5 lines the nodes up with the panel's headings; min-w-0 keeps a wide map
+          // scrolling inside the panel instead of widening it.
+          <div
+            ref={(element) => {
+              if (element === null) return;
+              const update = () => setAvailableWidth(element.clientWidth);
+              update();
+              return observeResize(element, update);
+            }}
+            className="-ml-2.5 max-h-[70vh] min-w-0 overflow-auto"
+          >
+            <div
+              className="relative min-w-full"
+              style={{ width: layout.width, height: layout.height }}
             >
-              <defs>
-                <marker
-                  id="super-thread-map-arrow"
-                  viewBox="0 0 10 10"
-                  refX="9"
-                  refY="5"
-                  markerWidth="7"
-                  markerHeight="7"
-                  orient="auto-start-reverse"
-                >
-                  <path d="M0,0 L10,5 L0,10 z" fill="currentColor" />
-                </marker>
-              </defs>
-              {layout.edges.map((edge) => (
-                <path
-                  key={`${edge.from}\u0000${edge.to}`}
-                  d={edge.path}
-                  fill="none"
-                  stroke="currentColor"
-                  strokeOpacity={0.7}
-                  strokeWidth={1.25}
-                  {...(edge.kind === "depends"
-                    ? { markerEnd: "url(#super-thread-map-arrow)" }
-                    : { strokeDasharray: "4 4" })}
+              {layout.lanes.map((lane) =>
+                labelled ? (
+                  // The lane's name in the panel's heading style, across the map's width.
+                  <div
+                    key={lane.group ?? ""}
+                    className="absolute inset-x-0"
+                    style={{ top: lane.y + 2, left: 10 }}
+                  >
+                    <SuperThreadPanelHeading
+                      icon={LayersIcon}
+                      title={lane.group ?? "Other"}
+                      count={
+                        layout.nodes.filter(({ node }) => (node.group ?? null) === lane.group)
+                          .length
+                      }
+                    />
+                  </div>
+                ) : null,
+              )}
+              <svg
+                aria-hidden
+                className="pointer-events-none absolute inset-0 text-muted-foreground"
+                width={layout.width}
+                height={layout.height}
+              >
+                <defs>
+                  <marker
+                    id="super-thread-map-arrow"
+                    viewBox="0 0 10 10"
+                    refX="9"
+                    refY="5"
+                    markerWidth="6"
+                    markerHeight="6"
+                    orient="auto-start-reverse"
+                  >
+                    <path d="M0,0 L10,5 L0,10 z" fill="currentColor" />
+                  </marker>
+                </defs>
+                {layout.edges.map((edge) => (
+                  <path
+                    key={`${edge.from}\u0000${edge.to}`}
+                    d={edge.path}
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth={1}
+                    {...(edge.kind === "depends"
+                      ? { markerEnd: "url(#super-thread-map-arrow)" }
+                      : { strokeDasharray: "3 3" })}
+                  />
+                ))}
+              </svg>
+              {layout.edges.map((edge) =>
+                edge.label === undefined ? null : (
+                  <span
+                    key={`${edge.from}\u0000${edge.to}`}
+                    className={cn(
+                      "pointer-events-none absolute -translate-y-1/2 truncate bg-background px-1 text-xs text-muted-foreground",
+                      edge.labelAnchor === "center" && "-translate-x-1/2",
+                    )}
+                    style={{
+                      left: edge.labelAnchor === "side" ? edge.labelX + 8 : edge.labelX,
+                      top: edge.labelY,
+                      maxWidth: SUPER_THREAD_MAP_SIDE_LABEL_WIDTH,
+                    }}
+                  >
+                    {edge.label}
+                  </span>
+                ),
+              )}
+              {layout.nodes.map((placed) => (
+                <SuperThreadMapNode
+                  key={placed.node.id}
+                  placed={placed}
+                  width={layout.nodeWidth}
+                  relates={relates.get(placed.node.id) ?? []}
+                  isNew={since.addedNodeIds.has(placed.node.id)}
                 />
               ))}
-            </svg>
-            {layout.edges.map((edge) =>
-              edge.label === undefined ? null : (
-                <span
-                  key={`${edge.from}\u0000${edge.to}`}
-                  className="pointer-events-none absolute max-w-40 -translate-x-1/2 -translate-y-1/2 truncate rounded bg-background px-1 text-2xs text-muted-foreground"
-                  style={{ left: edge.labelX, top: edge.labelY }}
-                >
-                  {edge.label}
-                </span>
-              ),
-            )}
-            {layout.nodes.map((placed) => (
-              <SuperThreadMapNode
-                key={placed.node.id}
-                placed={placed}
-                isNew={since.addedNodeIds.has(placed.node.id)}
-              />
-            ))}
+            </div>
           </div>
-        </div>
-      )}
-    </section>
+        )}
+      </section>
+    </>
   );
 }
