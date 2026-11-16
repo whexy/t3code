@@ -267,7 +267,7 @@ import {
 } from "./sidebar/SidebarThreadRow";
 import { SidebarDraftBlock } from "./sidebar/SidebarDraftBlock";
 import { SuperThreadSections } from "./superThread/SuperThreadSections";
-import { deriveSuperThreadSidebar } from "./superThread/superThread.logic";
+import { deriveSuperThreadSidebar, findSuperThreadMember } from "./superThread/superThread.logic";
 import {
   SidebarProjectFolderHeader,
   sidebarFolderRowId,
@@ -2603,7 +2603,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           await handleMultiSelectContextMenu(position);
           return;
         }
-        const thread = threadByKeyRef.current.get(threadKey);
+        const member = findSuperThreadMember(superThreadSidebar.sections, threadKey);
+        const thread = threadByKeyRef.current.get(threadKey) ?? member;
         if (!thread) return;
         const threadWorkspacePath =
           thread.worktreePath ??
@@ -2660,8 +2661,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               supports: {
                 settlement: configLoaded,
                 autoSettleOptOut: supportsAutoSettleOptOut,
-                snooze: configLoaded,
-                pinning: configLoaded,
+                snooze: configLoaded && member === undefined,
+                pinning: configLoaded && member === undefined,
                 titleRegeneration: configLoaded,
               },
               snoozePresets,
@@ -3494,6 +3495,13 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                           environmentLabelById={environmentLabelById}
                           routeThreadKey={routeRowThreadKey}
                           onSettle={attemptSettle}
+                          onContextMenu={handleThreadContextMenu}
+                          renamingThreadKey={renamingThreadKey}
+                          renamingTitle={renamingTitle}
+                          onStartRename={startThreadRename}
+                          onRenameTitleChange={setRenamingTitle}
+                          onCommitRename={commitThreadRename}
+                          onCancelRename={cancelThreadRename}
                         />,
                       ];
                       for (const item of sidebarListItems) {
