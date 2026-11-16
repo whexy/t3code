@@ -41,8 +41,10 @@ files only through short seams, so the nightly rebase rarely conflicts.
   not shown.
 - **The sidebar section is derived on the client.** A section is shown while the
   super thread or any member is unsettled. It lists the super thread as its
-  header and the unsettled members below it, members needing input or done first
-  and working ones last. Grouped threads leave Pinned, Active and Working.
+  header and the unsettled members below it: members needing the person (or
+  failed) first, then working ones, then finished ones, by the task map's own
+  definitions so a row and its map node never disagree. Grouped threads leave
+  Pinned, Active and Working.
   Settled members sit on the Settled shelf like any thread. A client that cannot
   reach the super thread's environment shows its members as ordinary threads.
 - **Settling the header settles the group; unsettling it does not.** Settling the

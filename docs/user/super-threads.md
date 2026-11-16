@@ -19,8 +19,11 @@ make small changes itself, the agent follows them.
 ## The section and the panel
 
 Each super thread gets its own sidebar section, above your other threads. The super thread is the
-section's header, and the threads it started are listed under it, those that need you or are done
-first. They don't appear in your other sections.
+section's header, and the threads it started are listed under it. They don't appear in your other
+sections. Threads that need you, such as those waiting for an answer or approval or whose run
+failed, come first. Threads still working, including those waiting on their own background work,
+come next, and finished threads come last. Within each group the most recently active thread is
+on top, and threads move as their state changes.
 
 A thread in the section works like any other thread row: hover over it on the web and desktop to
 settle it, or right-click it to rename, archive or delete it. On mobile, swipe it to settle, or
