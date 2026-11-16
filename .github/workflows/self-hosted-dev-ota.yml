@@ -49,6 +49,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           HAS_OTA_PUBLISH_TOKEN: ${{ secrets.OTA_PUBLISH_TOKEN != '' }}
+          HAS_OTA_INCOMING_ACCESS_KEY_ID: ${{ secrets.OTA_INCOMING_ACCESS_KEY_ID != '' }}
+          HAS_OTA_INCOMING_SECRET_ACCESS_KEY: ${{ secrets.OTA_INCOMING_SECRET_ACCESS_KEY != '' }}
         run: node scripts/self-hosted/dev-ota.ts
 
   # The web-hub job's build; the bundle's root is what the hub image serves from /app/web.
@@ -251,6 +253,13 @@ jobs:
           done
           echo "platforms=${platforms# }" >> "$GITHUB_OUTPUT"
 
+      # Before the download, since checkout cleans the workspace.
+      - if: steps.ready.outputs.platforms != ''
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: scripts/self-hosted
+          filter: blob:none
+
       - if: steps.ready.outputs.platforms != ''
         uses: actions/download-artifact@v8
         with:
@@ -265,22 +274,23 @@ jobs:
           PLAN: ${{ needs.plan.outputs.plan }}
           PLATFORMS: ${{ steps.ready.outputs.platforms }}
           OTA_PUBLISH_TOKEN: ${{ secrets.OTA_PUBLISH_TOKEN }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.OTA_INCOMING_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.OTA_INCOMING_SECRET_ACCESS_KEY }}
         run: |
           commit="$(jq -r .commit <<< "$PLAN")"
           message="$(jq -r .message <<< "$PLAN")"
           for platform in $PLATFORMS; do
             dir="ota/$platform"
-            # The token reaches curl on a descriptor, never in a process's arguments.
-            if response="$(curl -fsS --retry 3 -H @<(printf 'Authorization: Bearer %s\n' "$OTA_PUBLISH_TOKEN") \
-              --form-string runtimeVersion="$(jq -r ".$platform.runtimeVersion" <<< "$PLAN")" \
-              -F "dist=@$dir/dist.tgz;type=application/gzip" \
-              -F "expoConfig=@$dir/expo-config.json;type=application/json" \
-              --form-string message="$message" --form-string gitCommit="$commit" \
-              https://ota.clusters.work/api/apps/t3code/channels/dev/updates)"; then
-              echo "$platform=published($(jq -r '[.updates[].id] | join(",")' <<< "$response"))" >> "$RUNNER_TEMP/status"
+            if response="$(scripts/self-hosted/ota-publish.sh t3code dev "$platform" \
+              "$(jq -r ".$platform.runtimeVersion" <<< "$PLAN")" \
+              "$dir/dist.tgz" "$dir/expo-config.json" "$message" "$commit")"; then
+              status="published($(jq -r '[.updates[].id] | join(",")' <<< "$response"))"
+            elif (($? == 3)); then
+              status="failed(upload)"
             else
-              echo "$platform=failed(publish)" >> "$RUNNER_TEMP/status"
+              status="failed(publish)"
             fi
+            echo "$platform=$status" >> "$RUNNER_TEMP/status"
           done
 
       - name: Summary

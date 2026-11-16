@@ -76,8 +76,11 @@ desktop app's main and preload (`apps/desktop/src`), or the hub's
 `server.ts` and Dockerfile. Anything else waits for the next release build;
 the run summary's `dev-ota:` line says which client was skipped and why.
 
-The workflow publishes through the OTA server's public API and skips until
-the repository secret `OTA_PUBLISH_TOKEN` holds its publish token
+The workflow uploads each archive to the `ota-incoming` bucket on
+`s3.clusters.work` with the `OTA_INCOMING_ACCESS_KEY_ID` and
+`OTA_INCOMING_SECRET_ACCESS_KEY` key pair, which can only write, then
+publishes it by that `distKey` through the OTA server's public API with
+`OTA_PUBLISH_TOKEN`. It skips until all three repository secrets are set
 (clusters-work `docs/ota.md`).
 
 ## Using it outside the fleet
