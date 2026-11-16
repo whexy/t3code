@@ -864,17 +864,14 @@ export function useThreadActions() {
     const action = ThreadUndo.begin("settle", scopedThreadKey(target));
     const result = await settleThreadMutation({
       environmentId: target.environmentId,
-      input: { threadId: target.threadId, expectedLatestRunId: superSettle?.expectedLatestRunId },
+      input: { threadId: target.threadId },
     });
     if (result._tag !== "Success") {
       action.finish();
       return result;
     }
-    void superSettle?.settleMembers((ref, expectedLatestRunId) =>
-      settleThreadMutation({
-        environmentId: ref.environmentId,
-        input: { threadId: ref.threadId, expectedLatestRunId },
-      }),
+    void superSettle?.settleMembers((ref) =>
+      settleThreadMutation({ environmentId: ref.environmentId, input: { threadId: ref.threadId } }),
     );
     if (wokeAt !== null) {
       markThreadVisited(scopedThreadKey(target), wokeAt);
