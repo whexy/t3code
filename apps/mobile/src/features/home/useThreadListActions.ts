@@ -4,7 +4,7 @@ import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell
 import * as ThreadUndo from "@t3tools/client-runtime/state/thread-undo";
 import { showThreadUndoNotice } from "./thread-undo-notice";
 import { canSnooze } from "@t3tools/client-runtime/state/thread-settled";
-import { AuthOrchestrationOperateScope, type RunId } from "@t3tools/contracts";
+import { AuthOrchestrationOperateScope } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Haptics from "expo-haptics";
 import { msg } from "gt-react-native";
@@ -137,7 +137,6 @@ function useThreadActionExecutor(
     onStarted?: () => void,
     restoreUnsettledAt?: string | null,
     onSucceeded?: (value: unknown) => void,
-    expectedLatestRunId?: RunId | null,
   ) => {
     const triage = action === "settle" || action === "unsettle";
     if (!checkThreadOperationPermission(thread, actionFailureTitle(action), triage)) return false;
@@ -198,10 +197,7 @@ function useThreadActionExecutor(
                       : deleteMutation
               )({
                 environmentId: thread.environmentId,
-                input: {
-                  threadId: thread.id,
-                  ...(expectedLatestRunId === undefined ? {} : { expectedLatestRunId }),
-                },
+                input: { threadId: thread.id },
               }),
         (result) => result._tag === "Success",
       );
@@ -367,18 +363,11 @@ export function useThreadListActions(): {
     const key = scopedThreadKey(thread.environmentId, thread.id);
     const plan = ThreadUndo.planThreadUndo("settle", thread);
     let claim: ReturnType<typeof ThreadUndo.begin> | undefined;
-    const succeeded = await executeAction(
-      "settle",
-      thread,
-      () => {
-        ThreadUndo.invalidate("pin", key);
-        ThreadUndo.invalidate("snooze", key);
-        claim = ThreadUndo.begin("settle", key);
-      },
-      undefined,
-      undefined,
-      superSettle?.expectedLatestRunId,
-    );
+    const succeeded = await executeAction("settle", thread, () => {
+      ThreadUndo.invalidate("pin", key);
+      ThreadUndo.invalidate("snooze", key);
+      claim = ThreadUndo.begin("settle", key);
+    });
     if (succeeded) superSettle?.settleMembers();
     if (claim) {
       if (succeeded) offerUndo(thread, "Settled", claim, plan);
