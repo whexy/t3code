@@ -3,13 +3,15 @@ import { presentThreadShell } from "@t3tools/client-runtime/state/models";
 import {
   EnvironmentId,
   ProjectId,
+  RunId,
   ThreadId,
   type OrchestrationV2ThreadShell,
 } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import { describe, expect, it } from "vite-plus/test";
 
 import { makeThreadFixture } from "../../test-fixtures";
-import { deriveSuperThreadSidebar } from "./superThread.logic";
+import { deriveSuperThreadSidebar, resolveSuperThreadRowStatus } from "./superThread.logic";
 
 const local = EnvironmentId.make("env-local");
 const remote = EnvironmentId.make("env-remote");
@@ -74,5 +76,39 @@ describe("deriveSuperThreadSidebar", () => {
       rows === null ? [] : [rows],
     );
     expect(result.unclaimedThreads.map((thread) => thread.id)).toEqual(unclaimed);
+  });
+});
+
+describe("resolveSuperThreadRowStatus", () => {
+  const completed = {
+    latestRunId: RunId.make("run-1"),
+    status: "completed",
+    latestRunCompletedAt: DateTime.makeUnsafe("2026-06-20T00:10:00.000Z"),
+  } as const;
+  it.each([
+    {
+      name: "a finished thread reads Done while unread",
+      source: completed,
+      unread: true,
+      expected: "done",
+    },
+    {
+      name: "a finished thread shows nothing once read",
+      source: completed,
+      unread: false,
+      expected: null,
+    },
+    {
+      name: "a starting thread reads Setting up",
+      source: {
+        latestRunId: RunId.make("run-2"),
+        status: "preparing",
+        activeRunId: RunId.make("run-2"),
+      },
+      unread: false,
+      expected: "setting-up",
+    },
+  ] as const)("$name", ({ source, unread, expected }) => {
+    expect(resolveSuperThreadRowStatus(shell("t", projectA, local, source), unread)).toBe(expected);
   });
 });

@@ -3590,6 +3590,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                         <SuperThreadSections
                           key="super-threads"
                           sections={superThreadSidebar.sections}
+                          projectByKey={projectByKey}
                           projectDisplayNameByKey={projectDisplayNameByKey}
                           environmentLabelById={environmentLabelById}
                           routeThreadKey={routeRowThreadKey}
