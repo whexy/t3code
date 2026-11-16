@@ -10,8 +10,11 @@
 (* Threads: S, the super thread on E1. L, a child S launches locally, and *)
 (* L2, the thread a retry of that launch starts after an E1 crash (the     *)
 (* launch id derives from the provider session, which a restart replaces). *)
-(* R, a child S launches in the linked environment E2. D, a delegate_task  *)
-(* child of S. O, an outside thread on E1 the super agent only messages.   *)
+(* R, a child S launches in the linked environment E2, and R2, the thread  *)
+(* the agent's retry starts there after an E1 crash (E1 scopes the         *)
+(* forwarded clientRequestId by that same provider session). D, a          *)
+(* delegate_task child of S. O, an outside thread on E1 the super agent    *)
+(* only messages.                                                          *)
 (* S2, a second super thread on E2 that launches nothing; it exists to     *)
 (* give "a thread belongs to at most one group" something to break against.*)
 (***************************************************************************)
@@ -31,13 +34,17 @@ CONSTANTS
     SettledMembersLeaveSection, \* a settled member sits on the Settled shelf, not in the section
     HeaderLeavesShelf,       \* a settled super thread whose section shows is the header, not on the shelf
     UnsettleHeaderOnly,      \* unsettling the super thread leaves its members as they are
-    GuardEverySettle         \* the header and runless members are guarded too (null = no run yet)
+    GuardEverySettle,        \* the header and runless members are guarded too (null = no run yet)
+    ReplayRemoteLaunch       \* a remote launch is written down before it goes; E1 replays it after a crash
 
-Threads  == {"S", "L", "L2", "R", "D", "O", "S2"}
+Threads  == {"S", "L", "L2", "R", "R2", "D", "O", "S2"}
 Locals   == {"L", "L2"}               \* launched here: t3_thread_launch or create_threads
-Children == Locals \cup {"R"}         \* what S launches through t3_thread_launch
-Active   == {"S", "L", "L2", "R", "D"} \* threads whose runs the model plays out
-Env(t)   == IF t \in {"R", "S2"} THEN "E2" ELSE "E1"
+Remotes  == {"R", "R2"}               \* launched in E2 through a forwarded t3_thread_launch
+Children == Locals \cup Remotes       \* what S launches through t3_thread_launch
+Active   == {"S", "L", "L2", "R", "R2", "D"} \* threads whose runs the model plays out
+Env(t)   == IF t \in {"R", "R2", "S2"} THEN "E2" ELSE "E1"
+\* The thread an agent's retry starts after an E1 crash replaced its provider session.
+Successor(c) == IF c = "L" THEN "L2" ELSE "R2"
 Phases   == {"idle", "working", "input"}   \* idle with a run behind it is done
 
 VARIABLES
@@ -47,7 +54,9 @@ VARIABLES
     run,        \* ordinal of the latest run
     members,    \* S's superThread.members (environment-qualified ids; env is fixed per thread here)
     members2,   \* S2's superThread.members
-    lpc,        \* each launch call: none, step1, step2, failed, done, abandoned, replaced
+    lpc,        \* each launch call: none, step1, step2, failed, crashed, done, abandoned, replaced
+    pending,    \* remote launches written down on S and not yet answered (pendingLaunches)
+    rpc,        \* E1's replay of each pending launch: none, or record once E2 answered
     retries, crashes, msgs, outages, adopts, cascades,
     reach2,     \* E2 reachable from E1 and from the client
     cstate,     \* the client's settle cascade: idle, confirming, sending
@@ -58,7 +67,7 @@ VARIABLES
     badSettle,  \* ghost: the cascade settled a busy unwarned member, or a thread with newer work
     headerTouched \* ghost: unsettling the header changed a member
 
-vars == <<exists, settled, phase, run, members, members2, lpc, retries, crashes, msgs,
+vars == <<exists, settled, phase, run, members, members2, lpc, pending, rpc, retries, crashes, msgs,
           outages, adopts, cascades, reach2, cstate, targets, seen, warned, guarded, badSettle,
           headerTouched>>
 
@@ -67,7 +76,9 @@ TypeOK ==
     /\ settled \in [Threads -> BOOLEAN]
     /\ phase \in [Threads -> Phases]
     /\ members \subseteq Threads /\ members2 \subseteq Threads
-    /\ lpc \in [Children -> {"none", "step1", "step2", "failed", "done", "abandoned", "replaced"}]
+    /\ lpc \in [Children -> {"none", "step1", "step2", "failed", "crashed", "done", "abandoned",
+                              "replaced"}]
+    /\ pending \subseteq Remotes /\ rpc \in [Remotes -> {"none", "record"}]
     /\ cstate \in {"idle", "confirming", "sending"}
     /\ targets \subseteq Threads /\ warned \subseteq Threads
 
@@ -79,6 +90,7 @@ Init ==
     /\ run = [t \in Threads |-> IF t = "S" THEN 1 ELSE 0]
     /\ members = {} /\ members2 = {}
     /\ lpc = [c \in Children |-> "none"]
+    /\ pending = {} /\ rpc = [c \in Remotes |-> "none"]
     /\ retries = 0 /\ crashes = 0 /\ msgs = 0 /\ outages = 0 /\ adopts = 0 /\ cascades = 0
     /\ reach2 = TRUE
     /\ cstate = "idle" /\ targets = {} /\ seen = [t \in Threads |-> 0] /\ warned = {}
@@ -124,12 +136,14 @@ Create(c) ==
 
 \* Everything the cascade and the client track, for actions that leave it alone.
 cvars == <<cascades, cstate, targets, seen, warned, guarded, badSettle, headerTouched>>
+\* E1's record of remote launches, for actions that leave it alone.
+rvars == <<pending, rpc>>
 
 StartLaunch(c) ==
     /\ c \in {"L", "R"} /\ lpc[c] = "none"
     /\ lpc' = [lpc EXCEPT ![c] = "step1"]
     /\ UNCHANGED <<exists, settled, phase, run, members, members2, retries, crashes, msgs,
-                   outages, adopts, reach2>> /\ UNCHANGED cvars
+                   outages, adopts, reach2>> /\ UNCHANGED cvars /\ UNCHANGED rvars
 
 LocalStep1(c) ==
     /\ c \in Locals /\ lpc[c] = "step1"
@@ -138,7 +152,7 @@ LocalStep1(c) ==
          ELSE /\ Create(c) /\ UNCHANGED members
     /\ lpc' = [lpc EXCEPT ![c] = "step2"]
     /\ UNCHANGED <<settled, members2, retries, crashes, msgs, outages, adopts, reach2>>
-    /\ UNCHANGED cvars
+    /\ UNCHANGED cvars /\ UNCHANGED rvars
 
 LocalStep2(c) ==
     /\ c \in Locals /\ lpc[c] = "step2"
@@ -147,52 +161,86 @@ LocalStep2(c) ==
          ELSE /\ members' = members \cup {c} /\ UNCHANGED <<exists, run, phase>>
     /\ lpc' = [lpc EXCEPT ![c] = "done"]
     /\ UNCHANGED <<settled, members2, retries, crashes, msgs, outages, adopts, reach2>>
-    /\ UNCHANGED cvars
+    /\ UNCHANGED cvars /\ UNCHANGED rvars
 
-\* The forwarded launch runs on E2; E1 learns R's id only from its result.
-RemoteLaunch ==
-    /\ lpc["R"] = "step1"
+\* With ReplayRemoteLaunch, S writes the launch down before it forwards it.
+RemotePending(c) ==
+    /\ ReplayRemoteLaunch /\ c \in Remotes /\ lpc[c] = "step1" /\ c \notin pending
+    /\ pending' = pending \cup {c}
+    /\ UNCHANGED <<exists, settled, phase, run, members, members2, lpc, rpc, retries, crashes,
+                   msgs, outages, adopts, reach2>> /\ UNCHANGED cvars
+
+\* The forwarded launch runs on E2; E1 learns its id only from the result. A call that fails may
+\* still have made the thread there (its answer was lost), so its pending launch stays.
+RemoteLaunch(c) ==
+    /\ c \in Remotes /\ lpc[c] = "step1" /\ (ReplayRemoteLaunch => c \in pending)
     /\ IF reach2
-         THEN /\ Create("R") /\ lpc' = [lpc EXCEPT !["R"] = "step2"]
-         ELSE /\ lpc' = [lpc EXCEPT !["R"] = "failed"] /\ UNCHANGED <<exists, run, phase>>
-    /\ UNCHANGED <<settled, members, members2, retries, crashes, msgs, outages, adopts, reach2>>
+         THEN /\ Create(c) /\ lpc' = [lpc EXCEPT ![c] = "step2"]
+         ELSE /\ lpc' = [lpc EXCEPT ![c] = "failed"]
+              /\ \/ Create(c)
+                 \/ UNCHANGED <<exists, run, phase>>
+    /\ UNCHANGED <<settled, members, members2, pending, rpc, retries, crashes, msgs, outages,
+                   adopts, reach2>>
     /\ UNCHANGED cvars
 
-RemoteRecord ==
-    /\ lpc["R"] = "step2"
-    /\ members' = members \cup {"R"}
-    /\ lpc' = [lpc EXCEPT !["R"] = "done"]
-    /\ UNCHANGED <<exists, settled, phase, run, members2, retries, crashes, msgs, outages,
+\* recordForwardedLaunch: the member and the end of the pending launch commit together.
+RemoteRecord(c) ==
+    /\ c \in Remotes /\ lpc[c] = "step2"
+    /\ members' = members \cup {c}
+    /\ pending' = pending \ {c}
+    /\ lpc' = [lpc EXCEPT ![c] = "done"]
+    /\ UNCHANGED <<exists, settled, phase, run, members2, rpc, retries, crashes, msgs, outages,
                    adopts, reach2>> /\ UNCHANGED cvars
 
-\* E1 restarts: every launch handler in flight on it dies, and the agent's call fails.
+\* After a restart E1 replays each pending launch whose handler is gone, with the same scoped
+\* request id: E2 answers with the thread it already created, or creates it now. While E2 is
+\* unreachable the replay waits. E2 may refuse a launch it never accepted, which ends it. The code
+\* replays only at startup; the model lets it run at any time, a superset.
+ReplayLaunch(c) ==
+    /\ c \in pending /\ rpc[c] = "none" /\ lpc[c] \notin {"step1", "step2"} /\ reach2
+    /\ \/ Create(c) /\ rpc' = [rpc EXCEPT ![c] = "record"] /\ UNCHANGED pending
+       \/ ~exists[c] /\ pending' = pending \ {c} /\ UNCHANGED <<exists, run, phase, rpc>>
+    /\ UNCHANGED <<settled, members, members2, lpc, retries, crashes, msgs, outages, adopts,
+                   reach2>> /\ UNCHANGED cvars
+
+ReplayRecord(c) ==
+    /\ rpc[c] = "record"
+    /\ members' = members \cup {c}
+    /\ pending' = pending \ {c}
+    /\ rpc' = [rpc EXCEPT ![c] = "none"]
+    /\ UNCHANGED <<exists, settled, phase, run, members2, lpc, retries, crashes, msgs, outages,
+                   adopts, reach2>> /\ UNCHANGED cvars
+
+\* E1 restarts: every launch handler and replay in flight on it dies, and the agent's call fails.
 CrashE1 ==
     /\ crashes < MaxCrashes
-    /\ \E c \in Children : lpc[c] \in {"step1", "step2"}
+    /\ \/ \E c \in Children : lpc[c] \in {"step1", "step2"}
+       \/ \E c \in Remotes : rpc[c] # "none"
     /\ crashes' = crashes + 1
-    /\ lpc' = [c \in Children |-> IF lpc[c] \in {"step1", "step2"} THEN "failed" ELSE lpc[c]]
-    /\ UNCHANGED <<exists, settled, phase, run, members, members2, retries, msgs, outages,
-                   adopts, reach2>> /\ UNCHANGED cvars
+    /\ lpc' = [c \in Children |-> IF lpc[c] \in {"step1", "step2"} THEN "crashed" ELSE lpc[c]]
+    /\ rpc' = [c \in Remotes |-> "none"]
+    /\ UNCHANGED <<exists, settled, phase, run, members, members2, pending, retries, msgs,
+                   outages, adopts, reach2>> /\ UNCHANGED cvars
 
-\* A retry with the same clientRequestId. On E2 it replays R: the forwarded call's request
-\* namespace is E1's peer session there, which outlives a restart of E1. A local launch only fails
-\* when E1 crashed, and the resumed agent has a new provider session, so its retry is a new
-\* thread L2.
+\* A retry with the same clientRequestId. After an E2 outage the agent's provider session is the
+\* same, so E2 replays the same launch. After an E1 crash the resumed agent has a new provider
+\* session, which scopes both a local launch id and a forwarded request id, so the retry is a new
+\* thread: L2 or R2.
 Retry(c) ==
-    /\ lpc[c] = "failed" /\ retries < MaxRetries
+    /\ retries < MaxRetries
     /\ retries' = retries + 1
-    /\ IF c = "L"
-         THEN /\ lpc["L2"] = "none"
-              /\ lpc' = [lpc EXCEPT !["L"] = "replaced", !["L2"] = "step1"]
-         ELSE lpc' = [lpc EXCEPT ![c] = "step1"]
+    /\ \/ /\ lpc[c] = "failed"
+          /\ lpc' = [lpc EXCEPT ![c] = "step1"]
+       \/ /\ lpc[c] = "crashed" /\ c \in {"L", "R"} /\ lpc[Successor(c)] = "none"
+          /\ lpc' = [lpc EXCEPT ![c] = "replaced", ![Successor(c)] = "step1"]
     /\ UNCHANGED <<exists, settled, phase, run, members, members2, crashes, msgs, outages,
-                   adopts, reach2>> /\ UNCHANGED cvars
+                   adopts, reach2>> /\ UNCHANGED cvars /\ UNCHANGED rvars
 
 GiveUp(c) ==
-    /\ lpc[c] = "failed"
+    /\ lpc[c] \in {"failed", "crashed"}
     /\ lpc' = [lpc EXCEPT ![c] = "abandoned"]
     /\ UNCHANGED <<exists, settled, phase, run, members, members2, retries, crashes, msgs,
-                   outages, adopts, reach2>> /\ UNCHANGED cvars
+                   outages, adopts, reach2>> /\ UNCHANGED cvars /\ UNCHANGED rvars
 
 DelegateTask ==
     /\ ~exists["D"]
@@ -202,6 +250,7 @@ DelegateTask ==
     /\ members' = IF ExcludeDelegates THEN members ELSE members \cup {"D"}
     /\ UNCHANGED <<settled, members2, lpc, retries, crashes, msgs, outages, adopts, reach2>>
     /\ UNCHANGED cvars
+    /\ UNCHANGED rvars
 
 \* Only possible without LaunchOnlyMembership: an "add this thread" path.
 Adopt ==
@@ -211,6 +260,7 @@ Adopt ==
        \/ exists["L"] /\ members2' = members2 \cup {"L"} /\ UNCHANGED members
     /\ UNCHANGED <<exists, settled, phase, run, lpc, retries, crashes, msgs, outages, reach2>>
     /\ UNCHANGED cvars
+    /\ UNCHANGED rvars
 
 \* ---------------------------------------------------------------------------
 \* Runs and settlement on the servers (Orchestrator dispatchMessage clears
@@ -224,31 +274,36 @@ Message(t) ==
     /\ settled' = [settled EXCEPT ![t] = FALSE]
     /\ UNCHANGED <<exists, members, members2, lpc, retries, crashes, outages, adopts, reach2>>
     /\ UNCHANGED cvars
+    /\ UNCHANGED rvars
 
 Progress(t) ==
     /\ t \in Active /\ exists[t] /\ phase[t] # "idle"
     /\ phase' = [phase EXCEPT ![t] = IF @ = "input" THEN "working" ELSE "input"]
     /\ UNCHANGED <<exists, settled, run, members, members2, lpc, retries, crashes, msgs,
                    outages, adopts, reach2>> /\ UNCHANGED cvars
+    /\ UNCHANGED rvars
 
 Finish(t) ==
     /\ t \in Active /\ exists[t] /\ phase[t] = "working"
     /\ phase' = [phase EXCEPT ![t] = "idle"]
     /\ UNCHANGED <<exists, settled, run, members, members2, lpc, retries, crashes, msgs,
                    outages, adopts, reach2>> /\ UNCHANGED cvars
+    /\ UNCHANGED rvars
 
 AutoSettle(t) ==
     /\ t \in Active /\ exists[t] /\ phase[t] = "idle" /\ ~settled[t]
     /\ settled' = [settled EXCEPT ![t] = TRUE]
     /\ UNCHANGED <<exists, phase, run, members, members2, lpc, retries, crashes, msgs,
                    outages, adopts, reach2>> /\ UNCHANGED cvars
+    /\ UNCHANGED rvars
 
 \* The person settles or unsettles one member row by hand.
 ToggleMember(t) ==
-    /\ t \in {"L", "L2", "R", "D"} /\ Held(t)
+    /\ t \in {"L", "L2", "R", "R2", "D"} /\ Held(t)
     /\ settled' = [settled EXCEPT ![t] = ~@]
     /\ UNCHANGED <<exists, phase, run, members, members2, lpc, retries, crashes, msgs,
                    outages, adopts, reach2>> /\ UNCHANGED cvars
+    /\ UNCHANGED rvars
 
 UnsettleHeader ==
     /\ settled["S"]
@@ -260,12 +315,14 @@ UnsettleHeader ==
     /\ UNCHANGED <<exists, phase, run, members, members2, lpc, retries, crashes, msgs,
                    outages, adopts, reach2, cascades, cstate, targets, seen, warned, guarded,
                    badSettle>>
+    /\ UNCHANGED rvars
 
 Outage ==
     /\ \/ reach2 /\ outages < MaxOutages /\ outages' = outages + 1 /\ reach2' = FALSE
        \/ ~reach2 /\ reach2' = TRUE /\ UNCHANGED outages
     /\ UNCHANGED <<exists, settled, phase, run, members, members2, lpc, retries, crashes,
                    msgs, adopts>> /\ UNCHANGED cvars
+    /\ UNCHANGED rvars
 
 \* ---------------------------------------------------------------------------
 \* The client's settle cascade: planSuperThreadSettle when the person presses
@@ -287,6 +344,7 @@ PlanSettle ==
     /\ cstate' = "confirming"
     /\ UNCHANGED <<exists, settled, phase, run, members, members2, lpc, retries, crashes,
                    msgs, outages, adopts, reach2, badSettle, headerTouched>>
+    /\ UNCHANGED rvars
 
 Confirm ==
     /\ cstate = "confirming"
@@ -294,6 +352,7 @@ Confirm ==
     /\ UNCHANGED <<exists, settled, phase, run, members, members2, lpc, retries, crashes,
                    msgs, outages, adopts, cascades, reach2, targets, seen, warned, guarded,
                    badSettle, headerTouched>>
+    /\ UNCHANGED rvars
 
 \* The person cancels, or the client goes away mid-cascade.
 StopCascade ==
@@ -302,6 +361,7 @@ StopCascade ==
     /\ UNCHANGED <<exists, settled, phase, run, members, members2, lpc, retries, crashes,
                    msgs, outages, adopts, cascades, reach2, seen, warned, guarded, badSettle,
                    headerTouched>>
+    /\ UNCHANGED rvars
 
 \* The person acted on the header directly with its status in view, so only members need a
 \* warning; but no thread may settle on work newer than what the person saw.
@@ -316,11 +376,14 @@ SendSettle(t) ==
                                 \/ (t # "S" /\ phase[t] # "idle" /\ t \notin warned))
     /\ UNCHANGED <<exists, phase, run, members, members2, lpc, retries, crashes, msgs,
                    outages, adopts, cascades, reach2, seen, warned, guarded, headerTouched>>
+    /\ UNCHANGED rvars
 
 Next ==
     \/ \E c \in Children : StartLaunch(c) \/ Retry(c) \/ GiveUp(c)
                            \/ LocalStep1(c) \/ LocalStep2(c)
-    \/ RemoteLaunch \/ RemoteRecord \/ CrashE1
+    \/ \E c \in Remotes : RemotePending(c) \/ RemoteLaunch(c) \/ RemoteRecord(c)
+                          \/ ReplayLaunch(c) \/ ReplayRecord(c)
+    \/ CrashE1
     \/ DelegateTask \/ Adopt
     \/ \E t \in Threads : Message(t) \/ Progress(t) \/ Finish(t) \/ AutoSettle(t)
                           \/ ToggleMember(t) \/ SendSettle(t)
@@ -331,7 +394,10 @@ Spec == Init /\ [][Next]_vars
 \* ---------------------------------------------------------------------------
 \* Rules
 \* ---------------------------------------------------------------------------
-Quiescent == (\A c \in Children : lpc[c] \in {"none", "done", "abandoned", "replaced"}) /\ cstate = "idle"
+Quiescent ==
+    /\ \A c \in Children : lpc[c] \in {"none", "done", "abandoned", "replaced"}
+    /\ pending = {}
+    /\ cstate = "idle"
 
 \* Every member of a super thread is a thread it launched with t3_thread_launch or create_threads.
 MembersOnlyOwnLaunches == members \subseteq Children /\ members2 = {}
@@ -356,14 +422,8 @@ EachThreadPlacedOnce == \A t \in Threads : Held(t) => Cardinality(Places(t)) = 1
 \* Unsettling the super thread never changes a member.
 HeaderUnsettleKeepsMembers == ~headerTouched
 
-\* Once nothing is in flight, every thread S launched is a member. Exception: a launch in the linked
-\* environment whose result E1 never recorded because E1 crashed and the agent did not retry.
+\* Once nothing is in flight, every thread S launched is a member, including a launch in the linked
+\* environment that E1 crashed before recording.
 EveryLaunchJoins ==
-    Quiescent =>
-      \A c \in Children : exists[c] => (c \in members \/ (c = "R" /\ lpc[c] = "abandoned"))
-
-\* EveryLaunchJoins without its exception. Kept as an open finding: no design here records a
-\* linked-environment launch that E1 crashed before recording, short of the child naming its parent.
-EveryLaunchJoinsStrict ==
     Quiescent => \A c \in Children : exists[c] => c \in members
 =============================================================================
