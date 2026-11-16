@@ -14,6 +14,7 @@ const thread = (overrides: Partial<NonNullable<Linked>> = {}): NonNullable<Linke
   hasPendingUserInput: false,
   pendingSubagentRequest: null,
   pendingGuestMessageCount: 0,
+  pendingBackgroundTasks: [],
   runtime: null,
   latestRun: null,
   settledOverride: null,
@@ -30,6 +31,12 @@ describe("resolveSuperThreadMapNodeState", () => {
     runtime: runtime("idle"),
     latestRun: { status: "completed" } as NonNullable<Linked>["latestRun"],
   });
+  const awaitingOwnWork = thread({
+    ...finished,
+    pendingBackgroundTasks: [
+      { kind: "command", taskId: "tlc", awaited: true },
+    ] as NonNullable<Linked>["pendingBackgroundTasks"],
+  });
   const notStarted = thread({ runtime: runtime("idle") });
   const settled = thread({ settledOverride: "settled" });
 
@@ -38,6 +45,12 @@ describe("resolveSuperThreadMapNodeState", () => {
     ["a failed thread outranks the agent's word", "dropped", [failed], "failed"],
     ["dropped outranks a thread still running", "dropped", [running], "dropped"],
     ["a running thread outranks blocked and done", "done", [running], "working"],
+    [
+      "a thread awaiting its own background work is still working",
+      "active",
+      [awaitingOwnWork, settled],
+      "working",
+    ],
     ["the agent's blocked shows once threads stop", "blocked", [finished], "blocked"],
     ["the agent's done shows once threads stop", "done", [finished], "done"],
     ["every linked thread finished reads as done", "active", [finished, settled], "done"],

@@ -5,6 +5,7 @@ import type {
   SuperThreadMapNode,
   SuperThreadMapNodeStatus,
 } from "@t3tools/contracts";
+import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 
 import { type EnvironmentThreadShell, threadRuntimeIsActive } from "./models.ts";
 
@@ -35,6 +36,7 @@ type LinkedThread = Pick<
   | "hasPendingUserInput"
   | "pendingSubagentRequest"
   | "pendingGuestMessageCount"
+  | "pendingBackgroundTasks"
   | "runtime"
   | "latestRun"
   | "settledOverride"
@@ -42,6 +44,11 @@ type LinkedThread = Pick<
 
 const finished = (thread: LinkedThread) =>
   thread.settledOverride === "settled" || thread.latestRun?.status === "completed";
+
+// A thread holding on work it awaits parks its runtime at idle; the sidebar shows it as Waiting.
+const working = (thread: LinkedThread) =>
+  threadRuntimeIsActive(thread.runtime) ||
+  backgroundWorkHoldsCompletion(thread.pendingBackgroundTasks);
 
 const needsPerson = (thread: LinkedThread) =>
   thread.hasPendingApprovals ||
@@ -64,7 +71,7 @@ export function resolveSuperThreadMapNodeState(
     if (known.some(needsPerson)) return "needs-you";
     if (known.some((thread) => thread.runtime?.status === "failed")) return "failed";
     if (status === "dropped") return "dropped";
-    if (known.some((thread) => threadRuntimeIsActive(thread.runtime))) return "working";
+    if (known.some(working)) return "working";
     if (status === "blocked") return "blocked";
     if (status === "done") return "done";
     if (known.length > 0 && !unreachable && known.every(finished)) return "done";
