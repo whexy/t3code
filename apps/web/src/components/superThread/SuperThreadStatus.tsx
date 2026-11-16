@@ -66,6 +66,8 @@ export function useSuperThreadRowState(thread: EnvironmentThreadShell, isActive:
 export function SuperThreadStatusLabel(props: {
   readonly status: SuperThreadRowStatus;
   readonly className?: string;
+  /** The multiline member row uses the larger icon, like the sidebar's multiline rows. */
+  readonly iconSize?: "sm" | "md";
 }) {
   if (props.status === null) return null;
   const { label, icon: Icon, className } = STATUS_PRESENTATION[props.status];
@@ -77,7 +79,7 @@ export function SuperThreadStatusLabel(props: {
         props.className,
       )}
     >
-      <Icon aria-hidden className="size-3 shrink-0" />
+      <Icon aria-hidden className={cn("shrink-0", props.iconSize === "md" ? "size-4" : "size-3")} />
       {label}
     </span>
   );
