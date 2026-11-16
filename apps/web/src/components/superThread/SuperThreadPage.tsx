@@ -8,6 +8,7 @@ import {
   useQuietThreadShell,
   useThreadStatus,
 } from "../../state/entities";
+import { ThreadVisitWatermark } from "../chat/ThreadVisitWatermark";
 import { Button } from "../ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../ui/empty";
 import { SidebarInset } from "../ui/sidebar";
@@ -58,6 +59,7 @@ export function SuperThreadPage(props: { readonly threadRef: ScopedThreadRef }) 
 
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none">
+      {shell === null ? null : <ThreadVisitWatermark threadRef={threadRef} />}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden bg-background">
         <WorkspacePageHeader electron={isElectron} className="border-b border-border">
           <NetworkIcon aria-hidden className="size-4 shrink-0 text-icon-muted" />
