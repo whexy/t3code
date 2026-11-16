@@ -135,6 +135,7 @@ import { useOrchestrationCommand } from "../state/use-orchestration-command";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 import { useScratchProject } from "../hooks/useScratchProject";
 import { useWorkflowEnvironmentIds } from "./workflows/useWorkflowEnvironmentIds";
+import { newSuperThreadPaletteAction } from "./superThread/superThreadPaletteAction";
 import { useStartTriage } from "../hooks/useStartTriage";
 import { pickTriageEnvironment } from "../lib/triageTarget";
 import { useNewProject } from "../hooks/useNewProject";
@@ -1428,6 +1429,7 @@ function OpenCommandPaletteDialog(props: {
       shortcutCommand: "chat.newWithoutProject",
       run: () => startScratchThread(scratchTargetEnvironmentId),
     });
+    actionItems.push(newSuperThreadPaletteAction(scratchTargetEnvironmentId, handleNewThread));
   }
 
   if (triageEnvironmentId !== null && canTriage) {
