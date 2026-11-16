@@ -227,6 +227,7 @@ import {
 } from "./ThreadForkService.ts";
 import { planThreadDeletion } from "./ThreadDeletion.ts";
 import * as SuperThreadState from "../superThread/superThreadState.ts";
+import { isMemberWakeMessage, planMemberWake } from "../superThread/superThreadWake.ts";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ServerSettings from "../serverSettings.ts";
 
@@ -648,6 +649,8 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "super_thread.member.record":
     case "super_thread.launch.pending":
     case "super_thread.launch.end":
+    case "super_thread.member.follow":
+    case "super_thread.member.wake":
     case "super_thread.map.update":
     case "thread.create":
     case "thread.archive":
@@ -16027,9 +16030,37 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       | undefined;
     let updateDelegatedCompletionOnlyRunId: RunId | undefined;
     switch (command.type) {
+      case "super_thread.member.wake": {
+        const { thread, runs } = yield* projectionStore
+          .getThreadRecords(command.threadId, ["runs"])
+          .pipe(mapDispatchError(command));
+        const { messages } = yield* projectionStore
+          .getThreadRecords(command.threadId, ["messages"], {
+            messageIds: runs
+              .filter((run) => run.status === "queued" && isMemberWakeMessage(run.userMessageId))
+              .map((run) => run.userMessageId),
+          })
+          .pipe(mapDispatchError(command));
+        const plan = planMemberWake({ thread, runs, messages }, command, yield* DateTime.now);
+        if ("refused" in plan) {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: plan.refused,
+          });
+        }
+        for (const event of plan.events) {
+          yield* event.type === "message.updated"
+            ? emit(events, command)(event)
+            : emit(events, command)(event);
+        }
+        if (plan.dispatch !== undefined) yield* dispatchMessage(plan.dispatch, events, effects);
+        break;
+      }
       case "super_thread.member.record":
       case "super_thread.launch.pending":
       case "super_thread.launch.end":
+      case "super_thread.member.follow":
       case "super_thread.map.update": {
         const thread = yield* projectionStore
           .getThread(command.threadId)
