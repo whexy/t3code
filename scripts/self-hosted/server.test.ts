@@ -205,8 +205,16 @@ describe("dev updates", () => {
     for (const [name, content] of Object.entries(entries)) {
       const directory = name.endsWith("/");
       const data = Buffer.from(directory ? "" : content);
+      if (name.length > 100) {
+        const longName = Buffer.from(`${name}\0`);
+        const record = Buffer.alloc(512);
+        record.write("././@LongLink", 0, 100);
+        record.write(`${longName.length.toString(8).padStart(11, "0")}\0`, 124);
+        record.write("L", 156);
+        blocks.push(record, longName, Buffer.alloc((512 - (longName.length % 512)) % 512));
+      }
       const header = Buffer.alloc(512);
-      header.write(name, 0, 100);
+      header.write(name.slice(0, 100), 0, 100);
       header.write("0000755\0", 100);
       header.write(`${data.length.toString(8).padStart(11, "0")}\0`, 124);
       header.write(directory ? "5" : "0", 156);
@@ -333,6 +341,18 @@ describe("dev updates", () => {
     expect(releaseChunk.headers.get("Cache-Control")).toContain("immutable");
   });
 
+  it("unpacks large files and long names intact", async () => {
+    const { store, directory, publish } = await makeOta();
+    const chunk = Array.from({ length: 200_000 }, (_, i) => "abcdefghij"[(i * 7) % 10]).join("");
+    const longName = `./assets/${"nested/".repeat(20)}chunk.js`;
+    publish("update-1", tarGz({ "./index.html": "<dev-shell>", [longName]: chunk }));
+    await store.refresh();
+
+    expect(store.current()?.bundle.updateId).toBe("update-1");
+    const unpacked = NodePath.join(directory, "bundles", "update-1", longName);
+    expect(await NodeFSP.readFile(unpacked, "utf8")).toBe(chunk);
+  });
+
   it("reports and sets this browser's choice", async () => {
     const { store, publish } = await makeOta();
     publish("update-1", goodArchive("<dev-shell>"));
@@ -433,6 +453,14 @@ describe("dev updates", () => {
       ({ publish }) => publish("bad", tarGz({ "./index.html": "<bad>", "../escape.txt": "x" })),
     ],
     ["an archive without an app shell", ({ publish }) => publish("bad", tarGz({ "a.txt": "x" }))],
+    [
+      "an archive that ends inside an entry",
+      ({ publish }) =>
+        publish(
+          "bad",
+          NodeZlib.gzipSync(NodeZlib.gunzipSync(goodArchive("<bad>")).subarray(0, 1027)),
+        ),
+    ],
     [
       "an unsigned rollback directive",
       ({ ota }) => {
