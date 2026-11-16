@@ -446,6 +446,7 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
     "super-thread-map",
   ),
   super_thread_map_read: tool(["Read", "Reading", "Read", "the task map"], "super-thread-map-read"),
+  t3_thread_wait_any: tool(["Wait", "Waiting", "Waited", "for T3 threads"], "thread-wait"),
 };
 
 export const T3_MCP_TOOL_NAMES: ReadonlySet<string> = new Set(Object.keys(T3_MCP_TOOLS));

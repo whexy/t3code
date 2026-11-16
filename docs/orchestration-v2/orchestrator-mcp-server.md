@@ -63,14 +63,15 @@ Codex gets T3's MCP server in each thread's `thread/start`, `thread/resume`,
 and `thread/fork` config, with the provider-session token in an
 `Authorization` header. The same server is registered twice:
 
-- `t3-code`: every tool except `t3_thread_wait` and `delegate_task`.
-- `t3-code-direct`: only `t3_thread_wait` and `delegate_task`, with
+- `t3-code`: every tool except `t3_thread_wait`, `t3_thread_wait_any` and
+  `delegate_task`.
+- `t3-code-direct`: only those three, with
   `omit_tools_from = ["code_mode", "deferred"]`.
 
 Code Mode yields a script after about 30 seconds, so the model polls a blocking
-`t3_thread_wait` or `delegate_task` with `mode: "wait"`, resending its context
-on each poll. The second entry makes both direct tool calls, like Codex's own
-wait tools. Codex reports calls as `<server>.<tool>`, so
+`t3_thread_wait`, `t3_thread_wait_any` or `delegate_task` with `mode: "wait"`,
+resending its context on each poll. The second entry makes them direct tool
+calls, like Codex's own wait tools. Codex reports calls as `<server>.<tool>`, so
 `packages/shared/src/t3McpToolPresentation.ts` must resolve both server names.
 Tool display and pending-work detection depend on it.
 
@@ -460,6 +461,26 @@ Waits for a selected run to become `completed`, `failed`, `cancelled`,
 `interrupted`, or `rolled_back`. Without `runId`, it pins the latest run at call
 time; an idle thread returns immediately. A timeout reports the latest durable
 status and does not cancel work.
+
+### `t3_thread_wait_any`
+
+Waits on up to 20 threads, local or on linked environments, and returns every
+one that has an outcome: its latest run ended, it waits for the person (a
+pending approval, question, secret or link card), or it has never run. A thread
+holding on work it awaits still counts as working, as in the sidebar. Readiness
+comes from the thread shell, so the tool agrees with what the person sees.
+
+It is fork-owned, not a list form of `t3_thread_wait`: that tool's contract and
+its forwarded form belong to upstream, and a list would change both.
+
+The result's `cursor` maps a short hash of each thread id to a hash of the
+outcome last returned for it. A call skips outcomes the cursor already holds,
+so a caller looping on it is never handed the same one twice, and the cursor
+moves only for outcomes the call returns. Thread ids are unique across
+environments, so a linked environment's cursor entries merge unchanged. Each
+linked environment gets the same tool with its own threads, in pieces of
+`FORWARDED_WAIT_CHUNK_MS`, so it must run a build that has the tool. Timeouts
+and `next` work as in `t3_thread_wait`.
 
 ### `t3_thread_interrupt`
 
