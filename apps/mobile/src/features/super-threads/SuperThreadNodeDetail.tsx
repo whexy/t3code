@@ -3,7 +3,7 @@ import {
   SUPER_THREAD_MAP_STATE_LABELS,
   resolveSuperThreadMapNodeState,
 } from "@t3tools/client-runtime/state/super-thread-map";
-import type { SuperThreadMapNode, SuperThreadMember } from "@t3tools/contracts";
+import type { SuperThreadMap, SuperThreadMapNode, SuperThreadMember } from "@t3tools/contracts";
 import { Pressable, View } from "react-native";
 
 import { AppText as Text } from "../../components/ui/AppText";
@@ -14,9 +14,10 @@ import { scopedThreadKey } from "../../lib/scopedEntities";
 import { STATE_PRESENTATION, useLinkedShells } from "./SuperThreadMap";
 import { SuperThreadStatus } from "./SuperThreadStatus";
 
-/** What web's hover card shows: purpose, the agent's note and the node's threads. */
+/** What web's hover card shows: purpose, the agent's note, related work and the node's threads. */
 export function SuperThreadNodeDetail(props: {
   readonly node: SuperThreadMapNode;
+  readonly map: Pick<SuperThreadMap, "nodes" | "edges">;
   readonly onOpenThread: (thread: SuperThreadMember) => void;
 }) {
   const { node } = props;
@@ -53,6 +54,7 @@ export function SuperThreadNodeDetail(props: {
           <Text className="text-sm text-foreground-muted">The agent added no notes.</Text>
         ) : null}
       </View>
+      <RelatedWork node={node} map={props.map} />
       {threads.length > 0 ? (
         <ListSection title={threads.length === 1 ? "Thread" : "Threads"}>
           {threads.map((thread, index) => {
@@ -80,6 +82,41 @@ export function SuperThreadNodeDetail(props: {
         </ListSection>
       ) : null}
     </>
+  );
+}
+
+/** The node's edges in words, with the agent's labels, which the map itself leaves out. */
+function RelatedWork(props: {
+  readonly node: SuperThreadMapNode;
+  readonly map: Pick<SuperThreadMap, "nodes" | "edges">;
+}) {
+  const titleOf = new Map(props.map.nodes.map((node) => [node.id, node.title]));
+  const lines = props.map.edges.flatMap((edge) => {
+    const other =
+      edge.from === props.node.id ? edge.to : edge.to === props.node.id ? edge.from : null;
+    const title = other === null ? undefined : titleOf.get(other);
+    if (title === undefined) return [];
+    const text =
+      edge.kind === "relates"
+        ? `Related to ${title}`
+        : edge.to === props.node.id
+          ? `Waits for ${title}`
+          : `${title} waits for this`;
+    return [{ key: `${edge.from}\u0000${edge.to}`, text, label: edge.label }];
+  });
+  if (lines.length === 0) return null;
+  return (
+    <ListSection title="Related work">
+      {lines.map((line, index) => (
+        <View
+          key={line.key}
+          className={cn("gap-0.5 px-4 py-3", index > 0 && "border-t border-border-subtle")}
+        >
+          <Text className="text-base text-foreground">{line.text}</Text>
+          {line.label ? <Text className="text-xs text-foreground-muted">{line.label}</Text> : null}
+        </View>
+      ))}
+    </ListSection>
   );
 }
 
