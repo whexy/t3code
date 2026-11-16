@@ -5,7 +5,7 @@ import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { cn } from "../../lib/cn";
 import { STATUS_LABEL_BY_STATUS } from "../threads/thread-list-v2-items";
-import { resolveThreadListV2Status } from "../threads/threadListV2";
+import { resolveThreadListV2Status, threadHasUnseenCompletion } from "../threads/threadListV2";
 
 const DONE = {
   label: "Done",
@@ -21,7 +21,7 @@ const SETTLED = {
   iconTintClassName: "accent-foreground-muted",
 } as const;
 
-/** The list row's status words and icons, without its timers, unread and wake tracking. */
+/** The list row's status words and icons, without its timers and wake tracking. Done lasts until seen. */
 export function SuperThreadStatus(props: {
   readonly thread: EnvironmentThreadShell;
   readonly className?: string;
@@ -32,9 +32,9 @@ export function SuperThreadStatus(props: {
     thread.settledOverride === "settled"
       ? SETTLED
       : status === "ready"
-        ? thread.latestRun === null
-          ? null
-          : DONE
+        ? threadHasUnseenCompletion(thread)
+          ? DONE
+          : null
         : STATUS_LABEL_BY_STATUS[status];
   if (!presentation) return null;
   const label = presentation.label ?? (status === "waiting" ? "Waiting" : "Working");
