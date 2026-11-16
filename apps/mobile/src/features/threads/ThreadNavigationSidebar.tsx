@@ -81,6 +81,8 @@ import {
 } from "./threadListV2";
 import { useSelectWorkspaceDetail } from "../layout/workspace/useSelectWorkspaceDetail";
 import { NativeScrollView } from "../../native/NativeScrollViewMarker";
+import { SuperThreadListSections } from "../super-threads/SuperThreadListSections";
+import { useSuperThreadList } from "../super-threads/useSuperThreadList";
 
 type SidebarListItem =
   | ThreadListV2ListItem
@@ -271,13 +273,20 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
   } = listEnvironments;
   const resolveProviderInstance = useThreadRowProviderInstanceResolver(providersByEnvironmentId);
   const pendingOrder = usePendingThreadOrder();
+  const superThreadList = useSuperThreadList({
+    threads: launchingThreads,
+    environmentId: options.selectedEnvironmentId,
+    projectRefs: selectedProjectScope?.projectRefs,
+    searchQuery: props.searchQuery,
+    loadedEnvironmentIds: settlementEnvironmentIds,
+  });
   const {
     layout: threadListV2Layout,
     items: threadListV2Items,
     contentOnlyThreadKeys,
     olderSettledShelf,
   } = useThreadListV2({
-    threads: launchingThreads,
+    threads: superThreadList.unclaimedThreads,
     pendingTasks,
     environmentId: options.selectedEnvironmentId,
     projectRefs: selectedProjectScope === null ? null : selectedProjectScope.projectRefs,
@@ -566,6 +575,15 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
       }}
     />
   );
+  const superThreadSections = (
+    <SuperThreadListSections
+      sections={superThreadList.sections}
+      pane="sidebar"
+      selectedThreadKey={activeNewTask ? null : props.selectedThreadKey}
+      onSelectThread={handleSelectThread}
+      onSettleThread={settleThread}
+    />
+  );
   const showAddEnvironment =
     !catalogState.isLoadingConnections &&
     !catalogState.hasReadyEnvironment &&
@@ -642,7 +660,8 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
                 scrollEventThrottle={16}
                 showsVerticalScrollIndicator={false}
                 style={styles.threadList}
-                ListEmptyComponent={listEmpty}
+                ListHeaderComponent={superThreadSections}
+                ListEmptyComponent={superThreadList.sections.length > 0 ? null : listEmpty}
               />
             </GestureDetector>
           </SwipeableScrollGateProvider>
@@ -666,7 +685,7 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
           overflow: "hidden",
         }}
       >
-        {listItems.length === 0 ? (
+        {listItems.length === 0 && superThreadList.sections.length === 0 ? (
           <View className="flex-1 items-center justify-center">{listEmpty}</View>
         ) : (
           <SwipeableScrollGateProvider enabled={swipeEnabled}>
@@ -695,7 +714,8 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
                 scrollEventThrottle={16}
                 showsVerticalScrollIndicator={false}
                 style={styles.threadList}
-                ListEmptyComponent={listEmpty}
+                ListHeaderComponent={superThreadSections}
+                ListEmptyComponent={superThreadList.sections.length > 0 ? null : listEmpty}
               />
             </GestureDetector>
           </SwipeableScrollGateProvider>

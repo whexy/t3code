@@ -39,6 +39,7 @@ import { createDebugLogger } from "../lib/debugLog";
 import type { DraftComposerAttachment } from "../lib/composerImages";
 import { scopedThreadKey } from "../lib/scopedEntities";
 import { buildProjectThreadStartTurnInput } from "../lib/projectThreadStartTurn";
+import { superThreadCreationSpec } from "../features/super-threads/superThreadCreations";
 import { serializeComposerMessageForServer, uploadedComposerContext } from "../lib/composerContext";
 import { prepareTurnAttachments } from "../lib/attachmentUpload";
 import { randomHex } from "../lib/uuid";
@@ -1205,6 +1206,7 @@ export function createThreadOutboxDelivery(): {
         worktreePath: workspace.worktreePath,
         startFromOrigin: workspace.startFromOrigin ?? false,
         worktreeBranchName: buildTemporaryWorktreeBranchName(randomHex),
+        ...(yield* Effect.promise(() => superThreadCreationSpec(queuedMessage.threadId))),
       }),
     });
     if (AsyncResult.isFailure(deliveryResult) && !hasAccess()) return;
