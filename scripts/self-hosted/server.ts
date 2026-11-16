@@ -611,7 +611,7 @@ async function extractTarGz(archivePath: string, target: string) {
 
 function byteReader(source: AsyncIterable<Buffer>) {
   const iterator = source[Symbol.asyncIterator]();
-  let buffered = Buffer.alloc(0);
+  let buffered: Buffer = Buffer.alloc(0);
   const fill = async () => {
     const next = await iterator.next();
     if (next.done) return false;
