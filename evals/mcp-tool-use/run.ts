@@ -68,6 +68,8 @@ import {
   CHILD_PULL_REQUEST_REPORT_NEXT,
   PullRequestsToolkit,
 } from "../../apps/server/src/mcp/toolkits/pullRequests/tools.ts";
+import { SuperThreadToolkit } from "../../apps/server/src/mcp/toolkits/superThread/tools.ts";
+import { superThreadRoleContext } from "../../apps/server/src/superThread/superThreadRole.ts";
 import { ThemeToolkit } from "../../apps/server/src/mcp/toolkits/theme/tools.ts";
 import { ThreadToolkit } from "../../apps/server/src/mcp/toolkits/thread/tools.ts";
 import { WorktreeToolkit } from "../../apps/server/src/mcp/toolkits/worktree/tools.ts";
@@ -103,6 +105,7 @@ const MODELS = {
   "claude-opus-5-5": "Opus 5.5",
   "gpt-6.1-sol": "GPT-6.1 Sol",
   "gpt-6-astra": "GPT-6 Astra",
+  "claude-haiku-5-5": "Haiku 5.5",
   "gpt-6-luna": "GPT-6 Luna",
 } as const;
 type Model = keyof typeof MODELS;
@@ -342,6 +345,8 @@ export const McpToolUseCase = Schema.Struct({
     linkedEnvironments: Schema.optional(Schema.Boolean),
     /** false: the project is on no forge T3 reads, so T3 hides its forge tools. */
     forge: Schema.optional(Schema.Boolean),
+    /** The thread is a super thread: T3 lists its map tools and puts its role ahead of `prompt`. */
+    superThread: Schema.optional(Schema.Boolean),
     /** delegate_task `role` for a delegated child. T3 builds the child's first message from it. */
     delegateRole: Schema.optional(OrchestratorMcpTaskRole),
     context: Schema.optional(Schema.String),
@@ -499,6 +504,7 @@ const t3SourceTools: ReadonlyArray<Tool.Any> = [
   DeviceToolkit,
   HtmlToolkit,
   MessageToolkit,
+  SuperThreadToolkit,
 ].flatMap((toolkit): ReadonlyArray<Tool.Any> => Object.values(toolkit.tools));
 // McpHttpServer decodes arguments with each tool's JSON codec, which drops undeclared keys.
 const t3InputDecoders = new Map(
@@ -570,17 +576,23 @@ const forgeToolNames = new Set(
 /** T3's text for an arm: `raw` drops the PR linking block that names T3's PR tools. */
 const forArm = (value: string, arm: Arm | undefined) =>
   arm === "raw" ? value.replace(`\n\n${PULL_REQUEST_LINKING_INSTRUCTIONS}`, "") : value;
+// T3 lists the map tools only on a super thread.
+const superThreadOnly = new Set(
+  Object.keys(SuperThreadToolkit.tools).map((name) => `${T3_PREFIX}${name}`),
+);
 const visibleT3Tools = (options: {
   readonly subagent?: boolean;
   readonly links?: boolean;
   readonly forge?: boolean;
   readonly arm?: Arm;
+  readonly superThread?: boolean;
 }) =>
   t3Tools.filter(
     (tool) =>
       !(options.arm === "raw" && forgeToolNames.has(tool.name)) &&
       (options.links === true || !hiddenWhileLinksOff.has(tool.name)) &&
       (options.forge !== false || !hiddenWithoutForge.has(tool.name)) &&
+      (options.superThread === true || !superThreadOnly.has(tool.name)) &&
       !(options.subagent === true && hiddenFromSubagents.has(tool.name)),
   );
 
@@ -692,6 +704,7 @@ export const buildBase = (
     readonly subagent?: boolean;
     readonly links?: boolean;
     readonly forge?: boolean;
+    readonly superThread?: boolean;
     /** A native subagent starts from its task: T3 appends nothing to its system prompt. */
     readonly nativeSubagent?: boolean;
     /** false: the thread has no agent device access, so T3's text leaves devices out. */
@@ -790,6 +803,7 @@ const buildCodexBase = (
     readonly subagent?: boolean;
     readonly links?: boolean;
     readonly forge?: boolean;
+    readonly superThread?: boolean;
     /** false: the thread has no agent device access, so T3's text leaves devices out. */
     readonly deviceAccess?: boolean;
     /** false: the thread has no agent browser access, so T3's text leaves the browser out. */
@@ -1222,8 +1236,13 @@ export const buildMessages = (sample: Sample) => {
     testCase.promptContext === undefined
       ? testCase.prompt
       : projectComposerContextForProvider({ text: testCase.prompt, ...testCase.promptContext });
-  const prompt =
-    sideChatContext === undefined ? userText : withInlineContext(sideChatContext, userText);
+  const inlineContext = [
+    superThreadRoleContext(testCase.setup.superThread ? { superThread: { members: [] } } : {}),
+    sideChatContext ?? "",
+  ]
+    .filter((part) => part !== "")
+    .join("\n\n");
+  const prompt = inlineContext === "" ? userText : withInlineContext(inlineContext, userText);
   const childPrompt = () => taskPrompt({ task: prompt, role: delegateRole });
   if (testCase.prompt !== "")
     push("user", text(role === "delegated-child" ? childPrompt() : prompt));
@@ -3217,6 +3236,7 @@ const main = Effect.gen(function* () {
     browserAccess: boolean,
     links: boolean,
     forge: boolean,
+    superThread: boolean,
   ): Effect.Effect<Base, Schema.SchemaError> =>
     codex
       ? decodeCodexCapture(template).pipe(
@@ -3228,6 +3248,7 @@ const main = Effect.gen(function* () {
               subagent: role === "delegated-child",
               links,
               forge,
+              superThread,
               deviceAccess,
               browserAccess,
               arm: flags.arm,
@@ -3243,6 +3264,7 @@ const main = Effect.gen(function* () {
               nativeSubagent: role === "native-subagent",
               links,
               forge,
+              superThread,
               deviceAccess,
               browserAccess,
               arm: flags.arm,
@@ -3256,14 +3278,15 @@ const main = Effect.gen(function* () {
         );
   // Codex has no native subagents; its cases with that role run as top-level threads.
   const baseKey = ({ setup }: McpToolUseCase) =>
-    `${codex && setup.role === "native-subagent" ? "top" : setup.role}:${setup.world?.deviceAgentAccess !== false}:${setup.world?.browserAgentAccess !== false}:${setup.linkedEnvironments === true}:${setup.forge !== false}`;
-  const base = yield* buildFor("top", true, true, false, true);
-  const bases = new Map<string, Base>([["top:true:true:false:true", base]]);
+    `${codex && setup.role === "native-subagent" ? "top" : setup.role}:${setup.world?.deviceAgentAccess !== false}:${setup.world?.browserAgentAccess !== false}:${setup.linkedEnvironments === true}:${setup.forge !== false}:${setup.superThread === true}`;
+  const base = yield* buildFor("top", true, true, false, true, false);
+  const bases = new Map<string, Base>([["top:true:true:false:true:false", base]]);
   for (const testCase of selected) {
     const key = baseKey(testCase);
     if (bases.has(key)) continue;
-    const [role = "top", device, browser, links, forge] = key.split(":") as [
+    const [role = "top", device, browser, links, forge, superThread] = key.split(":") as [
       McpToolUseCase["setup"]["role"],
+      string,
       string,
       string,
       string,
@@ -3277,6 +3300,7 @@ const main = Effect.gen(function* () {
         browser === "true",
         links === "true",
         forge === "true",
+        superThread === "true",
       ),
     );
   }
