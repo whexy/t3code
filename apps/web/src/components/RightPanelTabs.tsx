@@ -116,6 +116,10 @@ import { resolvePullRequestState } from "./pullRequest/pullRequestPresentation";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 import { observeResize } from "~/lib/observeResize";
 import { surfaceShortcutKey } from "~/lib/surfaceShortcutKey";
+import {
+  SUPER_THREAD_SURFACE_TITLE,
+  SuperThreadSurfaceIcon,
+} from "./superThread/superThreadPanelActions";
 
 export interface RightPanelTabsProps {
   mode: PreviewPanelMode;
@@ -603,6 +607,8 @@ function surfaceTitle(
   switch (surface.kind) {
     case "diff":
       return resolve(msg("Diff"));
+    case "super-thread":
+      return SUPER_THREAD_SURFACE_TITLE;
     case "files":
       return resolve(msg("Files"));
     case "file":
@@ -696,6 +702,8 @@ function SurfaceIcon({
       return <PreviewFavicon capturedUrl={previewCapturedUrl} url={previewUrl} />;
     case "diff":
       return <FileDiff className="size-3 shrink-0" />;
+    case "super-thread":
+      return <SuperThreadSurfaceIcon />;
     case "files":
       return <Files className="size-3 shrink-0" />;
     case "file":

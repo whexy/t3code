@@ -12,14 +12,15 @@ linked machines.
 
 Only you can start a super thread. An agent can't turn its own thread into one.
 
-## The section and the page
+## The section and the panel
 
 Each super thread gets its own sidebar section, above your other threads. The super thread is the
 section's header, and the threads it started are listed under it, those that need you or are done
 first. They don't appear in your other sections.
 
-Select the header to open the super thread's page: the goal, the task map, any approvals it is
-waiting on, and a box to message it.
+Select the header to open the super thread's conversation, which works like any other thread. To see
+the goal and the task map beside it, select **Super thread** in the header, or choose **Show goal and
+task map** in the command palette. Select **Super thread** again to hide them.
 
 ## The task map
 
@@ -29,12 +30,11 @@ threads are doing right now, such as working or waiting for you, and otherwise w
 planned, blocked, done or dropped. Hover over a box for its purpose and what counts as done; select
 it to open its thread.
 
-The map is read-only. To change the plan, tell the agent, here or in the transcript. To ask about
-part of the map, paste a screenshot into the message box. When the agent changes the plan while you
-are away, the page lists what changed and marks new boxes.
+The map is read-only. To change the plan, tell the agent in the conversation. To ask about part of
+the map, paste a screenshot into the message box. When the agent changes the plan while the map is
+hidden, the panel lists what changed and marks new boxes the next time you open it.
 
 Threads the agent started but did not put on the map are listed under **Not on the map**.
-**Open transcript** shows the full conversation.
 
 ## Which threads belong
 
