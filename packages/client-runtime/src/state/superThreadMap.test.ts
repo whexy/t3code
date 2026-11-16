@@ -4,6 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   layoutSuperThreadMap,
   resolveSuperThreadMapNodeState,
+  SUPER_THREAD_MAP_SIDE_LABEL_WIDTH,
   superThreadMapChangesSince,
 } from "./superThreadMap.ts";
 
@@ -111,6 +112,30 @@ describe("layoutSuperThreadMap", () => {
       nodes: map.nodes.map((n) => ({ ...n, status: "done" as const, title: `${n.id}!` })),
     };
     expect(where(layoutSuperThreadMap(changed))).toEqual(where(layoutSuperThreadMap(map)));
+  });
+
+  it("narrows nodes to fit a given width, but not below a readable minimum", () => {
+    const full = layoutSuperThreadMap(map);
+    const fitted = layoutSuperThreadMap(map, { availableWidth: full.width - 40 });
+    expect(fitted.width).toBeLessThanOrEqual(full.width - 40);
+    expect(fitted.nodeWidth).toBeLessThan(full.nodeWidth);
+    expect(layoutSuperThreadMap(map, { availableWidth: 9999 })).toEqual(full);
+    expect(layoutSuperThreadMap(map, { availableWidth: 100 }).nodeWidth).toBeGreaterThan(100);
+  });
+
+  it("puts the label of a bend between two nodes of one column beside the bend", () => {
+    const layout = layoutSuperThreadMap({
+      nodes: [node("a"), node("b")],
+      edges: [{ from: "a", to: "b", kind: "relates", label: "shared file" }],
+    });
+    const [edge] = layout.edges;
+    expect(edge!.labelAnchor).toBe("side");
+    expect(edge!.labelX).toBeGreaterThan(layout.nodes[0]!.x + layout.nodeWidth);
+    expect(layout.width).toBeGreaterThanOrEqual(edge!.labelX + SUPER_THREAD_MAP_SIDE_LABEL_WIDTH);
+    const anchors = Object.fromEntries(
+      layoutSuperThreadMap(map).edges.map((e) => [`${e.from}>${e.to}`, e.labelAnchor]),
+    );
+    expect(anchors).toMatchObject({ "rgw>wdl": "center", "wdl>ota": "side" });
   });
 
   it("lays out a dependency cycle instead of looping", () => {
