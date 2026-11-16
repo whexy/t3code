@@ -3322,7 +3322,8 @@ export const OrchestrationV2Command = Schema.Union([
     type: Schema.Literal("thread.settle"),
     commandId: CommandId,
     threadId: ThreadId,
-    expectedLatestRunId: Schema.optional(RunId),
+    /** `null` expects a thread with no run yet. */
+    expectedLatestRunId: Schema.optional(Schema.NullOr(RunId)),
     settledAt: Schema.optional(Schema.DateTimeUtc),
   }),
   /** Rejects changes since snapshotAt or any explicit settled override to preserve user actions. */

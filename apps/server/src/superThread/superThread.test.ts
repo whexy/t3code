@@ -10,6 +10,7 @@ import {
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
+  RunId,
   ThreadId,
   type SuperThreadInternalCommand,
 } from "@t3tools/contracts";
@@ -195,6 +196,21 @@ it.layer(layerTest)("super threads", (it) => {
         // Members and the board are not activity, so the thread keeps its place in lists.
         assert.deepEqual(shell.updatedAt, createdShell.updatedAt);
         assert.isUndefined((yield* shellOf(ordinaryThreadId)).superThread);
+
+        // The settle cascade guards a member that has no run yet with `null`.
+        const settle = (commandId: string, expectedLatestRunId: RunId | null) =>
+          orchestrator.dispatch({
+            type: "thread.settle",
+            commandId: CommandId.make(commandId),
+            threadId: ordinaryThreadId,
+            expectedLatestRunId,
+          });
+        assert.instanceOf(
+          yield* settle("settle:stale", RunId.make("run:elsewhere")).pipe(Effect.flip),
+          Orchestrator.OrchestratorDispatchError,
+        );
+        yield* settle("settle:no-run", null);
+        assert.equal((yield* shellOf(ordinaryThreadId)).settledOverride, "settled");
       }),
   );
 });

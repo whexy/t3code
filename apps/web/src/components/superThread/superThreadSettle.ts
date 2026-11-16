@@ -12,12 +12,12 @@ import { toastManager } from "../ui/toast";
 
 type SettleOne = (
   ref: ScopedThreadRef,
-  expectedLatestRunId: RunId | undefined,
+  expectedLatestRunId: RunId | null | undefined,
 ) => Promise<{ readonly _tag: "Success" | "Failure" | "Initial" }>;
 
 export interface SuperThreadSettle {
   /** Guards the header's own settle with the run the confirmation showed. */
-  readonly expectedLatestRunId: RunId | undefined;
+  readonly expectedLatestRunId: RunId | null | undefined;
   /** Settles the members once the header has settled. */
   readonly settleMembers: (settleOne: SettleOne) => Promise<void>;
 }
@@ -49,11 +49,11 @@ export async function confirmSuperThreadSettle(
     if (!confirmed) return "cancelled";
   }
   return {
-    expectedLatestRunId: header?.expectedLatestRunId ?? undefined,
+    expectedLatestRunId: header?.expectedLatestRunId,
     settleMembers: async (settleOne) => {
       const results = await Promise.all(
         members.map((member) =>
-          settleOne(member.ref, member.expectedLatestRunId ?? undefined).catch(() => null),
+          settleOne(member.ref, member.expectedLatestRunId).catch(() => null),
         ),
       );
       const kept = results.filter((result) => result?._tag !== "Success").length;

@@ -138,7 +138,7 @@ export function planSuperThreadSettle(
       expectedLatestRunId: shell.latestRun?.runId ?? null,
     });
 
-  if (!isSettled(superShell)) settle(superShell);
+  settle(superShell);
   const seen = new Set<string>([shellKey(superShell)]);
   for (const member of superShell.source.superThread?.members ?? []) {
     const ref = scopeThreadRef(member.environmentId, member.threadId);

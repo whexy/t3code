@@ -12,7 +12,7 @@ import { useAtomCommand } from "../../state/use-atom-command";
 
 export interface SuperThreadSettle {
   /** Guards the header's own settle with the run the confirmation showed. */
-  readonly expectedLatestRunId: RunId | undefined;
+  readonly expectedLatestRunId: RunId | null | undefined;
   /** Settles the members once the header has settled. */
   readonly settleMembers: () => void;
 }
@@ -61,7 +61,7 @@ export function useSuperThreadSettle() {
     });
     if (message !== null && !(await confirmSettle(message))) return "cancelled";
     return {
-      expectedLatestRunId: plan.settles.find(isHeader)?.expectedLatestRunId ?? undefined,
+      expectedLatestRunId: plan.settles.find(isHeader)?.expectedLatestRunId,
       // A member that started new work since the confirmation refuses and keeps the section.
       settleMembers: () => {
         for (const member of members) {
@@ -69,7 +69,7 @@ export function useSuperThreadSettle() {
             environmentId: member.ref.environmentId,
             input: {
               threadId: member.ref.threadId,
-              expectedLatestRunId: member.expectedLatestRunId ?? undefined,
+              expectedLatestRunId: member.expectedLatestRunId,
             },
           });
         }
