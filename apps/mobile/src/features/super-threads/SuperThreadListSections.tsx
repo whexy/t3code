@@ -119,7 +119,7 @@ export function SuperThreadListSections(props: {
                   style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
                 >
                   <View className="min-w-0 flex-1">
-                    <Text className={cn("text-base font-t3-medium", foreground)} numberOfLines={1}>
+                    <Text className={cn("text-base font-t3-medium", foreground)} numberOfLines={2}>
                       {row.title}
                     </Text>
                     {hint ? (

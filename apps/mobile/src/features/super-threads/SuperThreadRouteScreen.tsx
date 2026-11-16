@@ -125,7 +125,7 @@ function SuperThreadScreen(props: { readonly threadRef: ScopedThreadRef }) {
               contentContainerStyle={{
                 gap: 20,
                 padding: 16,
-                paddingBottom: composerHeight + bottomInset + 24,
+                paddingBottom: composerHeight + 24,
               }}
             >
               <View className="gap-1 px-2">
@@ -249,7 +249,7 @@ function SuperThreadBoardGroups(props: {
                   key={key}
                   accessibilityRole="link"
                   onPress={() => props.onOpen(member)}
-                  hitSlop={{ top: 12, bottom: 12 }}
+                  className="min-h-11 justify-center"
                   style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
                 >
                   <Text className="text-sm text-primary" numberOfLines={1}>
