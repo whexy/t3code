@@ -9,6 +9,7 @@ import { scopedProjectKey, scopedThreadKey } from "../../lib/scopedEntities";
 import { useProjects } from "../../state/entities";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
 import { useSelectWorkspaceDetail } from "../layout/workspace/useSelectWorkspaceDetail";
+import { SuperThreadMemberRows, type SuperThreadMemberRowHost } from "./SuperThreadMemberRows";
 import { SuperThreadStatus } from "./SuperThreadStatus";
 
 /** One group per super thread above the list's own shelves; see docs/internals/super-threads.md. */
@@ -19,6 +20,7 @@ export function SuperThreadListSections(props: {
   readonly onSelectThread: (thread: EnvironmentThreadShell) => void;
   /** Settles the group; the thread actions ask first and settle the members too. */
   readonly onSettleThread: (thread: EnvironmentThreadShell) => unknown;
+  readonly memberRowHost: SuperThreadMemberRowHost;
 }) {
   const selectDetail = useSelectWorkspaceDetail();
   const projects = useProjects();
@@ -26,10 +28,24 @@ export function SuperThreadListSections(props: {
   if (props.sections.length === 0) return null;
   const sidebar = props.pane === "sidebar";
   const foreground = sidebar ? "text-drawer-foreground" : "text-foreground";
-  const muted = sidebar ? "text-drawer-foreground-muted" : "text-foreground-muted";
-  const projectTitleByKey = new Map(
-    projects.map((project) => [scopedProjectKey(project.environmentId, project.id), project.title]),
+  const projectByKey = new Map(
+    projects.map((project) => [scopedProjectKey(project.environmentId, project.id), project]),
   );
+  const memberHints = (
+    rows: ReadonlyArray<EnvironmentThreadShell>,
+    showEnvironment: boolean,
+  ): ReadonlyMap<string, string> =>
+    new Map(
+      rows.map((row) => [
+        scopedThreadKey(row.environmentId, row.id),
+        [
+          projectByKey.get(scopedProjectKey(row.environmentId, row.projectId))?.title,
+          showEnvironment ? savedConnectionsById[row.environmentId]?.environmentLabel : undefined,
+        ]
+          .filter((part): part is string => !!part)
+          .join(" · "),
+      ]),
+    );
   const rowClassName = (selected: boolean) =>
     cn(
       "min-h-11 flex-row items-center gap-2.5 rounded-xl py-2",
@@ -94,43 +110,21 @@ export function SuperThreadListSections(props: {
                 </Pressable>
               )}
             </View>
-            {rows.map((row) => {
-              const rowKey = scopedThreadKey(row.environmentId, row.id);
-              const hint = [
-                projectTitleByKey.get(scopedProjectKey(row.environmentId, row.projectId)),
-                showEnvironment
-                  ? savedConnectionsById[row.environmentId]?.environmentLabel
-                  : undefined,
-              ]
-                .filter((part): part is string => !!part)
-                .join(" · ");
-              return (
-                <Pressable
-                  key={rowKey}
-                  accessibilityRole="button"
-                  accessibilityLabel={hint ? `${row.title}, ${hint}` : row.title}
-                  onPress={() => props.onSelectThread(row)}
-                  // Lines member titles up with the header title, past its icon.
-                  className={cn(
-                    rowClassName(props.selectedThreadKey === rowKey),
-                    sidebar ? "pl-[30px]" : "pl-[38px]",
-                  )}
-                  style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
-                >
-                  <View className="min-w-0 flex-1">
-                    <Text className={cn("text-base font-t3-medium", foreground)} numberOfLines={2}>
-                      {row.title}
-                    </Text>
-                    {hint ? (
-                      <Text className={cn("mt-0.5 text-xs", muted)} numberOfLines={1}>
-                        {hint}
-                      </Text>
-                    ) : null}
-                  </View>
-                  <SuperThreadStatus thread={row} />
-                </Pressable>
-              );
-            })}
+            {rows.length > 0 ? (
+              // Indents member rows under the header title, past its icon.
+              <View className="pl-5">
+                <SuperThreadMemberRows
+                  rows={rows}
+                  hints={memberHints(rows, showEnvironment)}
+                  showEnvironment={showEnvironment}
+                  projectByKey={projectByKey}
+                  pane={props.pane}
+                  selectedThreadKey={props.selectedThreadKey}
+                  onSelectThread={props.onSelectThread}
+                  host={props.memberRowHost}
+                />
+              </View>
+            ) : null}
           </View>
         );
       })}

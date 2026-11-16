@@ -574,6 +574,14 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
       selectedThreadKey={activeNewTask ? null : props.selectedThreadKey}
       onSelectThread={handleSelectThread}
       onSettleThread={settleThread}
+      memberRowHost={{
+        fullSwipeWidth: props.width - 20,
+        onSwipeableWillOpen: handleSwipeableWillOpen,
+        onSwipeableClose: handleSwipeableClose,
+        simultaneousSwipeGesture: sidebarScrollGesture,
+        onOpenThreadPullRequests: handleOpenThreadPullRequests,
+        onNewThreadOnBranch: props.onNewThreadOnBranch,
+      }}
     />
   );
   const showAddEnvironment =

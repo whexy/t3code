@@ -2,13 +2,19 @@ import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environ
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import type { SuperThreadSection } from "@t3tools/client-runtime/state/super-threads";
-import type { EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
+import {
+  AuthOrchestrationOperateScope,
+  type EnvironmentId,
+  type ScopedThreadRef,
+} from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
 import { CheckIcon, NetworkIcon } from "lucide-react";
-import { memo } from "react";
+import { memo, type MouseEvent as ReactMouseEvent } from "react";
 
 import { cn } from "~/lib/utils";
+import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
 import { ProjectFavicon } from "../ProjectFavicon";
+import { ThreadRenameInput } from "../sidebar/SidebarThreadRow";
 import { useSidebar } from "../ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { SuperThreadStatusLabel, useSuperThreadRowState } from "./SuperThreadStatus";
@@ -26,6 +32,19 @@ const rowSurfaceClassName = (active: boolean, recede: boolean) =>
 
 const rowFocusClassName =
   "rounded-md outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring";
+
+const memberSettleButtonClassName =
+  "pointer-events-none absolute top-1.5 right-0 inline-flex h-5 cursor-pointer items-center rounded-md bg-transparent px-2.5 text-muted-foreground opacity-0 transition-opacity outline-none hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:opacity-100 group-has-[:focus-visible]/sidebar-row:pointer-events-auto group-has-[:focus-visible]/sidebar-row:opacity-100";
+
+/** The sidebar's thread actions a member row reuses, so it acts like the sidebar's own rows. */
+export interface SuperThreadMemberRowActions {
+  readonly onSettle: (threadRef: ScopedThreadRef) => void;
+  readonly onContextMenu: (threadRef: ScopedThreadRef, position: { x: number; y: number }) => void;
+  readonly onStartRename: (threadRef: ScopedThreadRef, title: string) => void;
+  readonly onRenameTitleChange: (title: string) => void;
+  readonly onCommitRename: (threadRef: ScopedThreadRef, title: string) => void;
+  readonly onCancelRename: () => void;
+}
 
 const SuperThreadHeaderRow = memo(function SuperThreadHeaderRow(props: {
   readonly header: EnvironmentThreadShell;
@@ -105,53 +124,120 @@ const SuperThreadMemberRow = memo(function SuperThreadMemberRow(props: {
   readonly project: EnvironmentProject | null;
   readonly hint: string | null;
   readonly onNavigate: () => void;
+  readonly actions: SuperThreadMemberRowActions;
+  readonly isRenaming: boolean;
+  readonly renamingTitle: string;
 }) {
-  const { thread, active } = props;
+  const { thread, active, actions, isRenaming } = props;
+  const threadRef = scopeThreadRef(thread.environmentId, thread.id);
   const { status, recede, readFailure } = useSuperThreadRowState(thread, active);
-  return (
-    <li className="list-none">
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <Link
-              to="/$environmentId/$threadId"
-              params={{ environmentId: thread.environmentId, threadId: thread.id }}
-              data-sidebar-row={props.rowKey}
-              data-sidebar-parent={props.parentKey}
-              aria-current={active ? "page" : undefined}
-              onClick={props.onNavigate}
-              className={cn(
-                rowSurfaceClassName(active, recede),
-                rowFocusClassName,
-                "flex flex-col justify-center py-1.5 ps-9 pe-2.5",
-              )}
-            />
-          }
+  const canOperate = useEnvironmentScope(thread.environmentId, AuthOrchestrationOperateScope);
+  const startRename = () => {
+    if (!readEnvironmentScope(thread.environmentId, AuthOrchestrationOperateScope)) return;
+    actions.onStartRename(threadRef, thread.title);
+  };
+  const rowProps = {
+    "data-sidebar-row": props.rowKey,
+    "data-sidebar-parent": props.parentKey,
+    "aria-current": active ? ("page" as const) : undefined,
+    onContextMenu: (event: ReactMouseEvent) => {
+      event.preventDefault();
+      actions.onContextMenu(threadRef, { x: event.clientX, y: event.clientY });
+    },
+    className: cn(rowFocusClassName, "flex w-full flex-col justify-center py-1.5 ps-9 pe-2.5"),
+  };
+  const content = (
+    <>
+      <span className="flex h-5 min-w-0 items-center gap-1.5">
+        {props.project ? (
+          <ProjectFavicon project={props.project} className="size-4 shrink-0" />
+        ) : null}
+        <span className="min-w-0 flex-1 truncate text-xs text-secondary-label">{props.hint}</span>
+        <span
+          className={cn(
+            "flex shrink-0 items-center",
+            canOperate &&
+              "group-any-hover/sidebar-row:opacity-0 group-has-[:focus-visible]/sidebar-row:opacity-0",
+          )}
         >
-          <span className="flex h-5 min-w-0 items-center gap-1.5">
-            {props.project ? (
-              <ProjectFavicon project={props.project} className="size-4 shrink-0" />
-            ) : null}
-            <span className="min-w-0 flex-1 truncate text-xs text-secondary-label">
-              {props.hint}
-            </span>
-            <SuperThreadStatusLabel status={status} iconSize="md" />
-          </span>
-          <span
-            className={cn(
-              "mt-1 min-w-0 truncate text-sm",
-              recede
-                ? "font-normal text-foreground/75 group-hover/sidebar-row:text-foreground group-focus-visible/sidebar-row:text-foreground"
-                : readFailure
-                  ? "font-medium text-foreground/95"
-                  : "font-medium text-foreground",
-            )}
+          <SuperThreadStatusLabel status={status} iconSize="md" />
+        </span>
+      </span>
+      {isRenaming ? (
+        <span className="mt-1 flex min-w-0">
+          <ThreadRenameInput
+            title={props.renamingTitle}
+            onTitleChange={actions.onRenameTitleChange}
+            onCommit={() => actions.onCommitRename(threadRef, props.renamingTitle)}
+            onCancel={actions.onCancelRename}
+          />
+        </span>
+      ) : (
+        <span
+          className={cn(
+            "mt-1 min-w-0 truncate text-sm",
+            recede
+              ? "font-normal text-foreground/75 group-hover/sidebar-row:text-foreground group-has-[:focus-visible]/sidebar-row:text-foreground"
+              : readFailure
+                ? "font-medium text-foreground/95"
+                : "font-medium text-foreground",
+          )}
+        >
+          {thread.title}
+        </span>
+      )}
+    </>
+  );
+  return (
+    <li className={cn("list-none", rowSurfaceClassName(active, recede))}>
+      {isRenaming ? (
+        // A link would navigate on every click into the title field.
+        <div {...rowProps}>{content}</div>
+      ) : (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Link
+                to="/$environmentId/$threadId"
+                params={{ environmentId: thread.environmentId, threadId: thread.id }}
+                {...rowProps}
+                onClick={props.onNavigate}
+                onDoubleClick={(event) => {
+                  if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                  event.preventDefault();
+                  startRename();
+                }}
+                onKeyDown={(event) => {
+                  if (event.key !== "F2") return;
+                  event.preventDefault();
+                  startRename();
+                }}
+              />
+            }
           >
-            {thread.title}
-          </span>
-        </TooltipTrigger>
-        <TooltipPopup side="right">{thread.title}</TooltipPopup>
-      </Tooltip>
+            {content}
+          </TooltipTrigger>
+          <TooltipPopup side="right">{thread.title}</TooltipPopup>
+        </Tooltip>
+      )}
+      {canOperate && !isRenaming ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                data-sidebar-action-for={props.rowKey}
+                aria-label={`Settle ${thread.title}`}
+                onClick={() => actions.onSettle(threadRef)}
+                className={memberSettleButtonClassName}
+              />
+            }
+          >
+            <CheckIcon aria-hidden className="size-3" />
+          </TooltipTrigger>
+          <TooltipPopup side="top">Settle thread</TooltipPopup>
+        </Tooltip>
+      ) : null}
     </li>
   );
 });
@@ -166,9 +252,24 @@ export const SuperThreadSections = memo(function SuperThreadSections(props: {
   readonly routeThreadKey: string | null;
   /** Settles the group; the thread actions ask first and settle the members too. */
   readonly onSettle: (threadRef: ScopedThreadRef) => void;
+  readonly onContextMenu: SuperThreadMemberRowActions["onContextMenu"];
+  readonly renamingThreadKey: string | null;
+  readonly renamingTitle: string;
+  readonly onStartRename: SuperThreadMemberRowActions["onStartRename"];
+  readonly onRenameTitleChange: SuperThreadMemberRowActions["onRenameTitleChange"];
+  readonly onCommitRename: SuperThreadMemberRowActions["onCommitRename"];
+  readonly onCancelRename: SuperThreadMemberRowActions["onCancelRename"];
 }) {
   const { isMobile, setOpenMobile } = useSidebar();
   if (props.sections.length === 0) return null;
+  const memberActions: SuperThreadMemberRowActions = {
+    onSettle: props.onSettle,
+    onContextMenu: props.onContextMenu,
+    onStartRename: props.onStartRename,
+    onRenameTitleChange: props.onRenameTitleChange,
+    onCommitRename: props.onCommitRename,
+    onCancelRename: props.onCancelRename,
+  };
   const closeMobileSidebar = () => {
     if (isMobile) setOpenMobile(false);
   };
@@ -209,6 +310,9 @@ export const SuperThreadSections = memo(function SuperThreadSections(props: {
                       project={props.projectByKey.get(projectKey) ?? null}
                       hint={hint.length > 0 ? hint : null}
                       onNavigate={closeMobileSidebar}
+                      actions={memberActions}
+                      isRenaming={props.renamingThreadKey === rowKey}
+                      renamingTitle={props.renamingThreadKey === rowKey ? props.renamingTitle : ""}
                     />
                   );
                 })}
