@@ -273,7 +273,10 @@ import {
 } from "./sidebar/SidebarThreadRow";
 import { SidebarDraftBlock } from "./sidebar/SidebarDraftBlock";
 import { SuperThreadSections } from "./superThread/SuperThreadSections";
-import { deriveSuperThreadSidebar, findSuperThreadMember } from "./superThread/superThread.logic";
+import {
+  deriveSuperThreadSidebar,
+  findSuperThreadSectionThread,
+} from "./superThread/superThread.logic";
 import {
   SidebarProjectFolderHeader,
   sidebarFolderRowId,
@@ -2635,7 +2638,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           await handleMultiSelectContextMenu(position, source);
           return;
         }
-        const member = findSuperThreadMember(superThreadSidebar.sections, threadKey);
+        const member = findSuperThreadSectionThread(superThreadSidebar.sections, threadKey);
         // Search results also reach threads in collapsed shelves, which are not rendered rows.
         const thread =
           threadByKeyRef.current.get(threadKey) ??

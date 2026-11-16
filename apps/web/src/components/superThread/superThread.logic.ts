@@ -81,18 +81,19 @@ export function resolveSuperThreadRowStatus(
 }
 
 /**
- * The shell of a member row shown in a super thread section, which the sidebar's own lists leave
- * out. Its menu has no pin or snooze: the section lists every unsettled member, so those would
- * change nothing on screen.
+ * The shell of a row shown in a super thread section, its header or a member, which the sidebar's
+ * own lists leave out. Its menu has no pin or snooze: the section lists every unsettled one, so
+ * those would change nothing on screen.
  */
-export function findSuperThreadMember(
+export function findSuperThreadSectionThread(
   sections: ReadonlyArray<SuperThreadSection<EnvironmentThreadShell>>,
   threadKey: string,
 ): EnvironmentThreadShell | undefined {
+  const keyOf = (thread: EnvironmentThreadShell) =>
+    scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
   for (const section of sections) {
-    const member = section.rows.find(
-      (row) => scopedThreadKey(scopeThreadRef(row.environmentId, row.id)) === threadKey,
-    );
+    if (keyOf(section.header) === threadKey) return section.header;
+    const member = section.rows.find((row) => keyOf(row) === threadKey);
     if (member !== undefined) return member;
   }
   return undefined;
