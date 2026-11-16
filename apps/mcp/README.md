@@ -29,6 +29,11 @@ It exposes these tools:
   "Claude" or "opus" match. Choose a checkout with the optional `checkout`
   object; see [Session checkouts](#session-checkouts). With `scratch: true`
   instead of a project, the session runs in the server's scratch folder.
+- `create_super_thread`: starts a coordinator for one task that spans several
+  projects or servers. Its agent launches the threads it needs, and T3 Code
+  groups them under it in the sidebar with a goal board the agent keeps. It
+  runs in the server's scratch folder unless given a `project_id`, and is
+  followed like any session.
 - `send_session_message`: sends a message into an existing session, which
   keeps its thread, history, agent, and model. See
   [Follow-up messages](#follow-up-messages).
