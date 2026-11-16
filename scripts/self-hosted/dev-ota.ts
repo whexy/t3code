@@ -219,7 +219,11 @@ export async function plan(
 
 if (process.argv[1] === NodeURL.fileURLToPath(import.meta.url)) {
   const env = process.env;
-  const missing = ["OTA_PUBLISH_TOKEN"].filter((name) => env[`HAS_${name}`] !== "true");
+  const missing = [
+    "OTA_PUBLISH_TOKEN",
+    "OTA_INCOMING_ACCESS_KEY_ID",
+    "OTA_INCOMING_SECRET_ACCESS_KEY",
+  ].filter((name) => env[`HAS_${name}`] !== "true");
   const decisions = await plan(
     githubApi(env.GITHUB_REPOSITORY ?? "whexy/t3code", env.GH_TOKEN),
     changedSince,
