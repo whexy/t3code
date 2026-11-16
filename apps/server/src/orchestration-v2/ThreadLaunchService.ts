@@ -114,6 +114,8 @@ export interface ThreadLaunchInput {
   readonly linkOrigin?: OrchestrationV2LinkOrigin;
   /** The parent there, when that environment's agent delegated this as a task. */
   readonly delegatedFrom?: OrchestrationV2DelegatedFrom;
+  /** Only a person's launch sets this; MCP launches never do. */
+  readonly superThread?: true;
 }
 
 type PreparationInput = Pick<
@@ -1384,6 +1386,7 @@ const make = Effect.gen(function* () {
                 ...(input.delegatedFrom === undefined
                   ? {}
                   : { delegatedFrom: input.delegatedFrom }),
+                ...(input.superThread === true ? { superThread: true } : {}),
                 createdBy: input.createdBy,
                 creationSource: input.creationSource,
                 ...(initialMessage === undefined

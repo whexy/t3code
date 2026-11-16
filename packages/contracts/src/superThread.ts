@@ -1,6 +1,12 @@
 import * as Schema from "effect/Schema";
 
-import { EnvironmentId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  CommandId,
+  EnvironmentId,
+  IsoDateTime,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
 
 const SUPER_THREAD_BOARD_MAX_ITEMS = 50;
 
@@ -23,11 +29,18 @@ export const SuperThreadBoardItem = Schema.Struct({
 });
 export type SuperThreadBoardItem = typeof SuperThreadBoardItem.Type;
 
-/** Written whole by the super agent; read-only for people. */
-export const SuperThreadBoard = Schema.Struct({
+/** What the super agent writes; the server stamps `updatedAt`. */
+export const SuperThreadBoardInput = Schema.Struct({
   goal: Schema.String.check(Schema.isMaxLength(4000)),
   items: Schema.Array(SuperThreadBoardItem).check(Schema.isMaxLength(SUPER_THREAD_BOARD_MAX_ITEMS)),
-  updatedAt: Schema.DateTimeUtc,
+});
+export type SuperThreadBoardInput = typeof SuperThreadBoardInput.Type;
+
+/** Written whole by the super agent; read-only for people. */
+export const SuperThreadBoard = Schema.Struct({
+  ...SuperThreadBoardInput.fields,
+  /** A string like the thread's other nested times, since the stored thread JSON maps only its own. */
+  updatedAt: IsoDateTime,
 });
 export type SuperThreadBoard = typeof SuperThreadBoard.Type;
 
@@ -37,7 +50,8 @@ export type SuperThreadBoard = typeof SuperThreadBoard.Type;
  */
 export const SuperThreadState = Schema.Struct({
   members: Schema.Array(SuperThreadMember),
-  board: Schema.NullOr(SuperThreadBoard),
+  /** Absent reads as null, which lets a shell's `{ members }` stand in for a whole state. */
+  board: Schema.optionalKey(Schema.NullOr(SuperThreadBoard)),
 });
 export type SuperThreadState = typeof SuperThreadState.Type;
 
@@ -46,3 +60,23 @@ export const SuperThreadShellState = Schema.Struct({
   members: SuperThreadState.fields.members,
 });
 export type SuperThreadShellState = typeof SuperThreadShellState.Type;
+
+/**
+ * Server-only commands. Each refuses a thread that is not a super thread, and recording a member
+ * already on the list changes nothing.
+ */
+export const SuperThreadInternalCommand = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("super_thread.member.record"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    member: SuperThreadMember,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("super_thread.board.set"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    board: SuperThreadBoardInput,
+  }),
+]);
+export type SuperThreadInternalCommand = typeof SuperThreadInternalCommand.Type;
