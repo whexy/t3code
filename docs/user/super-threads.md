@@ -33,7 +33,8 @@ section.
 
 Settling the super thread settles every thread in its section. If any of them is still working,
 waiting for your answer, or on a machine T3 Code can't reach right now, you are asked first.
-Settling a thread that waits for your answer can dismiss its open questions. A thread that starts
+Settling stops a thread that is still running, and can dismiss the open questions of a thread
+that waits for your answer. A thread that starts
 new work after you confirm stays open.
 
 A settled thread goes to the Settled shelf like any other. When one of them comes back, the section

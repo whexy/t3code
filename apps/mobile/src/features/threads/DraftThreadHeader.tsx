@@ -21,6 +21,7 @@ export function DraftThreadHeader(props: {
   readonly thread: EnvironmentThreadShell;
   readonly project: EnvironmentProject;
   readonly cwd: string | null;
+  readonly title?: string;
 }) {
   const gt = useGT();
   const messages = useMessages();
@@ -50,7 +51,7 @@ export function DraftThreadHeader(props: {
   return (
     <ThreadHeader
       draft
-      title={gt("New thread")}
+      title={props.title ?? gt("New thread")}
       subtitle=""
       hasThreadCwd={props.cwd !== null}
       inspectorMode={null}

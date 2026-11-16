@@ -296,6 +296,7 @@ export function useThreadListActions(): {
   ) =>
     showThreadUndoNotice({
       action,
+      ...(thread.source.superThread === undefined ? {} : { subject: "super thread" }),
       claim,
       undo: async () => {
         try {
