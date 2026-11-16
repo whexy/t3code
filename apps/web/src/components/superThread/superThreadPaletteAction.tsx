@@ -1,0 +1,20 @@
+import type { EnvironmentId } from "@t3tools/contracts";
+import { NetworkIcon } from "lucide-react";
+
+import type { NewThreadHandler } from "../../hooks/useHandleNewThread";
+import { ITEM_ICON_CLASS, type CommandPaletteActionItem } from "../CommandPalette.logic";
+import { startSuperThreadDraft } from "./superThreadDrafts";
+
+export function newSuperThreadPaletteAction(
+  environmentId: EnvironmentId,
+  handleNewThread: NewThreadHandler,
+): CommandPaletteActionItem {
+  return {
+    kind: "action",
+    value: "action:new-super-thread",
+    searchTerms: ["new super thread", "coordinate", "goal board", "across projects"],
+    title: "New super thread",
+    icon: <NetworkIcon className={ITEM_ICON_CLASS} />,
+    run: () => startSuperThreadDraft(environmentId, handleNewThread),
+  };
+}
