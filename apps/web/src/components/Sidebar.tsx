@@ -273,6 +273,8 @@ import {
   type SidebarSweepAction,
 } from "./sidebar/SidebarThreadRow";
 import { SidebarDraftBlock, useSidebarDrafts } from "./sidebar/SidebarDraftBlock";
+import { SuperThreadSections } from "./superThread/SuperThreadSections";
+import { deriveSuperThreadSidebar } from "./superThread/superThread.logic";
 import {
   SidebarProjectFolderHeader,
   sidebarFolderRowId,
@@ -1241,6 +1243,12 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       });
     },
   );
+  const superThreadSidebar = deriveSuperThreadSidebar({
+    threads: listedThreads,
+    scopedProjectKeys,
+    delegatedUnderParent,
+    serverConfigs,
+  });
   const {
     canPinProjectGroup: canPinProject,
     setProjectGroupPinned,
@@ -1351,7 +1359,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     serverConfigs,
     connectedEnvironmentIds,
     optimisticDrop,
-    threads: listedThreads,
+    threads: isSearchingThreads ? listedThreads : superThreadSidebar.unclaimedThreads,
     delegatedUnderParent,
     routeRowThreadKey,
     folderGroups: boringSidebarEnabled
@@ -3362,6 +3370,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           {!isSearchingThreads &&
           !hasProjectFolders &&
           visibleDraftSessionCount === 0 &&
+          superThreadSidebar.sections.length === 0 &&
           pinnedThreads.length +
             activeThreads.length +
             workingThreads.length +
@@ -3577,6 +3586,14 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                           routeDraftId={routeDraftIdForRows}
                           onNavigateToDraft={navigateToDraft}
                           onDraftContextMenu={handleDraftContextMenu}
+                        />,
+                        <SuperThreadSections
+                          key="super-threads"
+                          sections={superThreadSidebar.sections}
+                          projectDisplayNameByKey={projectDisplayNameByKey}
+                          environmentLabelById={environmentLabelById}
+                          routeThreadKey={routeRowThreadKey}
+                          onSettle={attemptSettle}
                         />,
                       ];
                       for (const item of sidebarListItems) {
