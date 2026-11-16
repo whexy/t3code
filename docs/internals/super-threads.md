@@ -15,6 +15,13 @@ files only through short seams, so the nightly rebase rarely conflicts.
   [`superThread.ts`](../../packages/contracts/src/superThread.ts)). Clients and
   the fork's MCP bridge (`apps/mcp`) can create one. No tool on the server's own
   `/mcp` can, so an agent inside T3 never turns into a coordinator by itself.
+- **A super agent delegates by default.** Its role text
+  ([`superThreadRole.ts`](../../apps/server/src/superThread/superThreadRole.ts)),
+  sent with every prompt, has it plan, launch members, track them on the map and
+  combine their results, and keeps project work out of the super thread so it
+  shows on the map and in the group. The text calls these defaults: the user's
+  own instructions or skills about coordinating win. It still has to work with
+  none of them. Eval: `evals/mcp-tool-use/cases/super-threads.ndjson`.
 - **The super thread's member list is the only source of truth.** Members are
   `(environmentId, threadId)` pairs stored on the super thread. A child never
   records its parent. A child can therefore live on an older or remote host, and
