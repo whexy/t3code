@@ -1,5 +1,8 @@
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
-import type { SuperThreadSection } from "@t3tools/client-runtime/state/super-threads";
+import {
+  superThreadMemberNeedsYou,
+  type SuperThreadSection,
+} from "@t3tools/client-runtime/state/super-threads";
 import { Pressable, View } from "react-native";
 
 import { AppText as Text } from "../../components/ui/AppText";
@@ -10,6 +13,7 @@ import { useProjects } from "../../state/entities";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
 import { useSelectWorkspaceDetail } from "../layout/workspace/useSelectWorkspaceDetail";
 import { SuperThreadMemberRows, type SuperThreadMemberRowHost } from "./SuperThreadMemberRows";
+import { toggleSuperThreadFold, useFoldedSuperThreadKeys } from "./superThreadFolds";
 import { SuperThreadStatus } from "./SuperThreadStatus";
 
 /** One group per super thread above the list's own shelves; see docs/internals/super-threads.md. */
@@ -25,6 +29,7 @@ export function SuperThreadListSections(props: {
   const selectDetail = useSelectWorkspaceDetail();
   const projects = useProjects();
   const { savedConnectionsById } = useSavedRemoteConnections();
+  const foldedKeys = useFoldedSuperThreadKeys();
   if (props.sections.length === 0) return null;
   const sidebar = props.pane === "sidebar";
   const foreground = sidebar ? "text-drawer-foreground" : "text-foreground";
@@ -59,12 +64,18 @@ export function SuperThreadListSections(props: {
         const headerKey = scopedThreadKey(header.environmentId, header.id);
         const showEnvironment = rows.some((row) => row.environmentId !== header.environmentId);
         const headerSettled = header.settledOverride === "settled";
+        const folded = foldedKeys.includes(headerKey);
+        const needsYou = folded ? rows.filter(superThreadMemberNeedsYou).length : 0;
         return (
           <View key={headerKey} testID="super-thread-section">
             <View className="flex-row items-center">
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel={`${header.title}, super thread`}
+                accessibilityLabel={`${header.title}, super thread${
+                  folded && needsYou > 0
+                    ? `, ${needsYou} folded ${needsYou === 1 ? "thread needs" : "threads need"} you`
+                    : ""
+                }`}
                 onPress={() =>
                   selectDetail({
                     name: "Thread",
@@ -90,6 +101,28 @@ export function SuperThreadListSections(props: {
                 >
                   {header.title}
                 </Text>
+                {folded && needsYou > 0 ? (
+                  <View className="shrink-0 flex-row items-center gap-1">
+                    <SymbolView
+                      name="exclamationmark.circle"
+                      size={11}
+                      tintColorClassName="accent-warning-foreground"
+                      type="monochrome"
+                    />
+                    <Text className="text-xs font-t3-medium text-warning-foreground">
+                      {needsYou}
+                    </Text>
+                  </View>
+                ) : folded && rows.length > 0 ? (
+                  <Text
+                    className={cn(
+                      "text-xs",
+                      sidebar ? "text-drawer-foreground-muted" : "text-foreground-muted",
+                    )}
+                  >
+                    {rows.length}
+                  </Text>
+                ) : null}
                 <SuperThreadStatus thread={header} />
               </Pressable>
               {headerSettled ? null : (
@@ -98,7 +131,7 @@ export function SuperThreadListSections(props: {
                   accessibilityLabel={`Settle ${header.title} and its threads`}
                   hitSlop={8}
                   onPress={() => void props.onSettleThread(header)}
-                  className={cn("h-11 w-10 items-center justify-center", !sidebar && "mr-1.5")}
+                  className="h-11 w-10 items-center justify-center"
                   style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
                 >
                   <SymbolView
@@ -109,8 +142,27 @@ export function SuperThreadListSections(props: {
                   />
                 </Pressable>
               )}
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={folded ? `Unfold ${header.title}` : `Fold ${header.title}`}
+                accessibilityState={{ expanded: !folded }}
+                hitSlop={8}
+                onPress={() => void toggleSuperThreadFold(headerKey)}
+                className={cn("h-11 w-8 items-center justify-center", !sidebar && "mr-1.5")}
+                style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
+              >
+                <SymbolView
+                  name="chevron.down"
+                  size={12}
+                  tintColorClassName={
+                    sidebar ? "accent-drawer-foreground-muted" : "accent-foreground-muted"
+                  }
+                  type="monochrome"
+                  style={{ transform: [{ rotate: folded ? "-90deg" : "0deg" }] }}
+                />
+              </Pressable>
             </View>
-            {rows.length > 0 ? (
+            {rows.length > 0 && !folded ? (
               // Indents member rows under the header title, past its icon.
               <View className="pl-5">
                 <SuperThreadMemberRows

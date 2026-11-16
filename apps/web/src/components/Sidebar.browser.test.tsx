@@ -464,5 +464,15 @@ describe("sidebar super thread section", () => {
       "End",
       [...screen.container.querySelectorAll<HTMLElement>("[data-sidebar-row]")].at(-1)!,
     );
+
+    await userEvent.click(section.getByRole("button", { name: "Fold Release" }));
+    await expect.element(section.getByRole("link", { name: /Thread 1/ })).not.toBeInTheDocument();
+    await expect.element(section.getByText("1 hidden")).toBeInTheDocument();
+    // The header's title tooltip covers the chevron in this narrow viewport.
+    await act(() =>
+      (section.getByRole("button", { name: "Unfold Release" }).element() as HTMLElement).focus(),
+    );
+    await userEvent.keyboard("{Enter}");
+    await expect.element(section.getByRole("link", { name: /Thread 1/ })).toBeInTheDocument();
   });
 });
