@@ -1,0 +1,25 @@
+import type { OrchestrationV2AppThread } from "@t3tools/contracts";
+import * as Context from "effect/Context";
+import * as Fiber from "effect/Fiber";
+
+import { McpInvocationContext } from "../mcp/McpInvocationContext.ts";
+
+export const SUPER_THREAD_BOARD_TOOL_NAME = "super_thread_board_set";
+
+/**
+ * `McpSchema.EnabledWhen` for the super thread's own tools. Stricter than
+ * `hiddenFromOutsideClients`, so `McpToolAccess` accepts it on caller-bound tools.
+ */
+export const onlySuperThreads = (): boolean => {
+  const fiber = Fiber.getCurrent();
+  const scope = fiber && Context.getOrUndefined(fiber.context, McpInvocationContext);
+  return scope?.thread?.superThread === true;
+};
+
+const SUPER_THREAD_ROLE = `<super_thread_role>
+You are a super thread: you coordinate one task across projects and environments. Threads you start with t3_thread_launch (here, or in a linked environment with environmentId) or create_threads join your group permanently. delegate_task children do not. Give every launch a clientRequestId and retry a failed launch with the same one, or the thread may never join. Keep the goal board current with ${SUPER_THREAD_BOARD_TOOL_NAME}: the user reads the board, not your transcript.
+</super_thread_role>`;
+
+/** Sent with every prompt of a super thread, so it survives compaction and provider switches. */
+export const superThreadRoleContext = (thread: Pick<OrchestrationV2AppThread, "superThread">) =>
+  thread.superThread === undefined ? "" : SUPER_THREAD_ROLE;
