@@ -59,6 +59,7 @@ export function SuperThreadListSections(props: {
                 className={cn(
                   "min-w-0 flex-1",
                   rowClassName(props.selectedThreadKey === headerKey),
+                  "pr-1",
                 )}
                 style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
               >
@@ -70,7 +71,7 @@ export function SuperThreadListSections(props: {
                 />
                 <Text
                   className={cn("min-w-0 flex-1 text-base font-t3-bold", foreground)}
-                  numberOfLines={1}
+                  numberOfLines={2}
                 >
                   {header.title}
                 </Text>
@@ -82,7 +83,7 @@ export function SuperThreadListSections(props: {
                   accessibilityLabel={`Settle ${header.title} and its threads`}
                   hitSlop={8}
                   onPress={() => void props.onSettleThread(header)}
-                  className="h-11 w-10 items-center justify-center"
+                  className={cn("h-11 w-10 items-center justify-center", !sidebar && "mr-1.5")}
                   style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
                 >
                   <SymbolView
@@ -110,15 +111,19 @@ export function SuperThreadListSections(props: {
                   accessibilityRole="button"
                   accessibilityLabel={hint ? `${row.title}, ${hint}` : row.title}
                   onPress={() => props.onSelectThread(row)}
-                  className={cn(rowClassName(props.selectedThreadKey === rowKey), "pl-10")}
+                  // Lines member titles up with the header title, past its icon.
+                  className={cn(
+                    rowClassName(props.selectedThreadKey === rowKey),
+                    sidebar ? "pl-[30px]" : "pl-[38px]",
+                  )}
                   style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
                 >
                   <View className="min-w-0 flex-1">
-                    <Text className={cn("text-sm font-t3-medium", foreground)} numberOfLines={1}>
+                    <Text className={cn("text-base font-t3-medium", foreground)} numberOfLines={1}>
                       {row.title}
                     </Text>
                     {hint ? (
-                      <Text className={cn("text-xs", muted)} numberOfLines={1}>
+                      <Text className={cn("mt-0.5 text-xs", muted)} numberOfLines={1}>
                         {hint}
                       </Text>
                     ) : null}

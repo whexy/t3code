@@ -45,6 +45,7 @@ import { textDirection } from "~/textDirection";
 import { useClientSettings } from "../../hooks/useSettings";
 import { GuestShareIndicator } from "./GuestShareControls";
 import { SharedTooltipTrigger } from "../ui/shared-tooltip";
+import { SuperThreadBreadcrumb } from "../superThread/SuperThreadBreadcrumb";
 
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
@@ -297,6 +298,7 @@ export const ChatHeader = memo(function ChatHeader({
             </WorkspaceBreadcrumbSeparator>
           </>
         ) : null}
+        <SuperThreadBreadcrumb threadRef={activeThreadRef} />
         {parentThreadLink ? (
           <>
             <WorkspaceBreadcrumbItem>

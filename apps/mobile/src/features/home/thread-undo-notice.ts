@@ -3,6 +3,8 @@ import { useSyncExternalStore } from "react";
 
 type UndoNotice = {
   readonly action: "Settled" | "Snoozed" | "Unpinned";
+  /** Undo restores only this thread, even when its action took others with it. */
+  readonly subject?: "thread" | "super thread";
   readonly claim: ReturnType<typeof ThreadUndo.begin>;
   readonly undo: () => Promise<void>;
 };

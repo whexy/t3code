@@ -17,13 +17,14 @@ export interface SuperThreadSettle {
   readonly settleMembers: () => void;
 }
 
-function confirmSettle(message: string): Promise<boolean> {
+function confirmSettle(message: string, stopsWork: boolean): Promise<boolean> {
   const [title = message, ...detail] = message.split("\n");
   return new Promise((resolve) =>
     Dialog.confirm({
       title,
       message: detail.join("\n\n"),
       confirmText: "Settle",
+      destructive: stopsWork,
       onConfirm: () => resolve(true),
       onCancel: () => resolve(false),
     }),
@@ -59,7 +60,8 @@ export function useSuperThreadSettle() {
       memberSettleCount: members.length,
       titleOf: (ref) => titleByKey.get(scopedThreadKey(ref.environmentId, ref.threadId)) ?? null,
     });
-    if (message !== null && !(await confirmSettle(message))) return "cancelled";
+    const stopsWork = plan.warnings.some((warning) => warning.reason === "running");
+    if (message !== null && !(await confirmSettle(message, stopsWork))) return "cancelled";
     return {
       expectedLatestRunId: plan.settles.find(isHeader)?.expectedLatestRunId,
       // A member that started new work since the confirmation refuses and keeps the section.

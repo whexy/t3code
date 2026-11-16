@@ -58,7 +58,11 @@ export function buildSuperThreadSettleConfirmation(input: {
       ? `Settle "${input.title}" and ${threads(input.memberSettleCount)} it launched?`
       : `Settle "${input.title}"?`,
   ];
-  if (running.length > 0) lines.push(`Still working: ${titleList(running)}.`);
+  if (running.length > 0) {
+    lines.push(
+      `Still running: ${titleList(running)}. Settling stops ${running.length === 1 ? "it" : "them"}.`,
+    );
+  }
   if (needsInput.length > 0) {
     lines.push(
       `Waiting for you: ${titleList(needsInput)}. Settling can dismiss their open questions.`,

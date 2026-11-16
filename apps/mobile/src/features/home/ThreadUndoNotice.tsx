@@ -85,11 +85,17 @@ export function ThreadUndoNotice(props: { readonly visible: boolean }) {
     >
       <Toast
         message={
-          notice.action === "Settled"
-            ? gt("Settled thread")
-            : notice.action === "Snoozed"
-              ? gt("Snoozed thread")
-              : gt("Unpinned thread")
+          notice.subject === "super thread"
+            ? notice.action === "Settled"
+              ? gt("Settled super thread")
+              : notice.action === "Snoozed"
+                ? gt("Snoozed super thread")
+                : gt("Unpinned super thread")
+            : notice.action === "Settled"
+              ? gt("Settled thread")
+              : notice.action === "Snoozed"
+                ? gt("Snoozed thread")
+                : gt("Unpinned thread")
         }
         action={{
           label: gt("Undo"),
