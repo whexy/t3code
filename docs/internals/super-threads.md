@@ -35,10 +35,15 @@ files only through short seams, so the nightly rebase rarely conflicts.
   check, and it rules out nesting: a member is an ordinary thread, so what it
   launches belongs to no group.
 - **The list is append-only.** A local launch records the member before it
-  dispatches the launch, because the thread id is known first. A launch in a
-  linked environment can only be recorded after its result returns, since the
-  remote host picks the id. A member whose thread never came to exist is simply
-  not shown.
+  dispatches the launch, because the thread id is known first. The remote host
+  picks the id of a launch in a linked environment, so the super thread writes
+  the launch down as pending before it goes and records the thread when the
+  result returns. A failed call stays pending, since the thread may exist there
+  anyway. After a restart the server sends each launch still pending again with
+  its original `clientRequestId`, which such a launch must carry. The remote host
+  scopes that key by this environment's link session, which a restart keeps, so
+  it answers with the thread it already made instead of making a second one. A
+  member whose thread never came to exist is simply not shown.
 - **The sidebar section is derived on the client.** A section is shown while the
   super thread or any member is unsettled. It lists the super thread as its
   header and the unsettled members below it: members needing the person (or

@@ -90,6 +90,7 @@ SectionFromAnyUnsettled settle UnsettledMemberStaysVisible
 SettledMembersLeaveSection settle EachThreadPlacedOnce
 HeaderLeavesShelf settle EachThreadPlacedOnce
 UnsettleHeaderOnly settle HeaderUnsettleKeepsMembers
+ReplayRemoteLaunch launch EveryLaunchJoins
 EOF
 fi
 
@@ -120,7 +121,6 @@ if [ "$mode" = all ] || [ "$mode" = findings ]; then
       failed=1
     fi
   done <<'EOF'
-finding-remote-launch-lost EveryLaunchJoinsStrict -
 EOF
 fi
 
