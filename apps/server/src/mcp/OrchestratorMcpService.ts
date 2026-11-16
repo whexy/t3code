@@ -135,6 +135,7 @@ import { isLiveCallerShell, threadNotFound } from "./threadAccess.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as PeerForwarding from "../peer/PeerForwarding.ts";
 import * as RemoteDelegation from "../peer/RemoteDelegation.ts";
+import { recordLaunchedMember } from "../superThread/superThreadMembers.ts";
 
 const DEFAULT_WAIT_TIMEOUT_MS = 10 * 60 * 1_000;
 // Nothing is written while a task wait blocks, and Node fetch drops a silent call at 300 s.
@@ -2992,6 +2993,17 @@ const make = Effect.gen(function* () {
                 title: request.title,
                 index,
               });
+              yield* recordLaunchedMember(threadManagement, parent.thread, {
+                environmentId: scope.environmentId,
+                threadId,
+              }).pipe(
+                Effect.mapError((error) =>
+                  failure(
+                    "orchestration_error",
+                    `Unable to add thread ${index + 1} to this super thread: ${userFacingDispatchErrorMessage(error) ?? errorMessage(error)}`,
+                  ),
+                ),
+              );
               yield* threadManagement
                 .dispatch({
                   type: "thread.create",

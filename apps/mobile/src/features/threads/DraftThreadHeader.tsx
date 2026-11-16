@@ -19,6 +19,7 @@ export function DraftThreadHeader(props: {
   readonly thread: EnvironmentThreadShell;
   readonly project: EnvironmentProject;
   readonly cwd: string | null;
+  readonly title?: string;
 }) {
   const navigation = useNavigation();
   const environmentId = props.thread.environmentId;
@@ -46,7 +47,7 @@ export function DraftThreadHeader(props: {
   return (
     <ThreadHeader
       draft
-      title="New thread"
+      title={props.title ?? "New thread"}
       subtitle=""
       hasThreadCwd={props.cwd !== null}
       inspectorMode={null}

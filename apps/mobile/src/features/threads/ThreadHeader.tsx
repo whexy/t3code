@@ -30,6 +30,7 @@ export function ThreadHeader(props: {
   readonly onOpenFilesInspector: () => void;
   /** Absent where this thread cannot have side chats. */
   readonly sideChats?: { readonly thread: ScopedThreadRef; readonly onOpen: () => void };
+  readonly extraPanelItems?: ReadonlyArray<AppBarMenuItem>;
 }) {
   const goBack = useWorkspaceBackNavigation();
   const { toggleAuxiliaryPane, startNewTask } = useAdaptiveWorkspaceLayout();
@@ -64,6 +65,7 @@ export function ThreadHeader(props: {
           },
         ]
       : []),
+    ...(props.extraPanelItems ?? []),
   ];
   // Panels open beside the thread, so they share one button instead of one each.
   const panelsMenu: AppBarMenu | null =

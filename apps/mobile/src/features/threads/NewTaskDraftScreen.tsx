@@ -97,6 +97,11 @@ import { ConnectionStatusDot } from "../connection/ConnectionStatusDot";
 import { appAtomRegistry } from "../../state/atom-registry";
 
 import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
+import { SuperThreadDraftHero } from "../super-threads/SuperThreadDraftHero";
+import {
+  recordSuperThreadCreation,
+  useIsSuperThreadDraft,
+} from "../super-threads/superThreadCreations";
 
 // Below this (keyboard up on iPad, phone landscape) the hero cannot fit above the composer,
 // so the project and environment pickers move into the composer controls instead.
@@ -161,6 +166,7 @@ export function NewTaskDraftScreen(props: {
   const [creationMetadata] = useState(makeTurnCommandMetadata);
   const projects = useProjects();
   const flow = useNewTaskFlow();
+  const isSuperThreadDraft = useIsSuperThreadDraft(flow.draftKey);
   const navigation = useNavigation();
   const isFocused = useIsFocused();
   const goBack = useWorkspaceBackNavigation();
@@ -660,6 +666,7 @@ export function NewTaskDraftScreen(props: {
     if (!message) {
       return null;
     }
+    await recordSuperThreadCreation(draftKey, message.threadId);
     // Persist locally before clearing or leaving the draft; server setup runs on the thread.
     flow.setSubmitting(true);
     const queued = await settlePromise(() => enqueueThreadOutboxMessage(message));
@@ -738,7 +745,9 @@ export function NewTaskDraftScreen(props: {
       The shared content is no longer in the inbox. You can continue editing this task draft.
     </Text>
   ) : null;
-  const hero = flow.isScratchDraft ? (
+  const hero = isSuperThreadDraft ? (
+    <SuperThreadDraftHero environmentControl={environmentControl} />
+  ) : flow.isScratchDraft ? (
     <View className="items-center gap-2 px-6" testID="new-task-hero">
       <Text className="text-center text-2xl font-t3-medium tracking-tight text-foreground">
         What should we work on?
@@ -967,7 +976,12 @@ export function NewTaskDraftScreen(props: {
       <ThreadScreenBinding
         environmentId={selectedProject.environmentId}
         header={
-          <DraftThreadHeader thread={thread} project={selectedProject} cwd={flow.workspaceCwd} />
+          <DraftThreadHeader
+            thread={thread}
+            project={selectedProject}
+            cwd={flow.workspaceCwd}
+            {...(isSuperThreadDraft ? { title: "New super thread" } : {})}
+          />
         }
         draftMode={{
           content: heroViewport,
