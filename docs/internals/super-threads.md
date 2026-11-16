@@ -60,6 +60,20 @@ files only through short seams, so the nightly rebase rarely conflicts.
   started new work after the person confirmed refuses and stays in the section. Unsettling the header returns only the header: settled members are
   done, and a returning header means a new task. A member that unsettles brings
   the section back through the derivation above, with no write to the header.
+- **A member's outcome wakes the super thread.** When a member's run completes,
+  fails, or starts waiting for the person, the server queues one notice on the
+  super thread, as a finished `delegate_task` child wakes its parent. The
+  `super_thread.member.wake` command decides it under the super thread's command
+  lock, keyed by the outcome so a replay wakes it once. An outcome that arrives
+  while a notice is still queued joins that notice, so a busy super thread gets one
+  turn for all of them. A settled or archived super thread is not woken: settled
+  means done, and the member's state shows in the sidebar. Settling cancels a
+  queued notice, and a notice that commits after the confirmation is a newer run
+  that the settle guard refuses. Members here are read from this server's events.
+  A run the super thread starts on a member in a linked environment (launch or
+  `t3_thread_send`) is recorded on the super thread and followed with the same
+  wait `RemoteDelegation` uses, so a restart resumes it. That wait returns only
+  when the run ends, so a linked member waiting for the person does not wake it.
 - **The task map is the super agent's, and read-only for people.** Super-thread-only
   MCP tools patch it by node and edge id and read it back. It lives on the thread,
   not in a run's plan artifact, because it must outlive any single run. Each patch
@@ -84,5 +98,5 @@ files only through short seams, so the nightly rebase rarely conflicts.
 
 ## Verification
 
-The settle, unsettle, launch and visibility rules are model-checked with TLA+.
+The settle, unsettle, launch, wake and visibility rules are model-checked with TLA+.
 See the `verify-super-threads` skill.
