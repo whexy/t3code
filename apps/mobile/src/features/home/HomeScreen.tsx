@@ -712,6 +712,14 @@ export function HomeScreen(props: HomeScreenProps) {
         selectedThreadKey={selectedThreadKey}
         onSelectThread={selectThread}
         onSettleThread={handleSettleThread}
+        memberRowHost={{
+          fullSwipeWidth,
+          onSwipeableWillOpen: handleSwipeableWillOpen,
+          onSwipeableClose: handleSwipeableClose,
+          simultaneousSwipeGesture: homeScrollGesture,
+          onOpenThreadPullRequests: handleOpenThreadPullRequests,
+          onNewThreadOnBranch: props.onNewThreadOnBranch,
+        }}
       />
     </>
   );
