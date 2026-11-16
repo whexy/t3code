@@ -2,8 +2,8 @@ import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environ
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import type { SuperThreadSection } from "@t3tools/client-runtime/state/super-threads";
-import { EnvironmentId, ThreadId, type ScopedThreadRef } from "@t3tools/contracts";
-import { Link, useParams } from "@tanstack/react-router";
+import type { EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
+import { Link } from "@tanstack/react-router";
 import { CheckIcon, NetworkIcon } from "lucide-react";
 import { memo } from "react";
 
@@ -43,8 +43,8 @@ const SuperThreadHeaderRow = memo(function SuperThreadHeaderRow(props: {
         <TooltipTrigger
           render={
             <Link
-              to="/super/$superEnvironmentId/$superThreadId"
-              params={{ superEnvironmentId: header.environmentId, superThreadId: header.id }}
+              to="/$environmentId/$threadId"
+              params={{ environmentId: header.environmentId, threadId: header.id }}
               data-sidebar-row={rowKey}
               aria-current={active ? "page" : undefined}
               onClick={props.onNavigate}
@@ -168,17 +168,7 @@ export const SuperThreadSections = memo(function SuperThreadSections(props: {
   readonly onSettle: (threadRef: ScopedThreadRef) => void;
 }) {
   const { isMobile, setOpenMobile } = useSidebar();
-  const params = useParams({ strict: false });
   if (props.sections.length === 0) return null;
-  const openSuperKey =
-    params.superEnvironmentId && params.superThreadId
-      ? scopedThreadKey(
-          scopeThreadRef(
-            EnvironmentId.make(params.superEnvironmentId),
-            ThreadId.make(params.superThreadId),
-          ),
-        )
-      : null;
   const closeMobileSidebar = () => {
     if (isMobile) setOpenMobile(false);
   };
@@ -192,7 +182,7 @@ export const SuperThreadSections = memo(function SuperThreadSections(props: {
             <SuperThreadHeaderRow
               header={header}
               rowKey={headerKey}
-              active={openSuperKey === headerKey || props.routeThreadKey === headerKey}
+              active={props.routeThreadKey === headerKey}
               onNavigate={closeMobileSidebar}
               onSettle={props.onSettle}
             />

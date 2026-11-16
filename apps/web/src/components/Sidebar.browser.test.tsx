@@ -434,7 +434,7 @@ describe("sidebar super thread section", () => {
     const section = screen.getByTestId("super-thread-section");
     await expect
       .element(section.getByRole("link", { name: /Release/ }))
-      .toHaveAttribute("href", `/super/${environmentId}/${header.id}`);
+      .toHaveAttribute("href", `/${environmentId}/${header.id}`);
     await expect
       .element(section.getByRole("link", { name: /Thread 1/ }))
       .toHaveAttribute("href", `/${environmentId}/${member.id}`);
