@@ -199,10 +199,12 @@ describe("planSuperThreadSettle", () => {
     ]);
   });
 
-  it("warns about and skips members in an environment the client cannot reach", () => {
+  it("guards an already settled header too, and warns about and skips unreachable members", () => {
     const header = superShell("super", [member("a", remote)], settled);
     const plan = planSuperThreadSettle(header, [header, shell("a", {}, remote)], new Set([local]));
-    expect(plan.settles).toEqual([]);
+    expect(plan.settles).toEqual([
+      { ref: scopeThreadRef(local, ThreadId.make("super")), expectedLatestRunId: null },
+    ]);
     expect(plan.warnings).toEqual([
       { ref: scopeThreadRef(remote, ThreadId.make("a")), reason: "unreachable" },
     ]);

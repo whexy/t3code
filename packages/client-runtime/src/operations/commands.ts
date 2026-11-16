@@ -105,7 +105,7 @@ export type ArchiveThreadInput = ThreadCommandInput;
 export type UnarchiveThreadInput = ThreadCommandInput;
 export interface SettleThreadInput extends ThreadCommandInput {
   /** The server refuses the settle when the thread's latest run is no longer this one. */
-  readonly expectedLatestRunId?: RunId | undefined;
+  readonly expectedLatestRunId?: RunId | null | undefined;
 }
 
 export interface UnsettleThreadInput extends ThreadCommandInput {
