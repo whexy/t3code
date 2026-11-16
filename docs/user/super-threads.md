@@ -34,6 +34,11 @@ To hide a section's threads, select the arrow at the end of its header; select i
 them. A folded section shows how many threads it hides, or, when any of them needs your answer or
 has failed, how many need you. Each device remembers which sections you folded.
 
+When a thread in the section finishes, fails, or needs your answer, the super thread's agent picks
+it up on its own. Several that change while the agent is busy reach it together. For a thread on a
+linked machine, the agent hears when a run it started there ends, but not when that thread waits
+for you; the sidebar shows that.
+
 Select the header to open the super thread's conversation, which works like any other thread. To see
 the goal and the task map beside it, select **Super thread** in the header or **Task map** in the
 thread details, or choose **Show goal and task map** in the command palette. Select **Super thread**
@@ -72,6 +77,7 @@ Settling stops a thread that is still running, and can dismiss the open question
 that waits for your answer. A thread that starts
 new work after you confirm stays open.
 
-A settled thread goes to the Settled shelf like any other. When one of them comes back, the section
+A settled super thread is not woken when one of its threads finishes later; that thread shows in
+the sidebar instead. A settled thread goes to the Settled shelf like any other. When one of them comes back, the section
 comes back with it. When you message a settled super thread, only the super thread returns: its
 finished threads stay settled, and new threads it starts join the section.

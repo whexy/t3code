@@ -7,6 +7,7 @@ import * as PeerLinkRequests from "../../../peer/PeerLinkRequests.ts";
 import * as PeerLinks from "../../../peer/PeerLinks.ts";
 import * as RemoteDelegation from "../../../peer/RemoteDelegation.ts";
 import { readCaller } from "../../threadAccess.ts";
+import { followForwardedSend } from "../superThread/handlers.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as OrchestratorMcpService from "../../OrchestratorMcpService.ts";
@@ -189,6 +190,7 @@ const handlers = {
       Effect.gen(function* () {
         const scope = yield* McpInvocationContext.McpInvocationContext;
         const remote = yield* RemoteDelegation.RemoteDelegation;
+        yield* followForwardedSend(environmentId, sent);
         return yield* remote.followUp(scope, environmentId, input, sent);
       }),
   ),
