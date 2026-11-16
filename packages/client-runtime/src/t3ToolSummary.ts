@@ -1224,6 +1224,23 @@ export function summarizeT3ToolCalls(
           );
       break;
     }
+    case "super-thread-board": {
+      const count = selected.length;
+      label = done
+        ? resolve(
+            msg(
+              "{count, plural, one {Updated the goal board {count} time} other {Updated the goal board {count} times}}",
+              { count },
+            ),
+          )
+        : resolve(
+            msg(
+              "{count, plural, one {Tried to update the goal board {count} time} other {Tried to update the goal board {count} times}}",
+              { count },
+            ),
+          );
+      break;
+    }
     case "thread-read": {
       if (threadIds.every((value) => value !== undefined)) {
         const count = new Set(threadIds).size;
