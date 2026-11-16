@@ -1,8 +1,16 @@
-import { type EnvironmentId, OrchestratorMcpFailure, type ThreadId } from "@t3tools/contracts";
+import {
+  type EnvironmentId,
+  OrchestratorMcpFailure,
+  type RunId,
+  type ThreadId,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 
 import { recordPendingLaunch } from "../../../superThread/superThreadLaunches.ts";
-import { recordLaunchedMember } from "../../../superThread/superThreadMembers.ts";
+import {
+  recordFollowedRun,
+  recordLaunchedMember,
+} from "../../../superThread/superThreadMembers.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import { type Caller, dispatchFailure, newCommandId, readCaller } from "../../threadAccess.ts";
 import { SuperThreadToolkit } from "./tools.ts";
@@ -46,7 +54,7 @@ export const recordPendingForwardedLaunch = Effect.fn(
 
 /** A linked environment picks the thread id, so its launch is recorded once the result returns. */
 export const recordForwardedLaunch = Effect.fn("SuperThreadMcp.recordForwardedLaunch")(function* <
-  A extends { readonly threadId: ThreadId },
+  A extends { readonly threadId: ThreadId; readonly runId: RunId | null },
 >(
   input: { readonly clientRequestId?: string | undefined },
   environmentId: EnvironmentId,
@@ -67,7 +75,34 @@ export const recordForwardedLaunch = Effect.fn("SuperThreadMcp.recordForwardedLa
     { environmentId, threadId: launched.threadId },
     launch,
   ).pipe(Effect.mapError(dispatchFailure));
+  if (caller?.superThread !== undefined && launched.runId !== null) {
+    yield* recordFollowedRun(threads, caller.id, {
+      environmentId,
+      threadId: launched.threadId,
+      runId: launched.runId,
+    });
+  }
   return launched;
+});
+
+/** A message a super thread sent to its member in a linked environment, whose run it follows. */
+export const followForwardedSend = Effect.fn("SuperThreadMcp.followForwardedSend")(function* <
+  A extends { readonly threadId: ThreadId; readonly runId: RunId },
+>(environmentId: EnvironmentId, sent: A) {
+  const { threads, caller } = yield* readCaller();
+  // Only a member's run is followed; a send to any other thread records nothing.
+  if (
+    caller?.superThread?.members.some(
+      (member) => member.environmentId === environmentId && member.threadId === sent.threadId,
+    ) === true
+  ) {
+    yield* recordFollowedRun(threads, caller.id, {
+      environmentId,
+      threadId: sent.threadId,
+      runId: sent.runId,
+    });
+  }
+  return sent;
 });
 
 const notSuperThread = () =>

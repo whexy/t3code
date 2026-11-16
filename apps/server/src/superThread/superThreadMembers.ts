@@ -2,6 +2,7 @@ import {
   CommandId,
   type SuperThreadLaunchKey,
   type SuperThreadMember,
+  type SuperThreadMemberRun,
   type ThreadId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -29,4 +30,30 @@ export const recordLaunchedMember = Effect.fn("SuperThread.recordLaunchedMember"
     member,
     ...(launch === undefined ? {} : { launch }),
   });
+});
+
+/**
+ * Writes down a run a super thread started on its member in a linked environment, so the server
+ * follows it there and its end wakes the super thread. Best effort: the launch or send already
+ * happened, and without the record only its wake is missing.
+ */
+export const recordFollowedRun = Effect.fn("SuperThread.recordFollowedRun")(function* (
+  threads: Pick<ThreadManagement.ThreadManagementService["Service"], "dispatch">,
+  superThreadId: ThreadId,
+  run: SuperThreadMemberRun,
+) {
+  yield* threads
+    .dispatch({
+      type: "super_thread.member.follow",
+      commandId: CommandId.make(
+        `super-thread:follow:${superThreadId}:${run.environmentId}:${run.threadId}:${run.runId}`,
+      ),
+      threadId: superThreadId,
+      run,
+    })
+    .pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("recording a super thread member run failed", { run, cause }),
+      ),
+    );
 });

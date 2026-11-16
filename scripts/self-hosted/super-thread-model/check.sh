@@ -46,7 +46,7 @@ derive() { # source-cfg constant value rule dest
 }
 
 case $mode in
-all | design) configs="launch settle" ;;
+all | design) configs="launch settle wake" ;;
 deep) configs=all-faults ;;
 variants | findings) configs= ;;
 *) echo "usage: $0 [design|variants|findings|deep]" >&2 && exit 2 ;;
@@ -91,6 +91,8 @@ SettledMembersLeaveSection settle EachThreadPlacedOnce
 HeaderLeavesShelf settle EachThreadPlacedOnce
 UnsettleHeaderOnly settle HeaderUnsettleKeepsMembers
 ReplayRemoteLaunch launch EveryLaunchJoins
+WakeSkipsSettled wake WakeNeverReopens
+FoldWakes wake OneQueuedWake
 EOF
 fi
 
