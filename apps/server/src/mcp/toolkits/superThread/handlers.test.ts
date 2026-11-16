@@ -141,7 +141,7 @@ const toolHarness = (caller: ThreadId) => {
   const handlers = Layer.mergeAll(
     McpToolAccess.HandlersLayer.layer(ProjectHandlers.layer),
     McpToolAccess.HandlersLayer.layer(SuperThreadHandlers.layer),
-  ).pipe(Layer.provide(dependencies));
+  ).pipe(Layer.provideMerge(dependencies));
   const launch = (params: {
     readonly clientRequestId?: string;
     readonly environmentId?: EnvironmentId;
@@ -150,7 +150,7 @@ const toolHarness = (caller: ThreadId) => {
       toolkit
         .handle("t3_thread_launch", { title: "Child", projectId, message: "Go", ...params })
         .pipe(Stream.unwrap, Stream.runCollect),
-    ).pipe(Effect.provide(handlers), Effect.provide(dependencies));
+    ).pipe(Effect.provide(handlers));
   const setBoard = Effect.flatMap(SuperThreadToolkit, (toolkit) =>
     toolkit
       .handle("super_thread_board_set", {
@@ -158,7 +158,7 @@ const toolHarness = (caller: ThreadId) => {
         items: [{ id: "api", title: "Ship the API", status: "doing" }],
       })
       .pipe(Stream.unwrap, Stream.runCollect),
-  ).pipe(Effect.provide(handlers), Effect.provide(dependencies));
+  ).pipe(Effect.provide(handlers));
   return { steps, launch, setBoard };
 };
 
