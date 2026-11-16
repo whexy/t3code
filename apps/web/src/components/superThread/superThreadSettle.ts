@@ -1,4 +1,5 @@
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
+import { buildSuperThreadSettleConfirmation } from "@t3tools/client-runtime/state/super-thread-presentation";
 import { planSuperThreadSettle } from "@t3tools/client-runtime/state/super-threads";
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { RunId, ScopedThreadRef } from "@t3tools/contracts";
@@ -8,7 +9,6 @@ import { appAtomRegistry } from "../../rpc/atomRegistry";
 import { readThreadShell, readThreadShells } from "../../state/entities";
 import { environmentSummaries } from "../../state/presentation";
 import { toastManager } from "../ui/toast";
-import { buildSuperThreadSettleConfirmation } from "./superThread.logic";
 
 type SettleOne = (
   ref: ScopedThreadRef,

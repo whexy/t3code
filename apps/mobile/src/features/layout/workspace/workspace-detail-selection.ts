@@ -13,7 +13,8 @@ type RootParams = ReactNavigation.RootParamList;
 /** A page the workspace's detail column shows on its own: what a list row selects. */
 export type WorkspaceDetail =
   | { readonly name: "Thread"; readonly params: RootParams["Thread"] }
-  | { readonly name: "PullRequest"; readonly params: RootParams["PullRequest"] };
+  | { readonly name: "PullRequest"; readonly params: RootParams["PullRequest"] }
+  | { readonly name: "SuperThread"; readonly params: RootParams["SuperThread"] };
 
 /** Android opens the reviewers sheet over the pull request in the same step. */
 export type WorkspaceDetailSheet = {
@@ -42,6 +43,7 @@ export function selectWorkspaceDetail(
 const IDENTITY = {
   Thread: ["environmentId", "threadId"],
   PullRequest: ["environmentId", "projectId", "repository", "number", "host"],
+  SuperThread: ["environmentId", "threadId"],
 } as const;
 
 type RouteLike = { readonly name: string; readonly key?: string; readonly params?: object };
