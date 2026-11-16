@@ -68,19 +68,43 @@ export function resolveSuperThreadMapNodeState(
   return { state, unreachable };
 }
 
-export const SUPER_THREAD_MAP_NODE_WIDTH = 220;
+const SUPER_THREAD_MAP_NODE_WIDTH = 220;
 export const SUPER_THREAD_MAP_NODE_HEIGHT = 64;
-const MIN_NODE_WIDTH = 176;
-const COLUMN_GAP = 72;
-const ROW_GAP = 14;
-const LANE_GAP = 16;
-const LANE_HEADER = 26;
-const LANE_PADDING = 12;
-const MARGIN = 8;
-const ROW_PITCH = SUPER_THREAD_MAP_NODE_HEIGHT + ROW_GAP;
-const SIDE_BEND = 40;
 /** How far a label beside a side bend may run, in px. */
 export const SUPER_THREAD_MAP_SIDE_LABEL_WIDTH = 180;
+
+/** Sizes the layout works in; a client picks smaller ones to fit a narrow screen. */
+export interface SuperThreadMapMetrics {
+  /** A node's width, and the most it gets when fitting `availableWidth`. */
+  readonly nodeWidth: number;
+  /** The least a node narrows to when fitting `availableWidth`. */
+  readonly minNodeWidth: number;
+  readonly nodeHeight: number;
+  readonly columnGap: number;
+  readonly rowGap: number;
+  readonly laneGap: number;
+  readonly laneHeader: number;
+  readonly lanePadding: number;
+  readonly margin: number;
+  /** How far an edge between two nodes of one column bends out beside them. */
+  readonly sideBend: number;
+  /** Room kept for a label beside such a bend; 0 when the client doesn't draw edge labels. */
+  readonly sideLabelWidth: number;
+}
+
+export const SUPER_THREAD_MAP_METRICS: SuperThreadMapMetrics = {
+  nodeWidth: SUPER_THREAD_MAP_NODE_WIDTH,
+  minNodeWidth: 176,
+  nodeHeight: SUPER_THREAD_MAP_NODE_HEIGHT,
+  columnGap: 72,
+  rowGap: 14,
+  laneGap: 16,
+  laneHeader: 26,
+  lanePadding: 12,
+  margin: 8,
+  sideBend: 40,
+  sideLabelWidth: SUPER_THREAD_MAP_SIDE_LABEL_WIDTH,
+};
 
 export interface SuperThreadMapLayoutNode {
   readonly node: SuperThreadMapNode;
@@ -112,6 +136,7 @@ export interface SuperThreadMapLayoutEdge {
 }
 
 export interface SuperThreadMapLayout {
+  readonly metrics: SuperThreadMapMetrics;
   readonly width: number;
   readonly height: number;
   readonly nodeWidth: number;
@@ -150,8 +175,9 @@ function edgePath(
   from: { readonly x: number; readonly y: number },
   to: { readonly x: number; readonly y: number },
   w: number,
+  metrics: SuperThreadMapMetrics,
 ) {
-  const midY = SUPER_THREAD_MAP_NODE_HEIGHT / 2;
+  const midY = metrics.nodeHeight / 2;
   let start: readonly [number, number];
   let end: readonly [number, number];
   let c1: readonly [number, number];
@@ -165,13 +191,13 @@ function edgePath(
   } else if (to.x === from.x) {
     start = [from.x + w, from.y + midY];
     end = [to.x + w, to.y + midY];
-    c1 = [start[0] + SIDE_BEND, start[1]];
-    c2 = [end[0] + SIDE_BEND, end[1]];
+    c1 = [start[0] + metrics.sideBend, start[1]];
+    c2 = [end[0] + metrics.sideBend, end[1]];
   } else {
     start = [from.x, from.y + midY];
     end = [to.x + w, to.y + midY];
-    c1 = [start[0] - SIDE_BEND, start[1]];
-    c2 = [end[0] + SIDE_BEND, end[1]];
+    c1 = [start[0] - metrics.sideBend, start[1]];
+    c2 = [end[0] + metrics.sideBend, end[1]];
   }
   const path = `M${start[0]},${start[1]} C${c1[0]},${c1[1]} ${c2[0]},${c2[1]} ${end[0]},${end[1]}`;
   return {
@@ -189,8 +215,14 @@ function edgePath(
  */
 export function layoutSuperThreadMap(
   map: Pick<SuperThreadMap, "nodes" | "edges">,
-  options: { readonly availableWidth?: number } = {},
+  options: {
+    readonly availableWidth?: number;
+    readonly metrics?: SuperThreadMapMetrics;
+  } = {},
 ): SuperThreadMapLayout {
+  const metrics = options.metrics ?? SUPER_THREAD_MAP_METRICS;
+  const { columnGap, laneGap, laneHeader, lanePadding, margin } = metrics;
+  const rowPitch = metrics.nodeHeight + metrics.rowGap;
   const rank = rankNodes(map);
   const order = new Map(map.nodes.map((node, index) => [node.id, index]));
   const laneKeys: Array<string | null> = [];
@@ -209,26 +241,29 @@ export function layoutSuperThreadMap(
     (edge) => rank.get(edge.from) === columns - 1 && rank.get(edge.to) === columns - 1,
   );
   const outerRoom = bendsOut.some((edge) => edge.label !== undefined)
-    ? SIDE_BEND + 12 + SUPER_THREAD_MAP_SIDE_LABEL_WIDTH
+    ? metrics.sideBend + 12 + metrics.sideLabelWidth
     : bendsOut.length > 0
       ? 48
       : 0;
-  const fixedWidth = MARGIN * 2 + LANE_PADDING * 2 + (columns - 1) * COLUMN_GAP + outerRoom;
+  const fixedWidth = margin * 2 + lanePadding * 2 + (columns - 1) * columnGap + outerRoom;
   const nodeWidth =
     options.availableWidth === undefined
-      ? SUPER_THREAD_MAP_NODE_WIDTH
+      ? metrics.nodeWidth
       : Math.min(
-          SUPER_THREAD_MAP_NODE_WIDTH,
-          Math.max(MIN_NODE_WIDTH, Math.floor((options.availableWidth - fixedWidth) / columns)),
+          metrics.nodeWidth,
+          Math.max(
+            metrics.minNodeWidth,
+            Math.floor((options.availableWidth - fixedWidth) / columns),
+          ),
         );
   const position = new Map<string, { x: number; y: number }>();
   const laidOut: Array<SuperThreadMapLayoutNode> = [];
   const lanes: Array<SuperThreadMapLayoutLane> = [];
   const labelled = laneKeys.some((key) => key !== null);
-  let laneTop = MARGIN;
+  let laneTop = margin;
   for (const group of laneKeys) {
     const inLane = map.nodes.filter((node) => (node.group ?? null) === group);
-    const top = laneTop + (labelled ? LANE_HEADER : LANE_PADDING);
+    const top = laneTop + (labelled ? laneHeader : lanePadding);
     let rows = 0;
     for (let column = 0; column < columns; column++) {
       const cell = inLane.filter((node) => rank.get(node.id) === column);
@@ -240,15 +275,15 @@ export function layoutSuperThreadMap(
         });
         return ys.length > 0
           ? ys.reduce((sum, y) => sum + y, 0) / ys.length
-          : top + fallbackRow * ROW_PITCH;
+          : top + fallbackRow * rowPitch;
       };
       const sorted = cell
         .map((node, index) => ({ node, key: key(node, index) }))
         .sort((a, b) => a.key - b.key || order.get(a.node.id)! - order.get(b.node.id)!);
       sorted.forEach(({ node }, row) => {
         const placed = {
-          x: MARGIN + LANE_PADDING + column * (nodeWidth + COLUMN_GAP),
-          y: top + row * ROW_PITCH,
+          x: margin + lanePadding + column * (nodeWidth + columnGap),
+          y: top + row * rowPitch,
         };
         position.set(node.id, placed);
         laidOut.push({ node, ...placed });
@@ -256,9 +291,9 @@ export function layoutSuperThreadMap(
       rows = Math.max(rows, cell.length);
     }
     const height =
-      (labelled ? LANE_HEADER : LANE_PADDING) + rows * ROW_PITCH - ROW_GAP + LANE_PADDING;
+      (labelled ? laneHeader : lanePadding) + rows * rowPitch - metrics.rowGap + lanePadding;
     lanes.push({ group, y: laneTop, height });
-    laneTop += height + LANE_GAP;
+    laneTop += height + laneGap;
   }
   const edges = map.edges.flatMap((edge): Array<SuperThreadMapLayoutEdge> => {
     const from = position.get(edge.from);
@@ -270,14 +305,15 @@ export function layoutSuperThreadMap(
         to: edge.to,
         kind: edge.kind,
         label: edge.label,
-        ...edgePath(from, to, nodeWidth),
+        ...edgePath(from, to, nodeWidth, metrics),
       },
     ];
   });
   return {
+    metrics,
     width: fixedWidth + columns * nodeWidth,
     nodeWidth,
-    height: laneTop - LANE_GAP + MARGIN,
+    height: laneTop - laneGap + margin,
     lanes,
     nodes: laidOut,
     edges,
