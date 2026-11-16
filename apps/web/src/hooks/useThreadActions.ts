@@ -33,6 +33,7 @@ import { projectEnvironment } from "../state/projects";
 import { threadEnvironment } from "../state/threads";
 import { vcsEnvironment } from "../state/vcs";
 import { useNewThreadHandler } from "./useHandleNewThread";
+import { confirmSuperThreadSettle } from "../components/superThread/superThreadSettle";
 import { refreshArchivedThreadsForEnvironment } from "../lib/archivedThreadsState";
 import { releaseComposerDraftUploads } from "../lib/composerDraftUploads";
 import { announce } from "../lib/announce";
@@ -820,6 +821,8 @@ export function useThreadActions() {
       );
     }
     const resolved = resolveThreadTarget(target);
+    const superSettle = await confirmSuperThreadSettle(resolved?.thread);
+    if (superSettle === "cancelled") return AsyncResult.success(undefined);
     // oxlint-disable-next-line react/purity -- runs in an event handler (oxc#27309)
     const nowIso = new Date().toISOString();
     const wokeAt = resolved ? threadWokeAt(resolved.thread, { now: nowIso }) : null;
@@ -831,12 +834,18 @@ export function useThreadActions() {
     const action = ThreadUndo.begin("settle", scopedThreadKey(target));
     const result = await settleThreadMutation({
       environmentId: target.environmentId,
-      input: { threadId: target.threadId },
+      input: { threadId: target.threadId, expectedLatestRunId: superSettle?.expectedLatestRunId },
     });
     if (result._tag !== "Success") {
       action.finish();
       return result;
     }
+    void superSettle?.settleMembers((ref, expectedLatestRunId) =>
+      settleThreadMutation({
+        environmentId: ref.environmentId,
+        input: { threadId: ref.threadId, expectedLatestRunId },
+      }),
+    );
     if (wokeAt !== null) {
       markThreadVisited(scopedThreadKey(target), wokeAt);
     }

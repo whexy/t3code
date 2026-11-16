@@ -52,6 +52,7 @@ import { Route as ChatSettingsAccessRouteImport } from './routes/_chat.settings.
 import { Route as ChatSettingsAboutRouteImport } from './routes/_chat.settings.about'
 import { Route as ChatDraftDraftIdRouteImport } from './routes/_chat.draft.$draftId'
 import { Route as ChatEnvironmentIdThreadIdRouteImport } from './routes/_chat.$environmentId.$threadId'
+import { Route as ChatSuperSuperEnvironmentIdSuperThreadIdRouteImport } from './routes/_chat.super.$superEnvironmentId.$superThreadId'
 
 const WelcomeRoute = WelcomeRouteImport.update({
   id: '/welcome',
@@ -273,6 +274,12 @@ const ChatEnvironmentIdThreadIdRoute =
     path: '/$environmentId/$threadId',
     getParentRoute: () => ChatRoute,
   } as any)
+const ChatSuperSuperEnvironmentIdSuperThreadIdRoute =
+  ChatSuperSuperEnvironmentIdSuperThreadIdRouteImport.update({
+    id: '/super/$superEnvironmentId/$superThreadId',
+    path: '/super/$superEnvironmentId/$superThreadId',
+    getParentRoute: () => ChatRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof ChatIndexRoute
@@ -317,6 +324,7 @@ export interface FileRoutesByFullPath {
   '/settings/voice': typeof ChatSettingsVoiceRoute
   '/settings/worktrees': typeof ChatSettingsWorktreesRoute
   '/threads/$environmentId/$threadId': typeof ThreadsEnvironmentIdThreadIdRoute
+  '/super/$superEnvironmentId/$superThreadId': typeof ChatSuperSuperEnvironmentIdSuperThreadIdRoute
 }
 export interface FileRoutesByTo {
   '/approve-agent': typeof ApproveAgentRoute
@@ -361,6 +369,7 @@ export interface FileRoutesByTo {
   '/settings/voice': typeof ChatSettingsVoiceRoute
   '/settings/worktrees': typeof ChatSettingsWorktreesRoute
   '/threads/$environmentId/$threadId': typeof ThreadsEnvironmentIdThreadIdRoute
+  '/super/$superEnvironmentId/$superThreadId': typeof ChatSuperSuperEnvironmentIdSuperThreadIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -407,6 +416,7 @@ export interface FileRoutesById {
   '/_chat/settings/voice': typeof ChatSettingsVoiceRoute
   '/_chat/settings/worktrees': typeof ChatSettingsWorktreesRoute
   '/threads/$environmentId/$threadId': typeof ThreadsEnvironmentIdThreadIdRoute
+  '/_chat/super/$superEnvironmentId/$superThreadId': typeof ChatSuperSuperEnvironmentIdSuperThreadIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -453,6 +463,7 @@ export interface FileRouteTypes {
     | '/settings/voice'
     | '/settings/worktrees'
     | '/threads/$environmentId/$threadId'
+    | '/super/$superEnvironmentId/$superThreadId'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/approve-agent'
@@ -497,6 +508,7 @@ export interface FileRouteTypes {
     | '/settings/voice'
     | '/settings/worktrees'
     | '/threads/$environmentId/$threadId'
+    | '/super/$superEnvironmentId/$superThreadId'
   id:
     | '__root__'
     | '/_chat'
@@ -542,6 +554,7 @@ export interface FileRouteTypes {
     | '/_chat/settings/voice'
     | '/_chat/settings/worktrees'
     | '/threads/$environmentId/$threadId'
+    | '/_chat/super/$superEnvironmentId/$superThreadId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -859,6 +872,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatEnvironmentIdThreadIdRouteImport
       parentRoute: typeof ChatRoute
     }
+    '/_chat/super/$superEnvironmentId/$superThreadId': {
+      id: '/_chat/super/$superEnvironmentId/$superThreadId'
+      path: '/super/$superEnvironmentId/$superThreadId'
+      fullPath: '/super/$superEnvironmentId/$superThreadId'
+      preLoaderRoute: typeof ChatSuperSuperEnvironmentIdSuperThreadIdRouteImport
+      parentRoute: typeof ChatRoute
+    }
   }
 }
 
@@ -934,6 +954,7 @@ interface ChatRouteChildren {
   ChatIndexRoute: typeof ChatIndexRoute
   ChatEnvironmentIdThreadIdRoute: typeof ChatEnvironmentIdThreadIdRoute
   ChatDraftDraftIdRoute: typeof ChatDraftDraftIdRoute
+  ChatSuperSuperEnvironmentIdSuperThreadIdRoute: typeof ChatSuperSuperEnvironmentIdSuperThreadIdRoute
 }
 
 const ChatRouteChildren: ChatRouteChildren = {
@@ -944,6 +965,8 @@ const ChatRouteChildren: ChatRouteChildren = {
   ChatIndexRoute: ChatIndexRoute,
   ChatEnvironmentIdThreadIdRoute: ChatEnvironmentIdThreadIdRoute,
   ChatDraftDraftIdRoute: ChatDraftDraftIdRoute,
+  ChatSuperSuperEnvironmentIdSuperThreadIdRoute:
+    ChatSuperSuperEnvironmentIdSuperThreadIdRoute,
 }
 
 const ChatRouteWithChildren = ChatRoute._addFileChildren(ChatRouteChildren)

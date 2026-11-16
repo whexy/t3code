@@ -3,6 +3,7 @@ import type { EnvironmentServerConfig } from "@t3tools/client-runtime/connection
 import * as shelfHooks from "../state/olderSettledShelf";
 import { createWorkspaceFocusController, workspaceAreaProps } from "../lib/workspaceFocus";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import { presentThreadShell } from "@t3tools/client-runtime/state/models";
 import {
   DEFAULT_CLIENT_SETTINGS,
   EnvironmentId,
@@ -395,5 +396,49 @@ describe("sidebar settled pagination", () => {
     const loadedRows = screen.container.querySelectorAll("[data-thread-item]").length;
     await act(() => moreButton.click());
     expect(screen.container.querySelectorAll("[data-thread-item]")).toHaveLength(loadedRows);
+  });
+});
+
+describe("sidebar super thread section", () => {
+  it("lists a super thread's members under it and nowhere else", async () => {
+    const activeProject = project("active");
+    const environmentId = activeProject.environmentId;
+    const member = threadShell(activeProject.id, 1);
+    const loose = threadShell(activeProject.id, 2);
+    const header = presentThreadShell(environmentId, {
+      ...threadShell(activeProject.id, 0).source,
+      title: "Release",
+      superThread: { members: [{ environmentId, threadId: member.id }] },
+    });
+    vi.mocked(useProjects).mockReturnValue([activeProject]);
+    vi.mocked(useQuietThreadShells).mockReturnValue([header, member, loose]);
+    vi.mocked(useThreadRouteTarget).mockReturnValue(null);
+    vi.mocked(useHandleNewThread).mockReturnValue({
+      activeDraftThread: null,
+      activeThread: null,
+      defaultProjectRef: { environmentId, projectId: activeProject.id },
+      defaultProjectFallbackReady: true,
+      handleNewThread: vi.fn().mockResolvedValue(null),
+      routeDraftId: null,
+      routeThreadRef: null,
+    });
+    vi.mocked(useServerConfigs).mockReturnValue(
+      new Map([[environmentId, {} as unknown as EnvironmentServerConfig]]),
+    );
+    await using screen = await render(
+      <SidebarProvider>
+        <Sidebar routeReveal={{ observedKey: null, pendingKey: null }} />
+      </SidebarProvider>,
+    );
+
+    const section = screen.getByTestId("super-thread-section");
+    await expect
+      .element(section.getByRole("link", { name: /Release/ }))
+      .toHaveAttribute("href", `/super/${environmentId}/${header.id}`);
+    await expect
+      .element(section.getByRole("link", { name: /Thread 1/ }))
+      .toHaveAttribute("href", `/${environmentId}/${member.id}`);
+    expect(screen.getByText("Thread 1").elements()).toHaveLength(1);
+    await expect.element(screen.getByText("Thread 2").first()).toBeInTheDocument();
   });
 });
