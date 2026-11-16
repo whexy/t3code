@@ -47,6 +47,7 @@ import {
   resolveNewTaskScratchOption,
 } from "./new-task-project-selection";
 import { useSelectWorkspaceDetail } from "../layout/workspace/useSelectWorkspaceDetail";
+import { NewSuperThreadRow } from "../super-threads/NewSuperThreadRow";
 
 type NewTaskRouteParams = {
   readonly incomingShareId?: string | string[];
@@ -447,6 +448,7 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
               </View>
             )
           ) : null}
+          <NewSuperThreadRow option={incomingShare ? null : scratchOption} />
           {listScopes.length === 0 ? (
             <View
               collapsable={false}

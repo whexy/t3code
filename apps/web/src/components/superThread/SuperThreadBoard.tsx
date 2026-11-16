@@ -1,10 +1,13 @@
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
+import {
+  SUPER_THREAD_BOARD_COLUMNS,
+  groupSuperThreadBoardItems,
+} from "@t3tools/client-runtime/state/super-thread-presentation";
 import type { SuperThreadBoard as SuperThreadBoardState } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
 
 import { InlineButton } from "../ui/button";
-import { SUPER_THREAD_BOARD_COLUMNS, groupSuperThreadBoardItems } from "./superThread.logic";
 
 /** The goal board the super agent writes; people only read it. */
 export function SuperThreadBoard(props: {
