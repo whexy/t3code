@@ -97,7 +97,7 @@ import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
 import { PullRequestGlyph } from "../pull-requests/pullRequestGlyphs";
 import { pullRequestStatus } from "../pull-requests/pullRequestStatus";
 
-interface StatusLabel {
+export interface StatusLabel {
   // Null when the icon and timer carry the status on their own.
   readonly label: string | null;
   readonly icon: AppSymbolName;
@@ -232,7 +232,7 @@ const LEGACY_MENU_ACTIONS: MenuAction[] = [
   },
 ];
 
-function ThreadListV2Section(props: {
+export function ThreadListV2Section(props: {
   readonly label: string;
   readonly pane?: "screen" | "sidebar";
   readonly tone?: "default" | "snoozed";
@@ -797,6 +797,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly searchMatch?: EnvironmentThreadSearchMatch;
   readonly searchQuery?: string;
   readonly simultaneousSwipeGesture?: ComponentProps<typeof ThreadSwipeable>["simultaneousWith"];
+  readonly statusOverride?: StatusLabel | null;
 }) {
   const { width: windowWidth, fontScale } = useWindowDimensions();
   const titleTypography = useScaledTextRole("body");
@@ -873,12 +874,14 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const workingLabel = STATUS_LABEL_BY_STATUS[status];
   const showsWoke = status === "ready" && props.wokeAt !== null;
   const statusEntry =
-    (status === "working" && workingLabel !== undefined && thread.goal?.status === "active"
-      ? {
-          ...workingLabel,
-          label: msg("Goal", { $context: "thread status, working toward a goal" }),
-        }
-      : workingLabel) ?? (isUnread ? DONE_STATUS_LABEL : undefined);
+    props.statusOverride !== undefined
+      ? (props.statusOverride ?? undefined)
+      : ((status === "working" && workingLabel !== undefined && thread.goal?.status === "active"
+          ? {
+              ...workingLabel,
+              label: msg("Goal", { $context: "thread status, working toward a goal" }),
+            }
+          : workingLabel) ?? (isUnread ? DONE_STATUS_LABEL : undefined));
   const statusLabel = statusEntry && {
     ...statusEntry,
     label: statusEntry.label === null ? null : m(statusEntry.label),

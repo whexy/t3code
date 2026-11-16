@@ -1,8 +1,8 @@
-import { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
+import { EnvironmentId, ProjectId, RunId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import { makeRawThreadShell, makeThreadShellFixture } from "../../test-fixtures";
-import { deriveSuperThreadList } from "./superThreadList";
+import { deriveSuperThreadList, resolveSuperThreadRollup } from "./superThreadList";
 
 const local = EnvironmentId.make("env-local");
 const remote = EnvironmentId.make("env-remote");
@@ -86,5 +86,38 @@ describe("deriveSuperThreadList", () => {
     });
     expect(result.sections.map((section) => section.rows.map((row) => row.id))).toEqual(rows);
     expect(result.unclaimedThreads.map((thread) => thread.id)).toEqual(unclaimed);
+  });
+});
+
+describe("resolveSuperThreadRollup", () => {
+  const run = (status: "completed" | "interrupted") => ({
+    runId: RunId.make(`run-${status}`),
+    status,
+    requestedAt: "2026-11-16T10:00:00.000Z",
+    startedAt: "2026-11-16T10:00:00.000Z",
+    completedAt: "2026-11-16T10:10:00.000Z",
+    assistantMessageId: null,
+  });
+  const finished = (id: string) => ({ ...shell(id, projectA), latestRun: run("completed") });
+  const done = { ...header, latestRun: run("completed") };
+
+  it.each([
+    {
+      name: "a member waiting for an answer outranks the super thread's own finished run",
+      rows: [finished("a"), { ...finished("b"), hasPendingUserInput: true }],
+      rollup: "input",
+    },
+    {
+      name: "is done only once every thread finished its latest run",
+      rows: [finished("a"), finished("b")],
+      rollup: "done",
+    },
+    {
+      name: "is nothing while a member's run was cut short",
+      rows: [finished("a"), { ...finished("b"), latestRun: run("interrupted") }],
+      rollup: null,
+    },
+  ] as const)("$name", ({ rows, rollup }) => {
+    expect(resolveSuperThreadRollup(done, rows)).toBe(rollup);
   });
 });

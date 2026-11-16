@@ -6,6 +6,7 @@ import {
 import { isListedThreadLineage, type EnvironmentId, type ProjectId } from "@t3tools/contracts";
 
 import { scopedThreadKey } from "../../lib/scopedEntities";
+import { resolveThreadListV2Status, type ThreadListV2Status } from "../threads/threadListV2";
 
 const NO_SECTIONS: ReadonlyArray<SuperThreadSection<never>> = [];
 
@@ -56,4 +57,31 @@ export function deriveSuperThreadList<T extends EnvironmentThreadShell>(input: {
             (thread) => !claimedThreadKeys.has(scopedThreadKey(thread.environmentId, thread.id)),
           ),
   };
+}
+
+const ROLLUP_ORDER = [
+  "approval",
+  "input",
+  "request",
+  "failed",
+  "limited",
+  "working",
+  "waiting",
+] as const satisfies ReadonlyArray<ThreadListV2Status>;
+
+export type SuperThreadRollup = (typeof ROLLUP_ORDER)[number] | "done" | null;
+
+/**
+ * A super thread row's status over the whole group: the most urgent status among the super thread
+ * and its unsettled members, and Done only once every one of them has finished its latest run.
+ */
+export function resolveSuperThreadRollup(
+  header: EnvironmentThreadShell,
+  rows: ReadonlyArray<EnvironmentThreadShell>,
+): SuperThreadRollup {
+  const threads = [header, ...rows];
+  const statuses = new Set(threads.map(resolveThreadListV2Status));
+  const urgent = ROLLUP_ORDER.find((status) => statuses.has(status));
+  if (urgent !== undefined) return urgent;
+  return threads.every((thread) => thread.latestRun?.status === "completed") ? "done" : null;
 }
