@@ -32,7 +32,7 @@ const SuperThreadMemberItem = memo(function SuperThreadMemberItem(props: {
       <Link
         to="/$environmentId/$threadId"
         params={{ environmentId, threadId }}
-        className="flex items-center gap-3 px-3 py-2 text-sm outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+        className="flex items-center gap-3 px-3 py-2 text-sm outline-none hover:bg-accent/40 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
       >
         <span className="flex min-w-0 flex-1 flex-col">
           <span className="truncate text-foreground">{shell.title}</span>
@@ -72,7 +72,7 @@ export function SuperThreadMembers(props: { readonly members: ReadonlyArray<Supe
           Threads the agent launches show up here and in the sidebar.
         </p>
       ) : (
-        <ul className="flex flex-col divide-y divide-border overflow-hidden rounded-lg border border-border">
+        <ul className="flex flex-col divide-y divide-border/60 overflow-hidden rounded-xl border border-border/70">
           {props.members.map((member) => (
             <SuperThreadMemberItem
               key={scopedThreadKey(scopeThreadRef(member.environmentId, member.threadId))}
