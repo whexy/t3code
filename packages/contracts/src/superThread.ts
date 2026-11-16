@@ -40,3 +40,9 @@ export const SuperThreadState = Schema.Struct({
   board: Schema.NullOr(SuperThreadBoard),
 });
 export type SuperThreadState = typeof SuperThreadState.Type;
+
+/** The shell streams on every thread change, so it carries members only; the board rides on thread detail. */
+export const SuperThreadShellState = Schema.Struct({
+  members: SuperThreadState.fields.members,
+});
+export type SuperThreadShellState = typeof SuperThreadShellState.Type;
