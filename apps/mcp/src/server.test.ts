@@ -128,6 +128,7 @@ describe("bridge listeners", () => {
         "control_session",
         "create_project",
         "create_session",
+        "create_super_thread",
         "get_session_status",
         "get_usage",
         "inspect_project",
