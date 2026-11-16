@@ -107,6 +107,7 @@ const MODELS = {
   "gpt-6-astra": "GPT-6 Astra",
   "claude-haiku-5-5": "Haiku 5.5",
   "gpt-6-luna": "GPT-6 Luna",
+  "gpt-6.1-terra": "GPT-6.1 Terra",
 } as const;
 type Model = keyof typeof MODELS;
 /** GPT models replay a Codex capture through CLIProxyAPI, the rest a Claude Code capture. */
