@@ -19,7 +19,7 @@ import { ProjectToolkit } from "../mcp/toolkits/project/tools.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as PeerForwarding from "../peer/PeerForwarding.ts";
 import { forkParked } from "../serverActivation.ts";
-import { recordLaunchedMember } from "./superThreadMembers.ts";
+import { recordFollowedRun, recordLaunchedMember } from "./superThreadMembers.ts";
 
 type Dispatch<E> = (command: SuperThreadInternalCommand) => Effect.Effect<unknown, E>;
 
@@ -115,6 +115,16 @@ export const replayPendingLaunches = Effect.fn("SuperThread.replayPendingLaunche
             { id: superThread.id, superThread: true },
             { environmentId: launch.environmentId, threadId: launched.threadId },
             launch,
+          ).pipe(
+            Effect.andThen(
+              launched.runId === null
+                ? Effect.void
+                : recordFollowedRun(threads, superThread.id, {
+                    environmentId: launch.environmentId,
+                    threadId: launched.threadId,
+                    runId: launched.runId,
+                  }),
+            ),
           ),
         onFailure: (error) =>
           Effect.logWarning("The linked environment refused a replayed launch.", {
