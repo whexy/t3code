@@ -1,19 +1,34 @@
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
-import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import {
   SUPER_THREAD_BOARD_COLUMNS,
   groupSuperThreadBoardItems,
 } from "@t3tools/client-runtime/state/super-thread-presentation";
-import type { SuperThreadBoard as SuperThreadBoardState } from "@t3tools/contracts";
+import type {
+  SuperThreadBoard as SuperThreadBoardState,
+  SuperThreadMember,
+} from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
 
+import { useQuietThreadShell } from "../../state/entities";
 import { InlineButton } from "../ui/button";
 
+// Each link reads only its own thread, so other threads' updates leave the board alone.
+function SuperThreadBoardLink(props: { readonly member: SuperThreadMember }) {
+  const { environmentId, threadId } = props.member;
+  const shell = useQuietThreadShell(scopeThreadRef(environmentId, threadId));
+  return (
+    <InlineButton
+      tone="muted"
+      className="max-w-full"
+      render={<Link to="/$environmentId/$threadId" params={{ environmentId, threadId }} />}
+    >
+      <span className="min-w-0 truncate">{shell?.title ?? "Open thread"}</span>
+    </InlineButton>
+  );
+}
+
 /** The goal board the super agent writes; people only read it. */
-export function SuperThreadBoard(props: {
-  readonly board: SuperThreadBoardState;
-  readonly shellByKey: ReadonlyMap<string, EnvironmentThreadShell>;
-}) {
+export function SuperThreadBoard(props: { readonly board: SuperThreadBoardState }) {
   const columns = groupSuperThreadBoardItems(props.board.items);
   return (
     <section aria-label="Goal board" className="flex flex-col gap-2">
@@ -43,29 +58,16 @@ export function SuperThreadBoard(props: {
                   ) : null}
                   {item.members && item.members.length > 0 ? (
                     <ul className="flex flex-col gap-0.5 text-xs">
-                      {item.members.map((member) => {
-                        const key = scopedThreadKey(
-                          scopeThreadRef(member.environmentId, member.threadId),
-                        );
-                        return (
-                          <li key={key} className="min-w-0 truncate">
-                            <InlineButton
-                              tone="muted"
-                              render={
-                                <Link
-                                  to="/$environmentId/$threadId"
-                                  params={{
-                                    environmentId: member.environmentId,
-                                    threadId: member.threadId,
-                                  }}
-                                />
-                              }
-                            >
-                              {props.shellByKey.get(key)?.title ?? "Open thread"}
-                            </InlineButton>
-                          </li>
-                        );
-                      })}
+                      {item.members.map((member) => (
+                        <li
+                          key={scopedThreadKey(
+                            scopeThreadRef(member.environmentId, member.threadId),
+                          )}
+                          className="min-w-0"
+                        >
+                          <SuperThreadBoardLink member={member} />
+                        </li>
+                      ))}
                     </ul>
                   ) : null}
                 </article>
