@@ -43,8 +43,10 @@ import {
 import { CallbackTarget, SessionCallbacks, type StatusReport } from "./callbacks.ts";
 import { BridgeError, Environments, type T3Environment } from "./environment.ts";
 import { InspectProjectTool, inspectProject } from "./inspect.ts";
+import { resolveLaunch, sessionTitle } from "./launch.ts";
 import { turnEnded } from "./threadWatch.ts";
 import { findSessions, sessionMarks } from "./sessions.ts";
+import { CreateSuperThreadTool, createSuperThread } from "./superThreads.ts";
 import { GetUsageTool, getUsage } from "./usage.ts";
 import {
   historyMessages,
@@ -767,6 +769,7 @@ export const BridgeToolkit = Toolkit.make(
   ListSessionsTool,
   CreateProjectTool,
   CreateSessionTool,
+  CreateSuperThreadTool,
   SendSessionMessageTool,
   ControlSessionTool,
   GetSessionStatusTool,
@@ -776,12 +779,6 @@ export const BridgeToolkit = Toolkit.make(
   UpdateSessionTool,
   RespondToSessionTool,
 );
-
-/** The placeholder title a new thread shows until the server generates one. */
-const sessionTitle = (task: string) => {
-  const compact = task.replace(/\s+/g, " ").trim();
-  return compact.length <= 72 ? compact : `${compact.slice(0, 69).trimEnd()}...`;
-};
 
 const ACTIVE_RUN_STATUSES = new Set(["preparing", "starting", "running", "waiting"]);
 
@@ -967,6 +964,7 @@ const make = Effect.gen(function* () {
   return BridgeToolkit.of({
     get_usage: (input) => getUsage(environments, input),
     inspect_project: (input) => inspectProject(environments, input),
+    create_super_thread: (input) => createSuperThread(environments, uuid, input),
     list_projects: Effect.fn("BridgeToolkit.list_projects")(function* ({ server_id }) {
       const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
       const listings = yield* Effect.forEach(
@@ -1151,45 +1149,12 @@ const make = Effect.gen(function* () {
         });
       }
       const environment = yield* environments.get(input.server_id);
-      // The scratch project must exist before the shell is read, so the shell lists it.
-      const projectId = scratch
-        ? (yield* environment.ensureScratchProject).projectId
-        : input.project_id!;
-      const [shell, config] = yield* Effect.all([environment.shell, environment.serverConfig], {
-        concurrency: 2,
+      const { project, modelSelection, runtimeMode } = yield* resolveLaunch(environment, {
+        projectId: scratch ? null : input.project_id!,
+        agent: input.agent,
+        model: input.model,
+        reasoningEffort: input.reasoning_effort,
       });
-      const project = shell.projects.find((candidate) => candidate.id === projectId);
-      if (project === undefined) {
-        return yield* new BridgeError({
-          message: scratch
-            ? `T3 server "${environment.id}" prepared its scratch project ${projectId}, but it is no longer available. Try again.`
-            : `Project ${projectId} was not found on server "${environment.id}". Call list_projects for current ids.`,
-        });
-      }
-      const settings = resolveProjectSettings(config.settings, project.id, project).settings;
-      const selection = resolveModelSelection({
-        providers: config.providers,
-        projectDefault: settings.defaultModelSelection,
-        agent: input.agent ?? undefined,
-        model: input.model ?? undefined,
-      });
-      if (Result.isFailure(selection)) {
-        return yield* new BridgeError({ message: selection.failure });
-      }
-      const reasoningEffort = input.reasoning_effort;
-      const withEffort =
-        reasoningEffort == null
-          ? selection
-          : applyReasoningEffort({
-              providers: config.providers,
-              selection: selection.success,
-              reasoningEffort,
-            });
-      if (Result.isFailure(withEffort)) {
-        return yield* new BridgeError({ message: withEffort.failure });
-      }
-      const modelSelection = withEffort.success;
-      const runtimeMode = settings.defaultRuntimeMode;
       const interactionMode = DEFAULT_PROVIDER_INTERACTION_MODE;
       const threadId = ThreadId.make(yield* uuid);
       const title = sessionTitle(input.task);
