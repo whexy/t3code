@@ -1,33 +1,6 @@
-import type {
-  ScopedThreadRef,
-  SuperThreadBoardItem,
-  SuperThreadBoardItemStatus,
-} from "@t3tools/contracts";
+import type { ScopedThreadRef } from "@t3tools/contracts";
 
 import type { SuperThreadSettleWarning } from "./superThreads.ts";
-
-export const SUPER_THREAD_BOARD_COLUMNS: ReadonlyArray<{
-  readonly status: SuperThreadBoardItemStatus;
-  readonly label: string;
-}> = [
-  { status: "todo", label: "To do" },
-  { status: "doing", label: "Doing" },
-  { status: "blocked", label: "Blocked" },
-  { status: "done", label: "Done" },
-];
-
-export function groupSuperThreadBoardItems(
-  items: ReadonlyArray<SuperThreadBoardItem>,
-): Record<SuperThreadBoardItemStatus, ReadonlyArray<SuperThreadBoardItem>> {
-  const columns: Record<SuperThreadBoardItemStatus, SuperThreadBoardItem[]> = {
-    todo: [],
-    doing: [],
-    blocked: [],
-    done: [],
-  };
-  for (const item of items) columns[item.status].push(item);
-  return columns;
-}
 
 const LISTED_TITLES = 5;
 

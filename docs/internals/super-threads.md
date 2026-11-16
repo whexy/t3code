@@ -3,7 +3,7 @@
 A super thread is a coordinator thread that launches threads in many projects and
 environments to finish one task. Without it, those threads scatter across the
 sidebar by project and nobody can tell which belong to the task. A super thread
-groups them in one sidebar section and shows a goal board its agent keeps.
+groups them in one sidebar section and shows a task map its agent draws.
 
 This is a fork-only feature. Its code lives in its own files and touches upstream
 files only through short seams, so the nightly rebase rarely conflicts.
@@ -46,11 +46,22 @@ files only through short seams, so the nightly rebase rarely conflicts.
   started new work after the person confirmed refuses and stays in the section. Unsettling the header returns only the header: settled members are
   done, and a returning header means a new task. A member that unsettles brings
   the section back through the derivation above, with no write to the header.
-- **The goal board is written whole by the super agent and read-only for
-  people.** A super-thread-only MCP tool replaces it. It lives on the thread, not
-  in a run's plan artifact, because it must outlive any single run.
+- **The task map is the super agent's, and read-only for people.** Super-thread-only
+  MCP tools patch it by node and edge id and read it back. It lives on the thread,
+  not in a run's plan artifact, because it must outlive any single run. Each patch
+  carries a reason, kept in a short change log so clients can show what changed
+  since a person last looked.
+- **The agent picks the structure, the system draws it.** The agent chooses the
+  nodes, groups, edges and words. Clients own the look and the layout: a lane per
+  group, columns from `depends` edges, computed from ids and edges only so a status
+  change never moves a node. The agent never sends coordinates.
+- **Threads outrank the agent on a node's state.** A linked thread that is working,
+  waiting for the person or failed shows over the agent's status, so a map the agent
+  forgot to update can't claim progress that isn't happening. The agent's status
+  covers what threads can't show: planned, blocked, done and dropped. Nodes link
+  only members, so every node's threads belong to this group.
 - **The super page is not the chat page.** The section header opens the super
-  page: goal board, a prompt box and the agent's pending questions and approvals.
+  page: goal, task map, a prompt box and the agent's pending questions and approvals.
   The transcript stays on the normal chat route, reached from the super page.
 
 ## Verification

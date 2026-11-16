@@ -631,7 +631,7 @@ export function threadHasUnfinishedWork(records: {
 function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
   switch (command.type) {
     case "super_thread.member.record":
-    case "super_thread.board.set":
+    case "super_thread.map.update":
     case "thread.create":
     case "thread.archive":
     case "thread.unarchive":
@@ -4018,7 +4018,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ...(command.linkOrigin === undefined || command.delegatedFrom === undefined
         ? {}
         : { delegatedFrom: command.delegatedFrom }),
-      ...(command.superThread === true ? { superThread: { members: [], board: null } } : {}),
+      ...(command.superThread === true ? { superThread: { members: [] } } : {}),
       lineage: {
         parentThreadId: null,
         relationshipToParent: null,
@@ -15433,7 +15433,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     let updateDelegatedCompletionOnlyRunId: RunId | undefined;
     switch (command.type) {
       case "super_thread.member.record":
-      case "super_thread.board.set": {
+      case "super_thread.map.update": {
         const thread = yield* projectionStore
           .getThread(command.threadId)
           .pipe(mapDispatchError(command));

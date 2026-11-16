@@ -12,7 +12,7 @@ export function SuperThreadDraftHeadline(props: { readonly draftId: DraftId }) {
       </h1>
       <p className="mt-2 flex h-6 w-full items-center justify-center gap-1.5 text-sm text-muted-foreground">
         <span className="min-w-0 truncate">
-          Describe the goal. It launches threads across your projects and keeps a board.
+          Describe the goal. It launches threads across your projects and maps the plan.
         </span>
         <span aria-hidden>·</span>
         <InlineButton

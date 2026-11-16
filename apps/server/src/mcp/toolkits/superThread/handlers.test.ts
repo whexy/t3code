@@ -151,15 +151,15 @@ const toolHarness = (caller: ThreadId) => {
         .handle("t3_thread_launch", { title: "Child", projectId, message: "Go", ...params })
         .pipe(Stream.unwrap, Stream.runCollect),
     ).pipe(Effect.provide(handlers));
-  const setBoard = Effect.flatMap(SuperThreadToolkit, (toolkit) =>
+  const updateMap = Effect.flatMap(SuperThreadToolkit, (toolkit) =>
     toolkit
-      .handle("super_thread_board_set", {
-        goal: "Ship v2",
-        items: [{ id: "api", title: "Ship the API", status: "doing" }],
+      .handle("super_thread_map_update", {
+        reason: "Plan",
+        upsertNodes: [{ id: "api", title: "Ship the API", status: "active" }],
       })
       .pipe(Stream.unwrap, Stream.runCollect),
   ).pipe(Effect.provide(handlers));
-  return { steps, launch, setBoard };
+  return { steps, launch, updateMap };
 };
 
 const recorded = (threadId: ThreadId, environmentId: EnvironmentId, member: ThreadId) => ({
@@ -211,23 +211,23 @@ it.effect("an ordinary thread's launches, here or linked, record nothing", () =>
   }),
 );
 
-it.effect("only a super thread can set its goal board", () =>
+it.effect("only a super thread can update its task map", () =>
   Effect.gen(function* () {
     const ordinary = toolHarness(ordinaryThreadId);
-    expect(JSON.stringify(yield* ordinary.setBoard)).toContain("capability_denied");
+    expect(JSON.stringify(yield* ordinary.updateMap)).toContain("capability_denied");
     expect(ordinary.steps).toEqual([]);
 
     const coordinator = toolHarness(superThreadId);
-    yield* coordinator.setBoard;
+    yield* coordinator.updateMap;
     expect(coordinator.steps).toEqual([
       {
         kind: "dispatch",
         command: expect.objectContaining({
-          type: "super_thread.board.set",
+          type: "super_thread.map.update",
           threadId: superThreadId,
-          board: {
-            goal: "Ship v2",
-            items: [{ id: "api", title: "Ship the API", status: "doing" }],
+          update: {
+            reason: "Plan",
+            upsertNodes: [{ id: "api", title: "Ship the API", status: "active" }],
           },
         }),
       },
@@ -247,7 +247,7 @@ const superProjection = {
     interactionMode: "default",
     branch: null,
     worktreePath: null,
-    superThread: { members: [], board: null },
+    superThread: { members: [] },
   },
   runs: [
     {

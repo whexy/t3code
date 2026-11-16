@@ -31,7 +31,7 @@ It exposes these tools:
   instead of a project, the session runs in the server's scratch folder.
 - `create_super_thread`: starts a coordinator for one task that spans several
   projects or servers. Its agent launches the threads it needs, and T3 Code
-  groups them under it in the sidebar with a goal board the agent keeps. It
+  groups them under it in the sidebar with a task map the agent draws. It
   runs in the server's scratch folder unless given a `project_id`, and is
   followed like any session.
 - `send_session_message`: sends a message into an existing session, which
