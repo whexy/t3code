@@ -98,6 +98,24 @@ export const SuperThreadMapUpdate = Schema.Struct({
 });
 export type SuperThreadMapUpdate = typeof SuperThreadMapUpdate.Type;
 
+/** One launch request: the caller's request namespace scopes its key before it leaves for the link. */
+export const SuperThreadLaunchKey = Schema.Struct({
+  environmentId: EnvironmentId,
+  requestNamespace: Schema.String,
+  clientRequestId: Schema.String,
+});
+export type SuperThreadLaunchKey = typeof SuperThreadLaunchKey.Type;
+
+/**
+ * A launch forwarded to a linked environment, written down before it goes so a restart can replay
+ * it. `input` is the `t3_thread_launch` arguments without `environmentId`.
+ */
+export const SuperThreadPendingLaunch = Schema.Struct({
+  ...SuperThreadLaunchKey.fields,
+  input: Schema.Record(Schema.String, Schema.Unknown),
+});
+export type SuperThreadPendingLaunch = typeof SuperThreadPendingLaunch.Type;
+
 /**
  * Present only on a super thread, fixed at creation. `members` is append-only and holds only
  * threads this thread launched itself, which is what keeps every thread in at most one group.
@@ -106,6 +124,8 @@ export const SuperThreadState = Schema.Struct({
   members: Schema.Array(SuperThreadMember),
   /** Absent until the agent draws one. */
   map: Schema.optionalKey(SuperThreadMap),
+  /** Absent while no forwarded launch awaits its answer. */
+  pendingLaunches: Schema.optionalKey(Schema.Array(SuperThreadPendingLaunch)),
 });
 export type SuperThreadState = typeof SuperThreadState.Type;
 
@@ -125,6 +145,20 @@ export const SuperThreadInternalCommand = Schema.Union([
     commandId: CommandId,
     threadId: ThreadId,
     member: SuperThreadMember,
+    /** The pending launch this record answers, which it ends. */
+    launch: Schema.optional(SuperThreadLaunchKey),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("super_thread.launch.pending"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    launch: SuperThreadPendingLaunch,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("super_thread.launch.end"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    launch: SuperThreadLaunchKey,
   }),
   Schema.Struct({
     type: Schema.Literal("super_thread.map.update"),

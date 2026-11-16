@@ -4,6 +4,7 @@ import { expect, it } from "@effect/vitest";
 import {
   EnvironmentId,
   NodeId,
+  OrchestratorMcpFailure,
   type OrchestrationV2ServerCommand,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2ThreadShell,
@@ -74,9 +75,13 @@ const scopeOf = (threadId: ThreadId): McpInvocationContext.McpInvocationScope =>
 type Step =
   | { readonly kind: "dispatch"; readonly command: OrchestrationV2ServerCommand }
   | { readonly kind: "launch"; readonly threadId: ThreadId | undefined }
-  | { readonly kind: "forward"; readonly environmentId: EnvironmentId };
+  | {
+      readonly kind: "forward";
+      readonly environmentId: EnvironmentId;
+      readonly clientRequestId?: string | undefined;
+    };
 
-const toolHarness = (caller: ThreadId) => {
+const toolHarness = (caller: ThreadId, linkedFails = false) => {
   const steps: Array<Step> = [];
   const dependencies = Layer.mergeAll(
     Layer.succeed(McpInvocationContext.McpInvocationContext, scopeOf(caller)),
@@ -113,8 +118,13 @@ const toolHarness = (caller: ThreadId) => {
         Effect.succeedSome({ id, workspaceRoot: "/projects/super" } as unknown as ProjectRecord),
     }),
     Layer.mock(PeerForwarding.PeerForwarding)({
-      call: (_scope, _tool, environmentId) => {
-        steps.push({ kind: "forward", environmentId });
+      call: (_scope, _tool, environmentId, params) => {
+        const { clientRequestId } = params as { readonly clientRequestId?: string };
+        steps.push({ kind: "forward", environmentId, clientRequestId });
+        if (linkedFails)
+          return Effect.fail(
+            new OrchestratorMcpFailure({ code: "invalid_request", message: "Refused there." }),
+          );
         return Effect.succeed({
           threadId: remoteThreadId,
           projectId,
@@ -189,16 +199,59 @@ it.effect("a super thread records a thread it launches here before the launch st
   }),
 );
 
+const launchKey = (clientRequestId: unknown) => ({
+  environmentId: box,
+  requestNamespace: `provider:${superThreadId}`,
+  clientRequestId,
+});
+
 it.effect(
-  "a super thread records a thread it launches in a linked environment once it returns",
+  "a super thread writes a linked launch down before forwarding it, and ends it with the answer",
   () =>
     Effect.gen(function* () {
       const { steps, launch } = toolHarness(superThreadId);
-      yield* launch({ environmentId: box });
+      yield* launch({ environmentId: box, clientRequestId: "child-1" });
       expect(steps).toEqual([
-        { kind: "forward", environmentId: box },
-        recorded(superThreadId, box, remoteThreadId),
+        {
+          kind: "dispatch",
+          command: expect.objectContaining({
+            type: "super_thread.launch.pending",
+            threadId: superThreadId,
+            launch: {
+              ...launchKey("child-1"),
+              input: expect.objectContaining({ title: "Child", clientRequestId: "child-1" }),
+            },
+          }),
+        },
+        { kind: "forward", environmentId: box, clientRequestId: "child-1" },
+        {
+          kind: "dispatch",
+          command: expect.objectContaining({
+            type: "super_thread.member.record",
+            member: { environmentId: box, threadId: remoteThreadId },
+            launch: launchKey("child-1"),
+          }),
+        },
       ]);
+    }),
+);
+
+it.effect(
+  "a failed linked launch stays pending, and one without a key is refused before it goes",
+  () =>
+    Effect.gen(function* () {
+      const failing = toolHarness(superThreadId, true);
+      yield* failing.launch({ environmentId: box, clientRequestId: "child-1" }).pipe(Effect.exit);
+      // The thread may exist there anyway; the agent's retry or a restart's replay settles it.
+      expect(
+        failing.steps.map((step) => (step.kind === "dispatch" ? step.command.type : step.kind)),
+      ).toEqual(["super_thread.launch.pending", "forward"]);
+
+      // Without a key, the linked environment would make a new thread on every replay.
+      const keyless = toolHarness(superThreadId);
+      const refused = yield* keyless.launch({ environmentId: box }).pipe(Effect.exit);
+      expect(JSON.stringify(refused)).toContain("needs a clientRequestId");
+      expect(keyless.steps).toEqual([]);
     }),
 );
 

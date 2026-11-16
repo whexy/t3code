@@ -1,6 +1,7 @@
 import { type EnvironmentId, OrchestratorMcpFailure, type ThreadId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 
+import { recordPendingLaunch } from "../../../superThread/superThreadLaunches.ts";
 import { recordLaunchedMember } from "../../../superThread/superThreadMembers.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import { type Caller, dispatchFailure, newCommandId, readCaller } from "../../threadAccess.ts";
@@ -17,14 +18,55 @@ export const recordLocalLaunch = Effect.fn("SuperThreadMcp.recordLocalLaunch")(f
   }).pipe(Effect.mapError(dispatchFailure));
 });
 
+/** Runs as a launch leaves for a linked environment; see `recordPendingLaunch`. */
+export const recordPendingForwardedLaunch = Effect.fn(
+  "SuperThreadMcp.recordPendingForwardedLaunch",
+)(function* <
+  P extends {
+    readonly environmentId?: EnvironmentId | undefined;
+    readonly clientRequestId?: string | undefined;
+  },
+>({ environmentId, ...input }: P) {
+  const { scope, threads, caller } = yield* readCaller();
+  if (caller?.superThread === undefined || environmentId === undefined) return;
+  if (input.clientRequestId === undefined) {
+    return yield* new OrchestratorMcpFailure({
+      code: "invalid_request",
+      message:
+        "A super thread's launch in a linked environment needs a clientRequestId, so a restart can find the thread it started.",
+    });
+  }
+  yield* recordPendingLaunch(threads.dispatch, caller.id, {
+    environmentId,
+    requestNamespace: scope.requestNamespace,
+    clientRequestId: input.clientRequestId,
+    input: input as Record<string, unknown>,
+  }).pipe(Effect.mapError(dispatchFailure));
+});
+
 /** A linked environment picks the thread id, so its launch is recorded once the result returns. */
 export const recordForwardedLaunch = Effect.fn("SuperThreadMcp.recordForwardedLaunch")(function* <
   A extends { readonly threadId: ThreadId },
->(_input: unknown, environmentId: EnvironmentId, launched: A) {
-  const { threads, caller } = yield* readCaller();
-  yield* recordLaunchedMember(threads, caller, { environmentId, threadId: launched.threadId }).pipe(
-    Effect.mapError(dispatchFailure),
-  );
+>(
+  input: { readonly clientRequestId?: string | undefined },
+  environmentId: EnvironmentId,
+  launched: A,
+) {
+  const { scope, threads, caller } = yield* readCaller();
+  const launch =
+    input.clientRequestId === undefined
+      ? undefined
+      : {
+          environmentId,
+          requestNamespace: scope.requestNamespace,
+          clientRequestId: input.clientRequestId,
+        };
+  yield* recordLaunchedMember(
+    threads,
+    caller,
+    { environmentId, threadId: launched.threadId },
+    launch,
+  ).pipe(Effect.mapError(dispatchFailure));
   return launched;
 });
 

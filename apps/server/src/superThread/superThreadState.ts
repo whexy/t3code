@@ -5,6 +5,7 @@ import {
   type OrchestrationV2AppThread,
   type OrchestrationV2ThreadShell,
   type SuperThreadInternalCommand,
+  type SuperThreadLaunchKey,
   type SuperThreadMap,
   type SuperThreadMapEdgeRef,
   type SuperThreadMapUpdate,
@@ -26,15 +27,28 @@ export function applySuperThreadCommand(
   switch (command.type) {
     case "super_thread.member.record": {
       const { environmentId, threadId } = command.member;
-      if (
-        state.members.some(
-          (member) => member.environmentId === environmentId && member.threadId === threadId,
-        )
-      ) {
-        return thread;
-      }
-      return { ...thread, superThread: { ...state, members: [...state.members, command.member] } };
+      const listed = state.members.some(
+        (member) => member.environmentId === environmentId && member.threadId === threadId,
+      );
+      const recorded = listed ? state : { ...state, members: [...state.members, command.member] };
+      return {
+        ...thread,
+        superThread: command.launch ? withoutLaunch(recorded, command.launch) : recorded,
+      };
     }
+    case "super_thread.launch.pending":
+      return {
+        ...thread,
+        superThread: {
+          ...state,
+          pendingLaunches: [
+            ...(withoutLaunch(state, command.launch).pendingLaunches ?? []),
+            command.launch,
+          ],
+        },
+      };
+    case "super_thread.launch.end":
+      return { ...thread, superThread: withoutLaunch(state, command.launch) };
     case "super_thread.map.update": {
       const map = applySuperThreadMapUpdate(
         state.map,
@@ -46,6 +60,21 @@ export function applySuperThreadCommand(
     }
   }
 }
+
+const sameLaunch = (a: SuperThreadLaunchKey, b: SuperThreadLaunchKey) =>
+  a.environmentId === b.environmentId &&
+  a.requestNamespace === b.requestNamespace &&
+  a.clientRequestId === b.clientRequestId;
+
+/** Leaves the key out rather than empty, so a super thread with nothing pending stores nothing. */
+const withoutLaunch = (
+  state: NonNullable<OrchestrationV2AppThread["superThread"]>,
+  launch: SuperThreadLaunchKey,
+): NonNullable<OrchestrationV2AppThread["superThread"]> => {
+  const { pendingLaunches, ...rest } = state;
+  const left = (pendingLaunches ?? []).filter((pending) => !sameLaunch(pending, launch));
+  return left.length === 0 ? rest : { ...rest, pendingLaunches: left };
+};
 
 const edgeKey = (edge: SuperThreadMapEdgeRef) => JSON.stringify([edge.from, edge.to]);
 const memberKey = (member: SuperThreadMember) =>

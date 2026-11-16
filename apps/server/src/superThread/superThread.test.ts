@@ -16,10 +16,13 @@ import {
   type SuperThreadMap,
   type SuperThreadMapNode,
   type SuperThreadMapUpdate,
+  OrchestratorMcpFailure,
+  type SuperThreadPendingLaunch,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
@@ -39,6 +42,9 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as PeerForwarding from "../peer/PeerForwarding.ts";
+import { ReplayRetrySchedule, replayPendingLaunches } from "./superThreadLaunches.ts";
 import { applySuperThreadMapUpdate } from "./superThreadState.ts";
 
 const modelSelection = { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" };
@@ -72,7 +78,7 @@ const layerServerConfig = ServerConfig.layerTest(process.cwd(), { prefix: "t3-su
 const layerTest = Layer.mergeAll(RuntimeLayer.layer, ProjectionStore.layer).pipe(
   Layer.provide(McpSessionRegistryTestkit.layer),
   Layer.provide(McpProviderSessions.layer),
-  Layer.provide(SqlitePersistence.layerMemory),
+  Layer.provideMerge(SqlitePersistence.layerMemory),
   Layer.provide(
     CheckpointStore.layer.pipe(
       Layer.provide(VcsDriverRegistry.layer),
@@ -219,6 +225,95 @@ it.layer(layerTest)("super threads", (it) => {
         );
         yield* settle("settle:no-run", null);
         assert.equal((yield* shellOf(ordinaryThreadId)).settledOverride, "settled");
+      }),
+  );
+
+  it.effect(
+    "a restart replays a forwarded launch its handler never recorded, once, with the key it went out with",
+    () =>
+      Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const box = EnvironmentId.make("environment:box");
+        const superThreadId = ThreadId.make("thread:super-replay");
+        yield* orchestrator.dispatch({
+          type: "thread.create",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make("replay:create"),
+          threadId: superThreadId,
+          projectId: ProjectId.make("project:super"),
+          title: "Super",
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          superThread: true,
+        });
+        const pending = (clientRequestId: string): SuperThreadPendingLaunch => ({
+          environmentId: box,
+          requestNamespace: "provider-session:before-restart",
+          clientRequestId,
+          input: { title: clientRequestId, message: "Go", clientRequestId },
+        });
+        // What the handlers wrote before E1 went down: each launch, before it was forwarded.
+        for (const launch of [pending("lands"), pending("refused")]) {
+          yield* orchestrator.dispatch({
+            type: "super_thread.launch.pending",
+            commandId: CommandId.make(`replay:pending:${launch.clientRequestId}`),
+            threadId: superThreadId,
+            launch,
+          });
+        }
+
+        const sent: Array<{ readonly namespace: string; readonly key: unknown }> = [];
+        let unreachable = 1;
+        const replay = replayPendingLaunches().pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              Layer.mock(PeerForwarding.PeerForwarding)({
+                call: (scope, _tool, _environmentId, params) =>
+                  Effect.suspend(() => {
+                    const key = (params as { readonly clientRequestId?: string }).clientRequestId;
+                    sent.push({ namespace: scope.requestNamespace, key });
+                    if (key === "refused")
+                      return Effect.fail(
+                        new OrchestratorMcpFailure({ code: "invalid_request", message: "No." }),
+                      );
+                    if (unreachable-- > 0)
+                      return Effect.fail(
+                        new OrchestratorMcpFailure({
+                          code: "orchestration_error",
+                          message: "The linked environment stopped answering.",
+                        }),
+                      );
+                    return Effect.succeed({ threadId: ThreadId.make("thread:landed") } as never);
+                  }),
+              }),
+              Layer.mock(ServerEnvironment.ServerEnvironment)({
+                getEnvironmentId: Effect.succeed(EnvironmentId.make("environment:here")),
+              }),
+            ),
+          ),
+          Effect.provideService(ReplayRetrySchedule, Schedule.recurs(3)),
+        );
+        yield* replay;
+
+        const state = (yield* orchestrator.getThreadProjection(superThreadId)).thread.superThread;
+        // An unreachable link is retried; a refusal ends its launch without a member.
+        assert.deepEqual(state, {
+          members: [{ environmentId: box, threadId: ThreadId.make("thread:landed") }],
+        });
+        assert.sameDeepMembers(sent, [
+          { namespace: "provider-session:before-restart", key: "refused" },
+          { namespace: "provider-session:before-restart", key: "lands" },
+          { namespace: "provider-session:before-restart", key: "lands" },
+        ]);
+
+        // Nothing is left pending, so the next restart sends nothing.
+        sent.length = 0;
+        yield* replay;
+        assert.deepEqual(sent, []);
       }),
   );
 });
