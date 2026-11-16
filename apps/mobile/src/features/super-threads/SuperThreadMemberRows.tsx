@@ -11,7 +11,7 @@ import { threadListEnvironmentsAtom } from "../../state/presentation";
 import type { ThreadPrPresentation } from "../../state/thread-pr-presentation";
 import { useQueuedThreadKeys } from "../../state/use-thread-outbox";
 import { useThreadListActions } from "../home/useThreadListActions";
-import { ThreadListV2Row } from "../threads/thread-list-v2-items";
+import { ThreadListV2Row, type StatusLabel } from "../threads/thread-list-v2-items";
 import { buildThreadListV2ListItems, resolveThreadListV2WokeAt } from "../threads/threadListV2";
 import { useThreadRowProviderInstanceResolver } from "../threads/thread-provider-instance";
 import { useThreadListNow } from "../threads/use-thread-list-now";
@@ -32,9 +32,10 @@ export interface SuperThreadMemberRowHost {
 }
 
 /**
- * A section's members as the list's own thread rows, with their swipe actions and menu. Pin,
- * snooze and reordering are off: the section lists every unsettled member in its own order, so
- * those would change nothing on screen.
+ * A section's super thread and members as the list's own thread rows, with their swipe actions
+ * and menu; settling the super thread asks first and settles its members too. Pin, snooze and
+ * reordering are off: the section lists every unsettled member in its own order, so those would
+ * change nothing on screen.
  */
 export function SuperThreadMemberRows(props: {
   readonly rows: ReadonlyArray<EnvironmentThreadShell>;
@@ -46,6 +47,10 @@ export function SuperThreadMemberRows(props: {
   readonly selectedThreadKey: string | null;
   readonly onSelectThread: (thread: EnvironmentThreadShell) => void;
   readonly host: SuperThreadMemberRowHost;
+  /** A status shown in place of a row's own, by thread key. */
+  readonly statusOverrides?: ReadonlyMap<string, StatusLabel | null>;
+  /** Ends with the divider the list draws between its rows, where more rows follow. */
+  readonly trailingDivider?: boolean;
 }) {
   const actions = useThreadListActions();
   const {
@@ -72,7 +77,7 @@ export function SuperThreadMemberRows(props: {
   });
   const { host } = props;
 
-  return items.map((item) => {
+  return items.map((item, index) => {
     if (item.type !== "v2-thread") return null;
     const thread = item.item.thread;
     const key = scopedThreadKey(thread.environmentId, thread.id);
@@ -87,7 +92,9 @@ export function SuperThreadMemberRows(props: {
         wokeAt={item.item.wokeAt}
         snoozePresetMinute=""
         timeLabel={item.timeLabel}
-        showTrailingDivider={false}
+        showTrailingDivider={
+          item.showTrailingDivider || (props.trailingDivider === true && index === items.length - 1)
+        }
         project={
           props.projectByKey.get(scopedProjectKey(thread.environmentId, thread.projectId)) ?? null
         }
@@ -123,6 +130,9 @@ export function SuperThreadMemberRows(props: {
         onSwipeableClose={host.onSwipeableClose}
         onSwipeableWillOpen={host.onSwipeableWillOpen}
         simultaneousSwipeGesture={host.simultaneousSwipeGesture}
+        {...(props.statusOverrides?.has(key)
+          ? { statusOverride: props.statusOverrides.get(key) ?? null }
+          : {})}
       />
     );
   });
