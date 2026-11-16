@@ -643,12 +643,16 @@ jobs:
   # Archiving signs with the Development identity and profiles Xcode makes
   # through the API key; the export re-signs with Distribution and the App
   # Store profiles that scripts/self-hosted/ios-profiles.ts installs. Without
-  # the signing secrets the job only says so and succeeds.
+  # the signing secrets the job only says so and succeeds. The archive is the
+  # run's longest leg, so it starts with the run; only the upload waits for a
+  # successful gate.
   ios-testflight:
-    needs: gate
-    if: needs.gate.outputs.current == 'true'
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/self-hosted-nightly'
     runs-on: xcode-27
     timeout-minutes: 120
+    permissions:
+      actions: read
+      contents: read
     outputs:
       fingerprint: ${{ steps.upload.outputs.fingerprint }}
     env:
@@ -695,6 +699,29 @@ jobs:
           vp install --lockfile-only
           vp install --frozen-lockfile --filter=@t3tools/mobile...
 
+      # React Native's Podfile routes C, C++ and Objective-C compiles through
+      # ccache when USE_CCACHE=1; Swift still compiles cold. ccache sees the
+      # xcrun shim, not the selected Xcode's clang, so the key names Xcode.
+      - name: Install ccache
+        id: ccache
+        if: steps.secrets.outputs.present == 'true'
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
+        run: |
+          command -v ccache > /dev/null || brew install ccache
+          echo "CCACHE_DIR=$HOME/.ccache" >> "$GITHUB_ENV"
+          echo "start=$(date +%s)" >> "$GITHUB_OUTPUT"
+          echo "xcode=$(xcodebuild -version | tr -s ' \n' '-' | sed 's/-$//')" >> "$GITHUB_OUTPUT"
+
+      - name: Restore ccache
+        if: steps.secrets.outputs.present == 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.ccache
+          key: ios-ccache-v1-${{ steps.ccache.outputs.xcode }}-${{ github.run_id }}
+          restore-keys: ios-ccache-v1-${{ steps.ccache.outputs.xcode }}-
+
       - name: Import signing credentials
         if: steps.secrets.outputs.present == 'true'
         env:
@@ -725,6 +752,8 @@ jobs:
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          USE_CCACHE: "1"
+          CCACHE_BASEDIR: ${{ github.workspace }}
           # Prebuild writes these into Info.plist only; without the secret, push stays off.
           T3CODE_PUSH_URL: https://t3-push.clusters.work
           T3CODE_PUSH_TOKEN: ${{ secrets.T3_PUSH_PHONE_TOKEN }}
@@ -735,6 +764,7 @@ jobs:
           echo "IOS_TEAM_ID=$team" >> "$GITHUB_ENV"
           echo "IOS_FINGERPRINT=$fingerprint" >> "$GITHUB_ENV"
           ./node_modules/.bin/expo prebuild --platform ios --clean
+          ccache --zero-stats > /dev/null
           workspace="$(echo ios/*.xcworkspace)"
           # The share extension's target carries no team of its own.
           xcodebuild archive -quiet \
@@ -751,8 +781,24 @@ jobs:
             exit 1
           fi
 
-      - id: current
+      - name: Wait for gate
+        id: gate
         if: steps.secrets.outputs.present == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          while :; do
+            gate="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs" --paginate \
+              --jq '.jobs[] | select(.name == "gate") | "\(.status) \(.conclusion)"')"
+            case "$gate" in
+              "completed success") echo passed=true >> "$GITHUB_OUTPUT"; break ;;
+              completed*) echo "state=IOS_HELD reason=gate $gate" | tee -a "$GITHUB_STEP_SUMMARY"; break ;;
+              *) sleep 20 ;;
+            esac
+          done
+
+      - id: current
+        if: steps.gate.outputs.passed == 'true'
         uses: ./.github/actions/self-hosted-current
 
       - name: Upload to TestFlight
@@ -772,6 +818,30 @@ jobs:
             -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID"
           echo "fingerprint=$IOS_FINGERPRINT" >> "$GITHUB_OUTPUT"
           echo "testflight: $T3CODE_MOBILE_VERSION ($T3CODE_FORK_IOS_BUILD_NUMBER) fingerprint $IOS_FINGERPRINT" >> "$GITHUB_STEP_SUMMARY"
+
+      # A hit refreshes an entry's mtime, so evicting everything older than this
+      # job keeps exactly what this archive used and the cache never outgrows one build.
+      - name: Trim ccache
+        if: ${{ !cancelled() && steps.ccache.outcome == 'success' }}
+        env:
+          START: ${{ steps.ccache.outputs.start }}
+        run: |
+          {
+            echo '<details><summary>ccache</summary>'
+            echo
+            echo '```'
+            ccache --show-stats
+            echo '```'
+            echo '</details>'
+          } >> "$GITHUB_STEP_SUMMARY"
+          ccache --evict-older-than "$(($(date +%s) - START + 60))s"
+
+      - name: Save ccache
+        if: ${{ !cancelled() && steps.ccache.outcome == 'success' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.ccache
+          key: ios-ccache-v1-${{ steps.ccache.outputs.xcode }}-${{ github.run_id }}
 
   # The dev OTA lane (self-hosted-dev-ota.yml) targets the newest ios/1.2.N tag
   # and compares HEAD's native fingerprint with the one its message records.
