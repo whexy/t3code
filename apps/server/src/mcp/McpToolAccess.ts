@@ -265,6 +265,7 @@ export const startsThreads = <P, A, E, R, E2 = never, R2 = never>(
   handle: (params: P, modes: StartedModes) => Effect.Effect<A, E, R>,
   linked: "stamped" | { readonly refused: string },
   forwarded?: Forwarded<P, A, E2, R2>,
+  beforeForwarding?: RemoteCheck<P>,
 ) => {
   const started = Effect.fn("McpToolAccess.started")(function* (caller: Caller, params: P) {
     const requested = modes(params);
@@ -284,7 +285,10 @@ export const startsThreads = <P, A, E, R, E2 = never, R2 = never>(
         if (linked !== "stamped") yield* assertNotLinked(caller, linked.refused);
         return yield* handle(params, yield* started(caller, params));
       }),
-    (params: P) => Effect.flatMap(writingCaller, (caller) => started(caller, params)),
+    (params: P) =>
+      Effect.flatMap(writingCaller, (caller) => started(caller, params)).pipe(
+        Effect.tap(() => beforeForwarding?.(params) ?? Effect.void),
+      ),
   );
   return forwarded === undefined ? declaration : afterForwarding(declaration, forwarded);
 };
@@ -465,7 +469,7 @@ const routed = Effect.fn("McpToolAccess.routed")(function* <Tools extends Record
         const target = PeerForwarding.remoteTarget(scope, environmentId);
         if (target === undefined) return yield* here(params);
         if (scope.linkedEnvironments === false) return yield* PeerForwarding.linkedEnvironmentsOff;
-        yield* (remote as RemoteCheck<typeof params>)(params);
+        yield* (remote as RemoteCheck<typeof params>)({ ...params, environmentId });
         if (Option.isNone(forwarding)) return yield* linksUnavailable;
         const result = yield* forwarding.value.call(scope, tool, target, {
           ...params,

@@ -640,6 +640,8 @@ export function threadHasUnfinishedWork(records: {
 function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
   switch (command.type) {
     case "super_thread.member.record":
+    case "super_thread.launch.pending":
+    case "super_thread.launch.end":
     case "super_thread.map.update":
     case "thread.create":
     case "thread.archive":
@@ -15664,6 +15666,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     let updateDelegatedCompletionOnlyRunId: RunId | undefined;
     switch (command.type) {
       case "super_thread.member.record":
+      case "super_thread.launch.pending":
+      case "super_thread.launch.end":
       case "super_thread.map.update": {
         const thread = yield* projectionStore
           .getThread(command.threadId)
