@@ -50,7 +50,7 @@ const Success = Schema.Struct({
 
 export const CreateSuperThreadTool = Tool.make("create_super_thread", {
   description:
-    "Start a super thread: a coordinator agent for one task that spans several projects or servers. The coordinator launches its own threads in those projects, on this server or on servers linked to it; T3 Code groups them under the super thread in its sidebar and shows a goal board the coordinator keeps. Use it only when the user wants one task coordinated across several threads; for work in one project, call create_session. It runs in the server's scratch folder unless project_id is given, with the same agent, model and reasoning_effort choices as create_session. Follow and continue it like any session, with get_session_status and send_session_message on the returned session_id.",
+    "Start a super thread: a coordinator agent for one task that spans several projects or servers. The coordinator launches its own threads in those projects, on this server or on servers linked to it; T3 Code groups them under the super thread in its sidebar and shows a task map of the coordinator's plan. Use it only when the user wants one task coordinated across several threads; for work in one project, call create_session. It runs in the server's scratch folder unless project_id is given, with the same agent, model and reasoning_effort choices as create_session. Follow and continue it like any session, with get_session_status and send_session_message on the returned session_id.",
   parameters: Parameters,
   success: Success,
   failure: BridgeError,

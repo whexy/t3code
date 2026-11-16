@@ -1,7 +1,7 @@
 # Super threads
 
 A super thread coordinates one task that spans several projects or machines. You describe the goal.
-Its agent starts threads where the work belongs and keeps a goal board. All of those threads stay
+Its agent starts threads where the work belongs and draws its plan as a task map. All of those threads stay
 together in one sidebar section, so you can tell which threads belong to which task.
 
 ## Start one
@@ -18,8 +18,22 @@ Each super thread gets its own sidebar section, above your other threads. The su
 section's header, and the threads it started are listed under it, those that need you or are done
 first. They don't appear in your other sections.
 
-Select the header to open the super thread's page: the goal, the board, its threads, any approvals
-it is waiting on, and a box to message it. The board is read-only; ask the agent to change it.
+Select the header to open the super thread's page: the goal, the task map, any approvals it is
+waiting on, and a box to message it.
+
+## The task map
+
+The map shows the agent's plan: each box is a piece of the work, and an arrow means the work on its
+right waits for the work on its left. Groups of related work share a lane. A box shows what its
+threads are doing right now, such as working or waiting for you, and otherwise what the agent says:
+planned, blocked, done or dropped. Hover over a box for its purpose and what counts as done; select
+it to open its thread.
+
+The map is read-only. To change the plan, tell the agent, here or in the transcript. To ask about
+part of the map, paste a screenshot into the message box. When the agent changes the plan while you
+are away, the page lists what changed and marks new boxes.
+
+Threads the agent started but did not put on the map are listed under **Not on the map**.
 **Open transcript** shows the full conversation.
 
 ## Which threads belong
