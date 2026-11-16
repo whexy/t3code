@@ -378,7 +378,7 @@ const wakeAwareVisitShell = Atom.family((key: string) => {
   }).pipe(Atom.withLabel(`mobile-thread-visit-shell:${key}`));
 });
 
-export const threadVisitTracker = createThreadVisitTracker({
+const threadVisitTracker = createThreadVisitTracker({
   threadShellAtom: (ref) => wakeAwareVisitShell(threadKey(ref)),
   sessionGenerationAtom: environmentCatalog.sessionGenerationAtom,
   visit: threadEnvironment.visit,

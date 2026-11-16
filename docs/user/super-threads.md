@@ -24,7 +24,8 @@ first. They don't appear in your other sections.
 
 Select the header to open the super thread's conversation, which works like any other thread. To see
 the goal and the task map beside it, select **Super thread** in the header, or choose **Show goal and
-task map** in the command palette. Select **Super thread** again to hide them.
+task map** in the command palette. Select **Super thread** again to hide them. On iOS, **Super
+thread** is under the Panels button in the thread's header.
 
 ## The task map
 
@@ -32,7 +33,9 @@ The map shows the agent's plan: each box is a piece of the work, and an arrow me
 right waits for the work on its left. Groups of related work share a lane. A box shows what its
 threads are doing right now, such as working or waiting for you, and otherwise what the agent says:
 planned, blocked, done or dropped. Hover over a box for its purpose and what counts as done; select
-it to open its thread.
+it to open its thread. On a phone, drag to move around the map and pinch to zoom, or choose
+**Full screen** above the map for more room. Tap a box to open its thread, or to see its details when
+it has none; touch and hold a box to see its details.
 
 The map is read-only. To change the plan, tell the agent in the conversation. To ask about part of
 the map, paste a screenshot into the message box. When the agent changes the plan while the map is
