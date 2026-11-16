@@ -475,6 +475,10 @@
       "types": "./src/state/superThreadPresentation.ts",
       "default": "./src/state/superThreadPresentation.ts"
     },
+    "./state/super-thread-map": {
+      "types": "./src/state/superThreadMap.ts",
+      "default": "./src/state/superThreadMap.ts"
+    },
     "./state/thread-search": {
       "types": "./src/state/threadSearch.ts",
       "default": "./src/state/threadSearch.ts"

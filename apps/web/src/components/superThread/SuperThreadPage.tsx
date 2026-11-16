@@ -1,6 +1,12 @@
-import type { ScopedThreadRef } from "@t3tools/contracts";
+import { scopedThreadKey } from "@t3tools/client-runtime/environment";
+import type {
+  ScopedThreadRef,
+  SuperThreadMap as SuperThreadMapState,
+  SuperThreadMember,
+} from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
 import { NetworkIcon } from "lucide-react";
+import { useState } from "react";
 
 import { isElectron } from "../../env";
 import {
@@ -8,7 +14,9 @@ import {
   useQuietThreadShell,
   useThreadStatus,
 } from "../../state/entities";
+import { useUiStateStore } from "../../uiStateStore";
 import { ThreadVisitWatermark } from "../chat/ThreadVisitWatermark";
+import { resolveThreadLastVisitedAt } from "../Sidebar.logic";
 import { Button } from "../ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../ui/empty";
 import { SidebarInset } from "../ui/sidebar";
@@ -20,10 +28,22 @@ import {
 } from "../WorkspaceBreadcrumb";
 import { WorkspacePageContainer } from "../WorkspacePageContainer";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
-import { SuperThreadBoard } from "./SuperThreadBoard";
+import { SuperThreadMap } from "./SuperThreadMap";
 import { SuperThreadMembers } from "./SuperThreadMembers";
 import { SuperThreadPendingRequests } from "./SuperThreadPendingRequests";
 import { SuperThreadPromptBox } from "./SuperThreadPromptBox";
+
+function membersNotOnMap(
+  members: ReadonlyArray<SuperThreadMember>,
+  map: SuperThreadMapState,
+): ReadonlyArray<SuperThreadMember> {
+  const onMap = new Set(
+    map.nodes.flatMap((node) =>
+      (node.threads ?? []).map((thread) => `${thread.environmentId}\u0000${thread.threadId}`),
+    ),
+  );
+  return members.filter((member) => !onMap.has(`${member.environmentId}\u0000${member.threadId}`));
+}
 
 function SuperThreadSkeleton() {
   return (
@@ -41,7 +61,7 @@ function SuperThreadSkeleton() {
   );
 }
 
-/** The super thread's own page: its goal board, members, open requests and a prompt box. */
+/** The super thread's own page: its goal, task map, open requests, threads and a prompt box. */
 export function SuperThreadPage(props: { readonly threadRef: ScopedThreadRef }) {
   const { threadRef } = props;
   const shell = useQuietThreadShell(threadRef);
@@ -49,7 +69,15 @@ export function SuperThreadPage(props: { readonly threadRef: ScopedThreadRef }) 
   const status = useThreadStatus(threadRef);
   const superThread = detail?.projection.thread.superThread;
   const members = superThread?.members ?? shell?.source.superThread?.members ?? [];
-  const board = superThread?.board ?? null;
+  const map = superThread?.map ?? null;
+  const localLastVisitedAt = useUiStateStore(
+    (state) => state.threadLastVisitedAtById[scopedThreadKey(threadRef)],
+  );
+  // Read in the render that first has the shell, before this page's own visit moves it.
+  const [seen, setSeen] = useState<{ readonly at: string | undefined } | null>(null);
+  if (seen === null && shell !== null) {
+    setSeen({ at: resolveThreadLastVisitedAt(shell.lastVisitedAt, localLastVisitedAt) });
+  }
   const transcriptLink = (
     <Link
       to="/$environmentId/$threadId"
@@ -104,8 +132,8 @@ export function SuperThreadPage(props: { readonly threadRef: ScopedThreadRef }) 
                   <>
                     <section aria-label="Goal" className="flex flex-col gap-1">
                       <h2 className="text-sm font-medium text-foreground">Goal</h2>
-                      {board !== null && board.goal.trim().length > 0 ? (
-                        <p className="whitespace-pre-wrap text-sm text-foreground">{board.goal}</p>
+                      {map !== null && map.goal.trim().length > 0 ? (
+                        <p className="whitespace-pre-wrap text-sm text-foreground">{map.goal}</p>
                       ) : (
                         <p className="text-sm text-muted-foreground">
                           No goal yet. The agent writes it once it has a plan.
@@ -113,8 +141,11 @@ export function SuperThreadPage(props: { readonly threadRef: ScopedThreadRef }) 
                       )}
                     </section>
                     <SuperThreadPendingRequests threadRef={threadRef} title={shell.title} />
-                    {board !== null ? <SuperThreadBoard board={board} /> : null}
-                    <SuperThreadMembers members={members} />
+                    {map !== null ? <SuperThreadMap map={map} seenAt={seen?.at} /> : null}
+                    <SuperThreadMembers
+                      members={map === null ? members : membersNotOnMap(members, map)}
+                      title={map === null ? "Threads" : "Not on the map"}
+                    />
                   </>
                 )}
               </WorkspacePageContainer>

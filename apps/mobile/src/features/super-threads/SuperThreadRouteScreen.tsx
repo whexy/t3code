@@ -3,17 +3,13 @@ import { StackActions, useNavigation, type StaticScreenProps } from "@react-navi
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import {
-  SUPER_THREAD_BOARD_COLUMNS,
-  groupSuperThreadBoardItems,
-} from "@t3tools/client-runtime/state/super-thread-presentation";
-import {
   AuthOrchestrationOperateScope,
   CommandId,
   EnvironmentId,
   MessageId,
   ThreadId,
   type ScopedThreadRef,
-  type SuperThreadBoard,
+  type SuperThreadMap,
   type SuperThreadMember,
 } from "@t3tools/contracts";
 import { useState } from "react";
@@ -40,6 +36,7 @@ import { useSavedRemoteConnections } from "../../state/use-remote-environment-re
 import { useWorkspaceBackNavigation } from "../layout/workspace/useAndroidWorkspaceNavigation";
 import { ChildApproval } from "../threads/ChildThreadApprovals";
 import { threadVisitTracker } from "../threads/ThreadDetailScreen";
+import { SuperThreadMapOutline } from "./SuperThreadMapOutline";
 import { SuperThreadStatus } from "./SuperThreadStatus";
 
 type SuperThreadRouteParams = {
@@ -69,7 +66,7 @@ function useOpenThread() {
     );
 }
 
-/** The super thread's own page: goal, board, open requests, members and a prompt box. */
+/** The super thread's own page: goal, task map, open requests, threads and a prompt box. */
 function SuperThreadScreen(props: { readonly threadRef: ScopedThreadRef }) {
   const { threadRef } = props;
   const goBack = useWorkspaceBackNavigation();
@@ -81,9 +78,12 @@ function SuperThreadScreen(props: { readonly threadRef: ScopedThreadRef }) {
   // The page stands in for the transcript, so seeing it clears the header's Done.
   useAtomMount(threadVisitTracker(threadRef));
   const [composerHeight, setComposerHeight] = useState(64);
+  // Read in the render that first has the shell, before this page's own visit moves it.
+  const [seen, setSeen] = useState<{ readonly at: string | null | undefined } | null>(null);
+  if (seen === null && shell !== null) setSeen({ at: shell.lastVisitedAt });
   const superThread = detail?.projection.thread.superThread;
   const members = superThread?.members ?? shell?.source.superThread?.members ?? [];
-  const board = superThread?.board ?? null;
+  const map = superThread?.map ?? null;
   const isSuper = shell?.source.superThread !== undefined;
   const bottomInset = keyboardVisible ? 8 : Math.max(insets.bottom, 12);
 
@@ -132,14 +132,14 @@ function SuperThreadScreen(props: { readonly threadRef: ScopedThreadRef }) {
                 <Text textRole="footnote" className="font-t3-medium text-foreground-muted">
                   Goal
                 </Text>
-                {board !== null && board.goal.trim().length > 0 ? (
+                {map !== null && map.goal.trim().length > 0 ? (
                   <Text selectable className="text-base text-foreground">
-                    {board.goal}
+                    {map.goal}
                   </Text>
                 ) : (
                   <Text className="text-sm text-foreground-muted">
                     {detail === null
-                      ? "Loading the board…"
+                      ? "Loading the plan…"
                       : "No goal yet. The agent writes it once it has a plan."}
                   </Text>
                 )}
@@ -154,8 +154,14 @@ function SuperThreadScreen(props: { readonly threadRef: ScopedThreadRef }) {
                   })
                 }
               />
-              {board !== null ? <SuperThreadBoardGroups board={board} onOpen={openThread} /> : null}
-              <SuperThreadMembers members={members} onOpen={openThread} />
+              {map !== null ? (
+                <SuperThreadMapOutline map={map} seenAt={seen?.at} onOpen={openThread} />
+              ) : null}
+              <SuperThreadMembers
+                members={map === null ? members : membersNotOnMap(members, map)}
+                title={map === null ? "Threads" : "Not on the map"}
+                onOpen={openThread}
+              />
             </ScrollView>
           </ScrollViewMarker>
           <SuperThreadPromptBox
@@ -211,69 +217,31 @@ function SuperThreadPendingRequests(props: {
   );
 }
 
-/** The agent's board as a phone-width list, one group per status that has items. */
-function SuperThreadBoardGroups(props: {
-  readonly board: SuperThreadBoard;
-  readonly onOpen: (member: SuperThreadMember) => void;
-}) {
-  const shells = useThreadShells();
-  if (props.board.items.length === 0) {
-    return (
-      <Text className="px-2 text-sm text-foreground-muted">
-        The agent has not added any work items yet.
-      </Text>
-    );
-  }
-  const titleByKey = new Map(
-    shells.map((shell) => [scopedThreadKey(shell.environmentId, shell.id), shell.title]),
-  );
-  const groups = groupSuperThreadBoardItems(props.board.items);
-  return SUPER_THREAD_BOARD_COLUMNS.filter(({ status }) => groups[status].length > 0).map(
-    ({ status, label }) => (
-      <ListSection key={status} title={`${label} (${groups[status].length})`}>
-        {groups[status].map((item, index) => (
-          <View
-            key={item.id}
-            className={index > 0 ? "gap-1 border-t border-border-subtle p-4" : "gap-1 p-4"}
-          >
-            <Text className="text-base font-t3-medium text-foreground">{item.title}</Text>
-            {item.note ? (
-              <Text selectable className="text-sm text-foreground-muted">
-                {item.note}
-              </Text>
-            ) : null}
-            {item.members?.map((member) => {
-              const key = scopedThreadKey(member.environmentId, member.threadId);
-              return (
-                <Pressable
-                  key={key}
-                  accessibilityRole="link"
-                  onPress={() => props.onOpen(member)}
-                  className="min-h-11 justify-center"
-                  style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
-                >
-                  <Text className="text-sm text-primary" numberOfLines={1}>
-                    {titleByKey.get(key) ?? "Open thread"}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
-        ))}
-      </ListSection>
+function membersNotOnMap(
+  members: ReadonlyArray<SuperThreadMember>,
+  map: SuperThreadMap,
+): ReadonlyArray<SuperThreadMember> {
+  const onMap = new Set(
+    map.nodes.flatMap((node) =>
+      (node.threads ?? []).map((thread) => scopedThreadKey(thread.environmentId, thread.threadId)),
     ),
+  );
+  return members.filter(
+    (member) => !onMap.has(scopedThreadKey(member.environmentId, member.threadId)),
   );
 }
 
 /** Every member this client holds, settled ones included; the list shows only unsettled ones. */
 function SuperThreadMembers(props: {
   readonly members: ReadonlyArray<SuperThreadMember>;
+  readonly title: "Threads" | "Not on the map";
   readonly onOpen: (member: SuperThreadMember) => void;
 }) {
   const shells = useThreadShells();
   const projects = useProjects();
   const { savedConnectionsById } = useSavedRemoteConnections();
   if (props.members.length === 0) {
+    if (props.title === "Not on the map") return null;
     return (
       <ListSection title="Threads">
         <Text className="p-4 text-sm text-foreground-muted">
@@ -295,7 +263,7 @@ function SuperThreadMembers(props: {
   const missing = props.members.length - held.length;
   return (
     <ListSection
-      title="Threads"
+      title={props.title}
       footer={
         missing > 0
           ? `${missing} more on environments this device can't reach right now.`
