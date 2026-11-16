@@ -1,5 +1,4 @@
 import { type EnvironmentId, OrchestratorMcpFailure, type ThreadId } from "@t3tools/contracts";
-import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 
 import { recordLaunchedMember } from "../../../superThread/superThreadMembers.ts";
@@ -29,30 +28,46 @@ export const recordForwardedLaunch = Effect.fn("SuperThreadMcp.recordForwardedLa
   return launched;
 });
 
+const notSuperThread = () =>
+  new OrchestratorMcpFailure({
+    code: "capability_denied",
+    message: "Only a super thread has a task map.",
+  });
+
 export const layer = McpToolAccess.toLayer(SuperThreadToolkit, {
-  super_thread_board_set: McpToolAccess.actsAsCaller((board) =>
+  super_thread_map_update: McpToolAccess.actsAsCaller((update) =>
     Effect.gen(function* () {
       const { caller, threads } = yield* readCaller();
-      if (caller?.superThread === undefined) {
-        return yield* new OrchestratorMcpFailure({
-          code: "capability_denied",
-          message: "Only a super thread has a goal board.",
-        });
-      }
+      if (caller?.superThread === undefined) return yield* notSuperThread();
       const result = yield* threads
         .dispatch({
-          type: "super_thread.board.set",
+          type: "super_thread.map.update",
           commandId: yield* newCommandId(),
           threadId: caller.id,
-          board,
+          update,
         })
         .pipe(Effect.mapError(dispatchFailure));
-      const updatedAt = result.storedEvents.flatMap(({ event }) =>
-        event.type === "thread.tags-updated" && event.payload.superThread?.board
-          ? [event.payload.superThread.board.updatedAt]
+      const map = result.storedEvents.flatMap(({ event }) =>
+        event.type === "thread.tags-updated" && event.payload.superThread?.map
+          ? [event.payload.superThread.map]
           : [],
       )[0];
-      return { updatedAt: updatedAt ?? DateTime.formatIso(yield* DateTime.now) };
+      return {
+        revision: map?.revision ?? 0,
+        nodeCount: map?.nodes.length ?? 0,
+        edgeCount: map?.edges.length ?? 0,
+      };
+    }),
+  ),
+  super_thread_map_read: McpToolAccess.readsAsCaller(() =>
+    Effect.gen(function* () {
+      const { caller, threads } = yield* readCaller();
+      if (caller?.superThread === undefined) return yield* notSuperThread();
+      // The caller is a shell, which leaves the map out.
+      const { thread } = yield* threads
+        .getThreadRecords(caller.id, [])
+        .pipe(Effect.mapError(dispatchFailure));
+      return { map: thread.superThread?.map ?? null };
     }),
   ),
 });

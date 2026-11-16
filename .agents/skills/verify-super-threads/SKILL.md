@@ -52,7 +52,7 @@ When a fix lands, set its constant in every config, put the rule back in the des
 - **Abstractions:** a run is `working`, `input` (approval or question) or `idle`. Settled is `settledOverride = "settled"`. Members are whole thread ids; each thread's environment is fixed.
 - **Assumed:** the server serializes commands per thread; a `thread.settle` either commits or refuses as one step; the forwarded call returns the remote id only after E2 committed it; the super thread starts with its first message (draft send or the bridge's `task`). The model lets the cascade send its settles in any order, a superset of the code (header first, then members in parallel, members skipped if the header's settle fails).
 - **Over-approximated:** auto-settle may settle any idle thread at any time (`ThreadSettlementService` is stricter: it refuses after an explicit unsettle and waits for inactivity).
-- **Not covered:** archive, delete and snooze; more than one client; the sidebar's project filter and search; members of S2; S2 launching; the goal board; the order of rows inside a section.
+- **Not covered:** archive, delete and snooze; more than one client; the sidebar's project filter and search; members of S2; S2 launching; the task map; the order of rows inside a section.
 
 ## When to run
 
