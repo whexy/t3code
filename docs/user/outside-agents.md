@@ -106,7 +106,8 @@ T3 Code.
 
 - To hand off work, start a thread with `t3_thread_launch`, then follow it with
   `t3_thread_wait` or `t3_thread_read`, instead of `create_threads` or
-  `delegate_task`.
+  `delegate_task`. To follow several at once, `t3_thread_wait_any` returns as
+  soon as any of them finishes or needs you.
 - Tools that default to the caller's own project or thread need an explicit
   `projectId` or `threadId`.
 - To list threads across projects, call `t3_thread_list` with
