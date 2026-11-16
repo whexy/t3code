@@ -1,6 +1,5 @@
-import type { SuperThreadMapLayout } from "@t3tools/client-runtime/state/super-thread-map";
 import type { SuperThreadMap as SuperThreadMapState, SuperThreadMember } from "@t3tools/contracts";
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Modal, Platform, Pressable, ScrollView, View } from "react-native";
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -11,16 +10,18 @@ import {
   SUPER_THREAD_MAP_READABLE_ZOOM,
   SuperThreadMapCanvas,
   SuperThreadMapViewport,
+  layoutMobileSuperThreadMap,
   superThreadMapFitZoom,
 } from "./SuperThreadMap";
 import { SuperThreadNodeDetail } from "./SuperThreadNodeDetail";
+
+const FULL_SCREEN_MARGIN = 16;
 
 /** The map on the whole screen, to pan, pinch and tap through a plan too big for the panel. */
 export function SuperThreadMapFullScreen(props: {
   readonly visible: boolean;
   readonly title: string;
   readonly map: SuperThreadMapState;
-  readonly layout: SuperThreadMapLayout;
   readonly addedNodeIds: ReadonlySet<string>;
   readonly onClose: () => void;
   /** Runs once the full-screen map has gone, so the thread doesn't open beneath it. */
@@ -64,22 +65,27 @@ export function SuperThreadMapFullScreen(props: {
 function FullScreenMap(props: {
   readonly title: string;
   readonly map: SuperThreadMapState;
-  readonly layout: SuperThreadMapLayout;
   readonly addedNodeIds: ReadonlySet<string>;
   readonly onClose: () => void;
   readonly onOpenThread: (thread: SuperThreadMember) => void;
 }) {
-  const { layout } = props;
   const insets = useSafeAreaInsets();
   const [viewport, setViewport] = useState<{
     readonly width: number;
     readonly height: number;
   } | null>(null);
+  const layout = useMemo(
+    () =>
+      viewport === null
+        ? null
+        : layoutMobileSuperThreadMap(props.map, viewport.width, FULL_SCREEN_MARGIN),
+    [props.map, viewport],
+  );
   // Bumping `generation` remounts the viewport, which is how a new starting zoom applies.
   const [view, setView] = useState({ generation: 0, whole: false });
   const [shownNodeId, setShownNodeId] = useState<string | null>(null);
   const shownNode = props.map.nodes.find((node) => node.id === shownNodeId) ?? null;
-  const fit = viewport === null ? 1 : superThreadMapFitZoom(layout, viewport);
+  const fit = viewport === null || layout === null ? 1 : superThreadMapFitZoom(layout, viewport);
   const readable = Math.min(1, Math.max(fit, SUPER_THREAD_MAP_READABLE_ZOOM));
   const fitsAlready = fit >= readable;
   return (
@@ -111,7 +117,7 @@ function FullScreenMap(props: {
         />
         <View
           accessibilityLabel="Task map"
-          className="flex-1 bg-subtle"
+          className="flex-1 bg-screen"
           onLayout={(event) => {
             const { width, height } = event.nativeEvent.layout;
             if (width === 0 || height === 0) return;
@@ -119,12 +125,13 @@ function FullScreenMap(props: {
             setViewport({ width, height });
           }}
         >
-          {viewport === null ? null : (
+          {viewport === null || layout === null ? null : (
             <SuperThreadMapViewport
               key={`${viewport.width}x${viewport.height}:${view.generation}`}
               layout={layout}
               startZoom={view.whole ? fit : readable}
               minimumZoom={fit}
+              fillHeight={viewport.height}
             >
               <SuperThreadMapCanvas
                 layout={layout}
@@ -159,7 +166,11 @@ function FullScreenMap(props: {
             style={{ flexGrow: 0 }}
             contentContainerStyle={{ gap: 16, paddingHorizontal: 16, paddingBottom: 16 }}
           >
-            <SuperThreadNodeDetail node={shownNode} onOpenThread={props.onOpenThread} />
+            <SuperThreadNodeDetail
+              node={shownNode}
+              map={props.map}
+              onOpenThread={props.onOpenThread}
+            />
           </ScrollView>
         </View>
       ) : null}

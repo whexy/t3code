@@ -11,176 +11,185 @@ import { cn } from "../../lib/cn";
 import { scopedProjectKey, scopedThreadKey } from "../../lib/scopedEntities";
 import { useProjects } from "../../state/entities";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
-import { useSelectWorkspaceDetail } from "../layout/workspace/useSelectWorkspaceDetail";
+import {
+  STATUS_LABEL_BY_STATUS,
+  ThreadListV2Section,
+  type StatusLabel,
+} from "../threads/thread-list-v2-items";
 import { SuperThreadMemberRows, type SuperThreadMemberRowHost } from "./SuperThreadMemberRows";
-import { toggleSuperThreadFold, useFoldedSuperThreadKeys } from "./superThreadFolds";
-import { SuperThreadStatus } from "./SuperThreadStatus";
+import { openSuperThread } from "./superThreadLevel";
+import { resolveSuperThreadRollup, type SuperThreadRollup } from "./superThreadList";
 
-/** One group per super thread above the list's own shelves; see docs/internals/super-threads.md. */
+const DONE: StatusLabel = {
+  label: "Done",
+  icon: "checkmark.circle",
+  className: "text-adaptive-emerald-700-300",
+  iconTintClassName: "accent-adaptive-emerald-700-300",
+};
+
+// The list's own words and icons; working and waiting get words, as there is no run timer to show.
+function rollupLabel(rollup: SuperThreadRollup): StatusLabel | null {
+  if (rollup === null) return null;
+  if (rollup === "done") return DONE;
+  const label = STATUS_LABEL_BY_STATUS[rollup]!;
+  if (rollup === "working") return { ...label, label: "Working" };
+  if (rollup === "waiting") return { ...label, label: "Waiting" };
+  return label;
+}
+
+const threadCount = (count: number) => (count === 1 ? "1 thread" : `${count} threads`);
+
+/** How many threads a super thread started, and how many of them need the person. */
+function summary(rows: ReadonlyArray<EnvironmentThreadShell>) {
+  const needsYou = rows.filter(superThreadMemberNeedsYou).length;
+  return needsYou > 0
+    ? `${needsYou} ${needsYou === 1 ? "needs" : "need"} you · ${threadCount(rows.length)}`
+    : threadCount(rows.length);
+}
+
+/**
+ * The list's super threads, as its own rows under one heading, so they swipe to settle and open
+ * the same menu as any thread. Opening one shows its threads in place of the list, one level down,
+ * so a super thread and its threads never share a level. See docs/internals/super-threads.md.
+ */
 export function SuperThreadListSections(props: {
-  readonly sections: ReadonlyArray<SuperThreadSection<EnvironmentThreadShell>>;
+  readonly list: {
+    readonly sections: ReadonlyArray<SuperThreadSection<EnvironmentThreadShell>>;
+    /** The super thread whose threads show in place of the list, one level down. */
+    readonly open: SuperThreadSection<EnvironmentThreadShell> | null;
+    readonly hasOwnRows: boolean;
+  };
   readonly pane: "screen" | "sidebar";
   readonly selectedThreadKey: string | null;
   readonly onSelectThread: (thread: EnvironmentThreadShell) => void;
-  /** Settles the group; the thread actions ask first and settle the members too. */
-  readonly onSettleThread: (thread: EnvironmentThreadShell) => unknown;
   readonly memberRowHost: SuperThreadMemberRowHost;
 }) {
-  const selectDetail = useSelectWorkspaceDetail();
   const projects = useProjects();
   const { savedConnectionsById } = useSavedRemoteConnections();
-  const foldedKeys = useFoldedSuperThreadKeys();
-  if (props.sections.length === 0) return null;
+  if (props.list.sections.length === 0) return null;
   const sidebar = props.pane === "sidebar";
-  const foreground = sidebar ? "text-drawer-foreground" : "text-foreground";
   const projectByKey = new Map(
     projects.map((project) => [scopedProjectKey(project.environmentId, project.id), project]),
   );
-  const memberHints = (
-    rows: ReadonlyArray<EnvironmentThreadShell>,
-    showEnvironment: boolean,
-  ): ReadonlyMap<string, string> =>
-    new Map(
-      rows.map((row) => [
-        scopedThreadKey(row.environmentId, row.id),
-        [
-          projectByKey.get(scopedProjectKey(row.environmentId, row.projectId))?.title,
-          showEnvironment ? savedConnectionsById[row.environmentId]?.environmentLabel : undefined,
-        ]
-          .filter((part): part is string => !!part)
-          .join(" · "),
-      ]),
-    );
-  const rowClassName = (selected: boolean) =>
-    cn(
-      "min-h-11 flex-row items-center gap-2.5 rounded-xl py-2",
-      sidebar ? "px-2" : "px-4",
-      selected && (sidebar ? "bg-drawer-border" : "bg-primary/10"),
-    );
+  const rowProps = {
+    projectByKey,
+    pane: props.pane,
+    selectedThreadKey: props.selectedThreadKey,
+    host: props.memberRowHost,
+  };
 
+  if (props.list.open !== null) {
+    const { header, rows } = props.list.open;
+    const showEnvironment = rows.some((row) => row.environmentId !== header.environmentId);
+    return (
+      <View className="pb-2">
+        <View className={cn("gap-0.5 pt-1 pb-3", sidebar ? "px-4" : "px-5")}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Back to super threads"
+            hitSlop={8}
+            onPress={() => openSuperThread(null)}
+            className="min-h-8 flex-row items-center gap-1 self-start"
+            style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
+          >
+            <SymbolView name="chevron.left" size={14} tintColorClassName="accent-primary" />
+            <Text className="text-base text-primary">Super threads</Text>
+          </Pressable>
+          <Text
+            accessibilityRole="header"
+            numberOfLines={2}
+            className={cn(
+              "text-lg font-t3-bold leading-snug",
+              sidebar ? "text-drawer-foreground" : "text-foreground",
+            )}
+          >
+            {header.title}
+          </Text>
+          <Text
+            className={cn(
+              "text-xs",
+              sidebar ? "text-drawer-foreground-muted" : "text-foreground-muted",
+            )}
+          >
+            {summary(rows)}
+          </Text>
+        </View>
+        {rows.length > 0 ? (
+          <SuperThreadMemberRows
+            {...rowProps}
+            rows={rows}
+            hints={
+              new Map(
+                rows.map((row) => [
+                  scopedThreadKey(row.environmentId, row.id),
+                  [
+                    projectByKey.get(scopedProjectKey(row.environmentId, row.projectId))?.title,
+                    showEnvironment
+                      ? savedConnectionsById[row.environmentId]?.environmentLabel
+                      : undefined,
+                  ]
+                    .filter((part): part is string => !!part)
+                    .join(" · "),
+                ]),
+              )
+            }
+            showEnvironment={showEnvironment}
+            onSelectThread={props.onSelectThread}
+          />
+        ) : (
+          <Text
+            className={cn(
+              "py-3 text-sm",
+              sidebar ? "px-3 text-drawer-foreground-muted" : "px-5 text-foreground-muted",
+            )}
+          >
+            Threads the super thread starts show up here.
+          </Text>
+        )}
+      </View>
+    );
+  }
+
+  const headers = props.list.sections.map(({ header }) => header);
   return (
-    <View className={cn("gap-3 pb-3", sidebar ? "pt-1" : "pt-2")}>
-      {props.sections.map(({ header, rows }) => {
-        const headerKey = scopedThreadKey(header.environmentId, header.id);
-        const showEnvironment = rows.some((row) => row.environmentId !== header.environmentId);
-        const headerSettled = header.settledOverride === "settled";
-        const folded = foldedKeys.includes(headerKey);
-        const needsYou = folded ? rows.filter(superThreadMemberNeedsYou).length : 0;
-        return (
-          <View key={headerKey} testID="super-thread-section">
-            <View className="flex-row items-center">
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={`${header.title}, super thread${
-                  folded && needsYou > 0
-                    ? `, ${needsYou} folded ${needsYou === 1 ? "thread needs" : "threads need"} you`
-                    : ""
-                }`}
-                onPress={() =>
-                  selectDetail({
-                    name: "Thread",
-                    params: { environmentId: header.environmentId, threadId: header.id },
-                  })
-                }
-                className={cn(
-                  "min-w-0 flex-1",
-                  rowClassName(props.selectedThreadKey === headerKey),
-                  "pr-1",
-                )}
-                style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
-              >
-                <SymbolView
-                  name="point.3.connected.trianglepath.dotted"
-                  size={15}
-                  tintColorClassName="accent-icon-muted"
-                  type="monochrome"
-                />
-                <Text
-                  className={cn("min-w-0 flex-1 text-base font-t3-bold", foreground)}
-                  numberOfLines={2}
-                >
-                  {header.title}
-                </Text>
-                {folded && needsYou > 0 ? (
-                  <View className="shrink-0 flex-row items-center gap-1">
-                    <SymbolView
-                      name="exclamationmark.circle"
-                      size={11}
-                      tintColorClassName="accent-warning-foreground"
-                      type="monochrome"
-                    />
-                    <Text className="text-xs font-t3-medium text-warning-foreground">
-                      {needsYou}
-                    </Text>
-                  </View>
-                ) : folded && rows.length > 0 ? (
-                  <Text
-                    className={cn(
-                      "text-xs",
-                      sidebar ? "text-drawer-foreground-muted" : "text-foreground-muted",
-                    )}
-                  >
-                    {rows.length}
-                  </Text>
-                ) : null}
-                <SuperThreadStatus thread={header} />
-              </Pressable>
-              {headerSettled ? null : (
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel={`Settle ${header.title} and its threads`}
-                  hitSlop={8}
-                  onPress={() => void props.onSettleThread(header)}
-                  className="h-11 w-10 items-center justify-center"
-                  style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
-                >
-                  <SymbolView
-                    name="checkmark.circle"
-                    size={18}
-                    tintColorClassName="accent-icon-muted"
-                    type="monochrome"
-                  />
-                </Pressable>
-              )}
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={folded ? `Unfold ${header.title}` : `Fold ${header.title}`}
-                accessibilityState={{ expanded: !folded }}
-                hitSlop={8}
-                onPress={() => void toggleSuperThreadFold(headerKey)}
-                className={cn("h-11 w-8 items-center justify-center", !sidebar && "mr-1.5")}
-                style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
-              >
-                <SymbolView
-                  name="chevron.down"
-                  size={12}
-                  tintColorClassName={
-                    sidebar ? "accent-drawer-foreground-muted" : "accent-foreground-muted"
-                  }
-                  type="monochrome"
-                  style={{ transform: [{ rotate: folded ? "-90deg" : "0deg" }] }}
-                />
-              </Pressable>
-            </View>
-            {rows.length > 0 && !folded ? (
-              // Indents member rows under the header title, past its icon.
-              <View className="pl-5">
-                <SuperThreadMemberRows
-                  rows={rows}
-                  hints={memberHints(rows, showEnvironment)}
-                  showEnvironment={showEnvironment}
-                  projectByKey={projectByKey}
-                  pane={props.pane}
-                  selectedThreadKey={props.selectedThreadKey}
-                  onSelectThread={props.onSelectThread}
-                  host={props.memberRowHost}
-                />
-              </View>
-            ) : null}
-          </View>
-        );
-      })}
-      <View className={cn("mx-4 h-px", sidebar ? "bg-drawer-border" : "bg-border")} />
+    <View className={props.list.hasOwnRows ? undefined : "pb-2"}>
+      {/* The sidebar insets its own shelf headings by the list's padding. */}
+      <View className={sidebar ? "px-2" : undefined}>
+        <ThreadListV2Section label="Super threads" pane={props.pane} />
+      </View>
+      <SuperThreadMemberRows
+        {...rowProps}
+        rows={headers}
+        // A super thread has no project, so its line says what it holds instead.
+        hints={
+          new Map(
+            props.list.sections.map(({ header, rows }) => [
+              scopedThreadKey(header.environmentId, header.id),
+              summary(rows),
+            ]),
+          )
+        }
+        showEnvironment={false}
+        // The group's status, not only the super thread's own run.
+        statusOverrides={
+          new Map(
+            props.list.sections.map(({ header, rows }) => [
+              scopedThreadKey(header.environmentId, header.id),
+              rollupLabel(resolveSuperThreadRollup(header, rows)),
+            ]),
+          )
+        }
+        onSelectThread={(header) => {
+          openSuperThread(scopedThreadKey(header.environmentId, header.id));
+          props.onSelectThread(header);
+        }}
+      />
+      {/* Ends the group, so the list's own threads don't read as its members. */}
+      {props.list.hasOwnRows ? (
+        <View className={sidebar ? "px-2" : undefined}>
+          <ThreadListV2Section label="Threads" pane={props.pane} />
+        </View>
+      ) : null}
     </View>
   );
 }
