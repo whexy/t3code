@@ -58,9 +58,10 @@ files only through short seams, so the nightly rebase rarely conflicts.
 - **Settling the header settles the group; unsettling it does not.** Settling the
   super thread asks for confirmation, listing members that are running, waiting
   for input, or unreachable, then settles the header and every unsettled member.
-  Every settle, the header's included, carries `expectedLatestRunId` from what the
-  confirmation showed (`null` for a thread with no run yet), so a thread that
-  started new work after the person confirmed refuses and stays in the section. Unsettling the header returns only the header: settled members are
+  Each is an ordinary settle, the same as settling that thread alone, so settle
+  and unsettle mean one thing for every thread. A member the server refuses (one
+  still working, say) stays unsettled and keeps the section, under a settled
+  header. Unsettling the header returns only the header: settled members are
   done, and a returning header means a new task. A member that unsettles brings
   the section back through the derivation above, with no write to the header.
 - **A member's outcome wakes the super thread.** When a member's run completes,
@@ -71,8 +72,8 @@ files only through short seams, so the nightly rebase rarely conflicts.
   while a notice is still queued joins that notice, so a busy super thread gets one
   turn for all of them. A settled or archived super thread is not woken: settled
   means done, and the member's state shows in the sidebar. Settling cancels a
-  queued notice, and a notice that commits after the confirmation is a newer run
-  that the settle guard refuses. Members here are read from this server's events.
+  queued notice, and one already running makes the settle refuse, as any busy
+  thread does. Members here are read from this server's events.
   A run the super thread starts on a member in a linked environment (launch or
   `t3_thread_send`) is recorded on the super thread and followed with the same
   wait `RemoteDelegation` uses, so a restart resumes it. That wait returns only

@@ -88,7 +88,8 @@ const wakeNotification = (
 /**
  * What one member outcome does to its super thread: nothing on a settled or archived one, a line
  * added to a wake still queued, or a new queued wake. Runs under the super thread's command lock,
- * so a settle commits either before (no wake) or after (the settle's run guard sees the wake).
+ * so a settle commits either before (no wake) or after (it cancels a queued wake, or refuses a
+ * super thread the wake set running).
  */
 export function planMemberWake(
   input: {
