@@ -27,6 +27,10 @@ settle it, or right-click it to rename, archive or delete it. On mobile, swipe i
 touch and hold for the same menu. Pin and snooze aren't offered there, because the section always
 lists its threads that aren't settled, in its own order.
 
+To hide a section's threads, select the arrow at the end of its header; select it again to show
+them. A folded section shows how many threads it hides, or, when any of them needs your answer or
+has failed, how many need you. Each device remembers which sections you folded.
+
 Select the header to open the super thread's conversation, which works like any other thread. To see
 the goal and the task map beside it, select **Super thread** in the header, or choose **Show goal and
 task map** in the command palette. Select **Super thread** again to hide them. On iOS, **Super

@@ -50,9 +50,14 @@ function needsInput(shell: EnvironmentThreadShell): boolean {
   );
 }
 
+/** A member waiting on the person, or one whose run failed; a folded section still counts it. */
+export function superThreadMemberNeedsYou(shell: EnvironmentThreadShell): boolean {
+  return needsInput(shell) || shell.runtime?.status === "failed";
+}
+
 /** Needing the person first, then done, then working. */
 function rowRank(shell: EnvironmentThreadShell): number {
-  if (needsInput(shell) || shell.runtime?.status === "failed") return 0;
+  if (superThreadMemberNeedsYou(shell)) return 0;
   return isThreadWorking(shell) ? 2 : 1;
 }
 
