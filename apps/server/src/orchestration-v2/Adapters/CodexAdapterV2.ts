@@ -1689,7 +1689,7 @@ const CODEX_T3_MCP_SERVERS: ReadonlySet<string> = new Set([
   CODEX_T3_MCP_SERVER,
   CODEX_T3_DIRECT_MCP_SERVER,
 ]);
-const CODEX_DIRECT_ONLY_T3_TOOLS = ["t3_thread_wait", "delegate_task"];
+const CODEX_DIRECT_ONLY_T3_TOOLS = ["t3_thread_wait", "t3_thread_wait_any", "delegate_task"];
 
 /** Names of the stdio MCP servers in a `config/read` config, the ones Codex starts per thread. */
 function codexStdioMcpServerNames(mcpServers: unknown): ReadonlyArray<string> {

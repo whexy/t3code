@@ -40,7 +40,7 @@ The first time an outside agent connects, approve its sign-in page (via your T3 
 
 Tools that act as a running T3 thread (`delegate_task`, `create_threads`, `request_secret`, `html_render`, `preview_*`, `device_*`, `t3_worktree_handoff`) only work for agents running **inside** T3 Code.
 
-- Use `t3_thread_launch` + `t3_thread_wait` / `t3_thread_read` to run and follow work.
+- Use `t3_thread_launch` + `t3_thread_wait` / `t3_thread_read` to run and follow work. To follow several threads at once, `t3_thread_wait_any` returns as soon as any of them finishes or needs you.
 - Pass `projectId` or `threadId` explicitly (or `allProjects: true` on `t3_thread_list`).
 - **MCP Events (`io.modelcontextprotocol/events`)**: Bots can poll, stream, or subscribe via HTTPS webhooks (up to 1-hour leases; latest 1,000 milestones buffered in memory) for turn, approval, guest, PR watch, and workflow events. For local webhook testing, set `T3CODE_MCP_WEBHOOK_ALLOWED_HOSTS=localhost,127.0.0.1` on the server.
 

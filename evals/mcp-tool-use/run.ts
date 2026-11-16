@@ -79,6 +79,7 @@ import {
   PullRequestsToolkit,
 } from "../../apps/server/src/mcp/toolkits/pullRequests/tools.ts";
 import { SuperThreadToolkit } from "../../apps/server/src/mcp/toolkits/superThread/tools.ts";
+import { ThreadWaitAnyToolkit } from "../../apps/server/src/mcp/toolkits/threadWaitAny/tools.ts";
 import { superThreadRoleContext } from "../../apps/server/src/superThread/superThreadRole.ts";
 import { ThemeToolkit } from "../../apps/server/src/mcp/toolkits/theme/tools.ts";
 import { ThreadToolkit } from "../../apps/server/src/mcp/toolkits/thread/tools.ts";
@@ -519,6 +520,7 @@ const t3SourceTools: ReadonlyArray<Tool.Any> = [
   HtmlToolkit,
   MessageToolkit,
   SuperThreadToolkit,
+  ThreadWaitAnyToolkit,
 ].flatMap((toolkit): ReadonlyArray<Tool.Any> => Object.values(toolkit.tools));
 // McpHttpServer decodes arguments with each tool's JSON codec, which drops undeclared keys.
 const t3InputDecoders = new Map(
