@@ -118,7 +118,7 @@ function useThreadActionExecutor(
     thread: EnvironmentThreadShell,
     onStarted?: () => void,
     restoreUnsettledAt?: string | null,
-    expectedLatestRunId?: RunId,
+    expectedLatestRunId?: RunId | null,
   ) => {
     if (!checkThreadOperationPermission(thread, actionFailureTitle(action))) return false;
     const key = scopedThreadKey(thread.environmentId, thread.id);
@@ -174,7 +174,10 @@ function useThreadActionExecutor(
                       : deleteMutation
               )({
                 environmentId: thread.environmentId,
-                input: { threadId: thread.id, ...(expectedLatestRunId && { expectedLatestRunId }) },
+                input: {
+                  threadId: thread.id,
+                  ...(expectedLatestRunId === undefined ? {} : { expectedLatestRunId }),
+                },
               }),
         (result) => result._tag === "Success",
       );

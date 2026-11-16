@@ -41,9 +41,9 @@ files only through short seams, so the nightly rebase rarely conflicts.
 - **Settling the header settles the group; unsettling it does not.** Settling the
   super thread asks for confirmation, listing members that are running, waiting
   for input, or unreachable, then settles the header and every unsettled member.
-  Each settle carries `expectedLatestRunId` from what the confirmation showed, so
-  a member that started new work after the person confirmed refuses and stays in
-  the section. Unsettling the header returns only the header: settled members are
+  Every settle, the header's included, carries `expectedLatestRunId` from what the
+  confirmation showed (`null` for a thread with no run yet), so a thread that
+  started new work after the person confirmed refuses and stays in the section. Unsettling the header returns only the header: settled members are
   done, and a returning header means a new task. A member that unsettles brings
   the section back through the derivation above, with no write to the header.
 - **The goal board is written whole by the super agent and read-only for
