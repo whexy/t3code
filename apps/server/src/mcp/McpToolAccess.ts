@@ -31,6 +31,7 @@ import {
 } from "./linkOrigin.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import { resolveInteractionMode, resolveRuntimeMode } from "./delegatedTaskModes.ts";
+import { onlySuperThreads } from "../superThread/superThreadRole.ts";
 import {
   assertBroadestAccess,
   assertFullAccess,
@@ -275,13 +276,14 @@ export interface StartedModes {
  * than the caller's. `linked` says what a linked caller gets: threads stamped
  * with its `linkOrigin`, or a refusal where the tool cannot carry one.
  */
-export const startsThreads = <P, A, E, R>(
+export const startsThreads = <P, A, E, R, E2 = never, R2 = never>(
   modes: (params: P) => {
     readonly runtimeMode?: RuntimeMode | undefined;
     readonly interactionMode?: ProviderInteractionMode | undefined;
   },
   handle: (params: P, modes: StartedModes) => Effect.Effect<A, E, R>,
   linked: "stamped" | { readonly refused: string },
+  forwarded?: Forwarded<P, A, E2, R2>,
 ) => {
   const started = Effect.fn("McpToolAccess.started")(function* (caller: Caller, params: P) {
     const requested = modes(params);
@@ -294,7 +296,7 @@ export const startsThreads = <P, A, E, R>(
       linkOrigin: callerLinkOrigin(caller),
     } satisfies StartedModes;
   });
-  return declare(
+  const declaration = declare(
     (params: P) =>
       Effect.gen(function* () {
         const caller = yield* writingCaller;
@@ -303,6 +305,7 @@ export const startsThreads = <P, A, E, R>(
       }),
     (params: P) => Effect.flatMap(writingCaller, (caller) => started(caller, params)),
   );
+  return forwarded === undefined ? declaration : afterForwarding(declaration, forwarded);
 };
 
 /** One tool with two access rules, picked per call, such as create versus update. */
@@ -434,6 +437,7 @@ const linksUnavailable = new OrchestratorMcpFailure({
 });
 
 const THREAD_ONLY = new Set<unknown>([
+  onlySuperThreads,
   McpInvocationContext.hiddenFromOutsideClients,
   McpInvocationContext.hiddenWithoutBackgroundWait,
 ]);

@@ -71,6 +71,7 @@ import {
   withInlineContext,
 } from "./ContextHandoffDelivery.ts";
 import { isProviderCommand, outputInstructions } from "./runOutput.ts";
+import { superThreadRoleContext } from "../superThread/superThreadRole.ts";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProjectionStore from "./ProjectionStore.ts";
@@ -2321,7 +2322,11 @@ export const layer: Layer.Layer<
             ),
             ...(sideChatContext === "" || sideChatHandoff === undefined ? [] : [sideChatHandoff]),
           ];
-          const context = [delivery.context, sideChatContext, restartNote]
+          const superThreadRole =
+            compact || slashCommand || turnInput.resume
+              ? ""
+              : superThreadRoleContext(projection.thread);
+          const context = [superThreadRole, delivery.context, sideChatContext, restartNote]
             .filter((part) => part !== "")
             .join("\n\n");
           const { restartContinuationOfRunId: _resumedRunId, ...promptedInput } = turnInput;
@@ -2424,9 +2429,10 @@ export const layer: Layer.Layer<
               }),
         ),
       );
-      const deliverySession = carriesPendingContext
-        ? makeDeliverySession(session, startWithHandoffs)
-        : session;
+      const deliverySession =
+        carriesPendingContext || projection.thread.superThread !== undefined
+          ? makeDeliverySession(session, startWithHandoffs)
+          : session;
       return runExecution.startRootRun({
         commandId: CommandId.make(`command:effect:provider-turn.start:${run.id}`),
         appThread: projection.thread,
