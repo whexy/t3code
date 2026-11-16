@@ -21,6 +21,7 @@ import { Pressable, ScrollView, View } from "react-native";
 import { KeyboardAvoidingView, useKeyboardState } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { ComposerActionButton } from "../../components/ComposerToolbar";
 import { AppBar } from "../../components/ui/AppBar";
 import { AppText as Text, AppTextInput as TextInput } from "../../components/ui/AppText";
 import { Button } from "../../components/ui/Button";
@@ -248,6 +249,7 @@ function SuperThreadBoardGroups(props: {
                   key={key}
                   accessibilityRole="link"
                   onPress={() => props.onOpen(member)}
+                  hitSlop={{ top: 12, bottom: 12 }}
                   style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
                 >
                   <Text className="text-sm text-primary" numberOfLines={1}>
@@ -384,29 +386,28 @@ function SuperThreadPromptBox(props: {
           {error}
         </Text>
       ) : null}
-      <GlassSurface chrome="none" className="flex-row items-end gap-1 p-1">
+      <GlassSurface
+        chrome="none"
+        fallbackClassName="border border-composer-border bg-composer-surface"
+        className="flex-row items-end gap-1 p-1"
+      >
         <TextInput
           accessibilityLabel="Message the super thread"
           multiline
           maxLength={65536}
-          placeholder={
-            canSend ? "Steer the work or ask for an update" : "You can't send to this thread"
-          }
+          placeholder={canSend ? "Message the super thread" : "You can't send to this thread"}
           placeholderTextColorClassName="accent-foreground-muted"
           value={text}
           onChangeText={setText}
           editable={canSend && !sending}
           className="max-h-36 min-h-12 min-w-0 flex-1 rounded-[24px] border-0 bg-transparent px-4 py-3 text-base text-foreground"
         />
-        <View>
-          <Button
-            label="Send"
-            tone="contrast"
-            loading={sending}
-            disabled={!canSend || sending || trimmed.length === 0}
-            onPress={() => void send()}
-          />
-        </View>
+        <ComposerActionButton
+          accessibilityLabel="Send"
+          icon="arrow.up"
+          disabled={!canSend || sending || trimmed.length === 0}
+          onPress={() => void send()}
+        />
       </GlassSurface>
     </View>
   );

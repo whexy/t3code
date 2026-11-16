@@ -137,6 +137,7 @@ import { useOpenLinkedThread } from "./useOpenLinkedThread";
 import { useThreadStatusAnnouncements } from "./useThreadStatusAnnouncements";
 import type { ThreadInspectorMode, ThreadInspectorTarget } from "./thread-inspector-navigation";
 import { useSelectWorkspaceDetail } from "../layout/workspace/useSelectWorkspaceDetail";
+import { useSuperThreadPanelItems } from "../super-threads/useSuperThreadPanelItems";
 
 function firstRouteParam(value: string | string[] | undefined): string | null {
   const first = Array.isArray(value) ? value[0] : value;
@@ -381,6 +382,7 @@ function ThreadRouteContent(
     selectedEnvironmentConnection,
   } = useThreadSelection();
   useRememberThreadProject(selectedThreadProject);
+  const superThreadPanelItems = useSuperThreadPanelItems(selectedThread);
   const canOperateThread = useEnvironmentScope(
     selectedThread?.environmentId ?? null,
     AuthOrchestrationOperateScope,
@@ -1117,6 +1119,7 @@ function ThreadRouteContent(
                       },
                     })}
                 onReturnToThread={props.onReturnToThread}
+                extraPanelItems={superThreadPanelItems}
               />
             )
           }

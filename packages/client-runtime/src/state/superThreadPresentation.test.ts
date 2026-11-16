@@ -38,7 +38,7 @@ describe("buildSuperThreadSettleConfirmation", () => {
     ).toBe(
       [
         'Settle "Release" and 2 threads it launched?',
-        'Still working: "Fix API".',
+        'Still running: "Fix API". Settling stops it.',
         'Waiting for you: "Ship docs". Settling can dismiss their open questions.',
         "1 thread can't be reached right now and won't be settled.",
       ].join("\n"),
