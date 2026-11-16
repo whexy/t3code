@@ -47,26 +47,34 @@ export function deriveSuperThreadSidebar(input: {
 }
 
 export type SuperThreadRowStatus =
+  | "setting-up"
+  | "goal"
   | "working"
   | "waiting"
   | "approval"
   | "input"
   | "request"
+  | "limited"
   | "failed"
   | "done"
   | null;
 
-/** The sidebar's status words, minus unread and wake tracking, which a section row does not show. */
-export function resolveSuperThreadRowStatus(thread: EnvironmentThreadShell): SuperThreadRowStatus {
+/**
+ * The sidebar row's status label, mirrored rather than shared so the fork leaves that upstream
+ * row alone. Wake tracking is left out: a section row has no snooze controls.
+ */
+export function resolveSuperThreadRowStatus(
+  thread: EnvironmentThreadShell,
+  isUnread: boolean,
+): SuperThreadRowStatus {
   const status = resolveSidebarThreadStatus(thread);
   switch (status) {
     case "preparing":
+      return "setting-up";
     case "working":
-      return "working";
-    case "limited":
-      return "failed";
+      return thread.goal?.status === "active" ? "goal" : "working";
     case "ready":
-      return thread.latestRun === null ? null : "done";
+      return isUnread ? "done" : null;
     default:
       return status;
   }

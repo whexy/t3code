@@ -577,7 +577,7 @@ describe("sidebar settled pagination", () => {
 });
 
 describe("sidebar super thread section", () => {
-  it("lists a super thread's members under it and nowhere else", async () => {
+  it("lists a super thread's members under it, nowhere else, in keyboard order", async () => {
     const activeProject = project("active");
     const environmentId = activeProject.environmentId;
     const member = threadShell(activeProject.id, 1);
@@ -617,5 +617,29 @@ describe("sidebar super thread section", () => {
       .toHaveAttribute("href", `/${environmentId}/${member.id}`);
     expect(screen.getByText("Thread 1").elements()).toHaveLength(1);
     await expect.element(screen.getByText("Thread 2").first()).toBeInTheDocument();
+
+    const headerKey = `${environmentId}:${header.id}`;
+    await expect
+      .element(section.getByRole("button", { name: "Settle Release and its threads" }))
+      .toHaveAttribute("data-sidebar-action-for", headerKey);
+    const row = (key: string) =>
+      screen.container.querySelector<HTMLElement>(`[data-sidebar-row="${key}"]`);
+    const headerRow = row(headerKey)!;
+    const memberRow = row(`${environmentId}:${member.id}`)!;
+    expect(memberRow.dataset.sidebarParent).toBe(headerKey);
+    const focused = async (key: string, expected: HTMLElement | null) => {
+      await userEvent.keyboard(`{${key}}`);
+      expect(document.activeElement, key).toBe(expected);
+    };
+    await act(() => headerRow.focus());
+    await focused("ArrowDown", memberRow);
+    await focused("ArrowDown", row(`${environmentId}:${loose.id}`));
+    await focused("Home", headerRow);
+    await focused("ArrowRight", memberRow);
+    await focused("ArrowLeft", headerRow);
+    await focused(
+      "End",
+      [...screen.container.querySelectorAll<HTMLElement>("[data-sidebar-row]")].at(-1)!,
+    );
   });
 });
