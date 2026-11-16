@@ -70,9 +70,10 @@ files only through short seams, so the nightly rebase rarely conflicts.
 - **The conversation is the super thread's page.** Every way in, the section header
   included, opens the normal chat route, so the composer, pickers, approvals and
   questions work as in any thread. The goal, the map and members not on the map live
-  in a right-panel surface that opens only when the person asks. "Since you last
-  looked" counts from the previous time that panel was on screen, kept per client,
-  because the conversation moves the thread's own visit mark while the person chats.
+  in a panel that opens only when the person asks: a right-panel surface on the web,
+  the auxiliary pane on mobile (a sheet on iPhone). "Since you last looked" counts
+  from the previous time that panel was on screen, kept per client, because the
+  conversation moves the thread's own visit mark while the person chats.
 
 ## Verification
 

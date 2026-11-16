@@ -49,10 +49,9 @@ export function SuperThreadListSections(props: {
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={`${header.title}, super thread`}
-                accessibilityHint="Opens its task map and threads"
                 onPress={() =>
                   selectDetail({
-                    name: "SuperThread",
+                    name: "Thread",
                     params: { environmentId: header.environmentId, threadId: header.id },
                   })
                 }
