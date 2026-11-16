@@ -63,7 +63,7 @@ const SuperThreadHeaderRow = memo(function SuperThreadHeaderRow(props: {
             className={cn(
               "flex min-w-8 shrink-0 justify-end",
               !settled &&
-                "group-any-hover/sidebar-row:opacity-0 group-focus-within/sidebar-row:opacity-0",
+                "group-any-hover/sidebar-row:opacity-0 group-has-[:focus-visible]/sidebar-row:opacity-0",
             )}
           >
             {settled ? (
@@ -84,7 +84,7 @@ const SuperThreadHeaderRow = memo(function SuperThreadHeaderRow(props: {
                 data-sidebar-action-for={rowKey}
                 aria-label={`Settle ${header.title} and its threads`}
                 onClick={() => props.onSettle(scopeThreadRef(header.environmentId, header.id))}
-                className="pointer-events-none absolute inset-y-0 right-0 inline-flex cursor-pointer items-center rounded-md bg-transparent px-2.5 text-muted-foreground opacity-0 transition-opacity outline-none hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:opacity-100 group-focus-within/sidebar-row:pointer-events-auto group-focus-within/sidebar-row:opacity-100"
+                className="pointer-events-none absolute inset-y-0 right-0 inline-flex cursor-pointer items-center rounded-md bg-transparent px-2.5 text-muted-foreground opacity-0 transition-opacity outline-none hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:opacity-100 group-has-[:focus-visible]/sidebar-row:pointer-events-auto group-has-[:focus-visible]/sidebar-row:opacity-100"
               />
             }
           >
@@ -135,11 +135,11 @@ const SuperThreadMemberRow = memo(function SuperThreadMemberRow(props: {
             <span className="min-w-0 flex-1 truncate text-xs text-secondary-label">
               {props.hint}
             </span>
-            <SuperThreadStatusLabel status={status} />
+            <SuperThreadStatusLabel status={status} iconSize="md" />
           </span>
           <span
             className={cn(
-              "mt-0.5 min-w-0 truncate text-sm",
+              "mt-1 min-w-0 truncate text-sm",
               recede
                 ? "font-normal text-foreground/75 group-hover/sidebar-row:text-foreground group-focus-visible/sidebar-row:text-foreground"
                 : readFailure

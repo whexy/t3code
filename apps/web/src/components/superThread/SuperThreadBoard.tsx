@@ -18,7 +18,6 @@ function SuperThreadBoardLink(props: { readonly member: SuperThreadMember }) {
   const shell = useQuietThreadShell(scopeThreadRef(environmentId, threadId));
   return (
     <InlineButton
-      tone="muted"
       className="max-w-full"
       render={<Link to="/$environmentId/$threadId" params={{ environmentId, threadId }} />}
     >
