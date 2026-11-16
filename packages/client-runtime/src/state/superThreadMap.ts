@@ -5,9 +5,8 @@ import type {
   SuperThreadMapNode,
   SuperThreadMapNodeStatus,
 } from "@t3tools/contracts";
-import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
-
-import { type EnvironmentThreadShell, threadRuntimeIsActive } from "./models.ts";
+import type { EnvironmentThreadShell } from "./models.ts";
+import { superThreadMemberIsWorking, superThreadMemberNeedsInput } from "./superThreads.ts";
 
 export type SuperThreadMapNodeState =
   | "needs-you"
@@ -45,17 +44,6 @@ type LinkedThread = Pick<
 const finished = (thread: LinkedThread) =>
   thread.settledOverride === "settled" || thread.latestRun?.status === "completed";
 
-// A thread holding on work it awaits parks its runtime at idle; the sidebar shows it as Waiting.
-const working = (thread: LinkedThread) =>
-  threadRuntimeIsActive(thread.runtime) ||
-  backgroundWorkHoldsCompletion(thread.pendingBackgroundTasks);
-
-const needsPerson = (thread: LinkedThread) =>
-  thread.hasPendingApprovals ||
-  thread.hasPendingUserInput ||
-  thread.pendingSubagentRequest != null ||
-  (thread.pendingGuestMessageCount ?? 0) > 0;
-
 /**
  * What a node shows. Linked threads report what is happening and outrank the agent, which
  * only reports what threads can't: planned, blocked, done and dropped work. `null` is a linked
@@ -68,10 +56,10 @@ export function resolveSuperThreadMapNodeState(
   const known = threads.filter((thread) => thread !== null);
   const unreachable = known.length < threads.length;
   const state = ((): SuperThreadMapNodeState => {
-    if (known.some(needsPerson)) return "needs-you";
+    if (known.some(superThreadMemberNeedsInput)) return "needs-you";
     if (known.some((thread) => thread.runtime?.status === "failed")) return "failed";
     if (status === "dropped") return "dropped";
-    if (known.some(working)) return "working";
+    if (known.some(superThreadMemberIsWorking)) return "working";
     if (status === "blocked") return "blocked";
     if (status === "done") return "done";
     if (known.length > 0 && !unreachable && known.every(finished)) return "done";
