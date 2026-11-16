@@ -180,7 +180,7 @@ function PendingSyncLabel() {
 
 // Subscribes to the minute tick itself, so only the label re-renders each
 // minute. The minute is passed as the clock so it is the formatter's input.
-function RelativeTimeLabel(props: { timestamp: string | null }) {
+export function RelativeTimeLabel(props: { timestamp: string | null }) {
   const nowMinute = useNowMinute();
   const m = useMessages();
   return props.timestamp === null

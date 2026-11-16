@@ -22,6 +22,7 @@ import ProjectScriptsControl, {
 import { T, useGT } from "gt-react";
 import { useState, type ComponentProps } from "react";
 import { ThreadDetailsCard } from "./ThreadDetailsCard";
+import { SuperThreadDetailsSection } from "../superThread/SuperThreadDetailsSection";
 import { OpenInPicker } from "./OpenInPicker";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import { ThreadAutomationsPanel } from "./ThreadAutomationsPanel";
@@ -255,6 +256,8 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                   </div>
                 </ThreadDetailsSection>
               ) : null}
+
+              <SuperThreadDetailsSection threadRef={activeThreadRef} density={density} />
 
               {show.branch || show.pullRequests || show.git || show.repositories ? (
                 <ThreadDetailsSection
