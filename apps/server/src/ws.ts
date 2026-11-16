@@ -2233,6 +2233,7 @@ export const layerWsRpc = (
                           runtimeMode: input.runtimeMode,
                           interactionMode: input.interactionMode,
                           workspaceStrategy: input.workspaceStrategy,
+                          ...(input.superThread === true ? { superThread: true } : {}),
                           ...(input.initialMessage === undefined
                             ? {}
                             : {

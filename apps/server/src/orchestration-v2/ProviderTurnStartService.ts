@@ -62,6 +62,7 @@ import {
 } from "@t3tools/provider-core/server/handoffBudget";
 import { deliverContextHandoffs, withInlineContext } from "./ContextHandoffDelivery.ts";
 import { isProviderCommand, outputInstructions } from "./runOutput.ts";
+import { superThreadRoleContext } from "../superThread/superThreadRole.ts";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProjectionStore from "./ProjectionStore.ts";
@@ -2051,7 +2052,11 @@ export const layer: Layer.Layer<
             sideChatHandoff === undefined || compact || goalCommand
               ? ""
               : sideChatHandoff.summaryText;
-          const context = [delivery.context, sideChatContext, restartNote]
+          const superThreadRole =
+            compact || goalCommand || turnInput.resume
+              ? ""
+              : superThreadRoleContext(projection.thread);
+          const context = [superThreadRole, delivery.context, sideChatContext, restartNote]
             .filter((part) => part !== "")
             .join("\n\n");
           const { restartContinuationOfRunId: _resumedRunId, ...promptedInput } = turnInput;
@@ -2145,6 +2150,7 @@ export const layer: Layer.Layer<
         retryHandoff.handoffs.length === 0 &&
         retryHandoff.attachments.length === 0 &&
         sideChatHandoff === undefined &&
+        projection.thread.superThread === undefined &&
         restartNote === "" &&
         !noteContinuation
           ? session
