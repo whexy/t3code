@@ -136,7 +136,7 @@ function useThreadActionExecutor(
     onStarted?: () => void,
     restoreUnsettledAt?: string | null,
     onSucceeded?: (value: unknown) => void,
-    expectedLatestRunId?: RunId,
+    expectedLatestRunId?: RunId | null,
   ) => {
     const triage = action === "settle" || action === "unsettle";
     if (!checkThreadOperationPermission(thread, actionFailureTitle(action), triage)) return false;
@@ -197,7 +197,10 @@ function useThreadActionExecutor(
                       : deleteMutation
               )({
                 environmentId: thread.environmentId,
-                input: { threadId: thread.id, ...(expectedLatestRunId && { expectedLatestRunId }) },
+                input: {
+                  threadId: thread.id,
+                  ...(expectedLatestRunId === undefined ? {} : { expectedLatestRunId }),
+                },
               }),
         (result) => result._tag === "Success",
       );

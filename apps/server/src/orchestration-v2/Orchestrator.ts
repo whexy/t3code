@@ -4712,10 +4712,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       );
       if (
         command.expectedLatestRunId !== undefined &&
-        projection.runs.reduce<OrchestrationV2Run | undefined>(
+        (projection.runs.reduce<OrchestrationV2Run | undefined>(
           (latest, run) => (latest === undefined || run.ordinal > latest.ordinal ? run : latest),
           undefined,
-        )?.id !== command.expectedLatestRunId
+        )?.id ?? null) !== command.expectedLatestRunId
       ) {
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
