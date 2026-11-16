@@ -31,6 +31,8 @@ defaults:
 
 jobs:
   plan:
+    # A manual run on another branch would publish that branch to every opted-in device.
+    if: github.ref == 'refs/heads/dev'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
@@ -87,11 +89,11 @@ jobs:
 
       - name: Pack
         run: |
-          mkdir -p "$RUNNER_TEMP/stage" "$RUNNER_TEMP/out"
-          tar -C apps/web/dist -czf "$RUNNER_TEMP/stage/bundle.tgz" .
+          mkdir -p "$RUNNER_TEMP/stage" "$RUNNER_TEMP/out/web"
+          tar -C apps/web/dist --exclude='*.map' -czf "$RUNNER_TEMP/stage/bundle.tgz" .
           echo '{"version":0,"bundler":"vite","fileMetadata":{"web":{"bundle":"bundle.tgz","assets":[]}}}' > "$RUNNER_TEMP/stage/metadata.json"
-          tar -C "$RUNNER_TEMP/stage" -czf "$RUNNER_TEMP/out/dist.tgz" .
-          echo '{}' > "$RUNNER_TEMP/out/expo-config.json"
+          tar -C "$RUNNER_TEMP/stage" -czf "$RUNNER_TEMP/out/web/dist.tgz" .
+          echo '{}' > "$RUNNER_TEMP/out/web/expo-config.json"
 
       - uses: actions/upload-artifact@v7
         with:
@@ -139,11 +141,11 @@ jobs:
 
       - name: Pack
         run: |
-          mkdir -p "$RUNNER_TEMP/stage" "$RUNNER_TEMP/out"
-          tar -C apps/server/dist/client -czf "$RUNNER_TEMP/stage/bundle.tgz" .
+          mkdir -p "$RUNNER_TEMP/stage" "$RUNNER_TEMP/out/desktop"
+          tar -C apps/server/dist/client --exclude='*.map' -czf "$RUNNER_TEMP/stage/bundle.tgz" .
           echo '{"version":0,"bundler":"vite","fileMetadata":{"desktop":{"bundle":"bundle.tgz","assets":[]}}}' > "$RUNNER_TEMP/stage/metadata.json"
-          tar -C "$RUNNER_TEMP/stage" -czf "$RUNNER_TEMP/out/dist.tgz" .
-          echo '{}' > "$RUNNER_TEMP/out/expo-config.json"
+          tar -C "$RUNNER_TEMP/stage" -czf "$RUNNER_TEMP/out/desktop/dist.tgz" .
+          echo '{}' > "$RUNNER_TEMP/out/desktop/expo-config.json"
 
       - uses: actions/upload-artifact@v7
         with:
@@ -206,10 +208,10 @@ jobs:
         if: steps.fingerprint.outputs.skipped == ''
         working-directory: apps/mobile
         run: |
-          mkdir -p "$RUNNER_TEMP/out"
+          mkdir -p "$RUNNER_TEMP/out/ios"
           ./node_modules/.bin/expo export --platform ios --output-dir "$RUNNER_TEMP/dist"
-          ./node_modules/.bin/expo config --type public --json > "$RUNNER_TEMP/out/expo-config.json"
-          tar -C "$RUNNER_TEMP/dist" -czf "$RUNNER_TEMP/out/dist.tgz" .
+          ./node_modules/.bin/expo config --type public --json > "$RUNNER_TEMP/out/ios/expo-config.json"
+          tar -C "$RUNNER_TEMP/dist" -czf "$RUNNER_TEMP/out/ios/dist.tgz" .
 
       - if: steps.fingerprint.outputs.skipped == ''
         uses: actions/upload-artifact@v7
@@ -221,7 +223,7 @@ jobs:
 
   publish:
     needs: [plan, ios, desktop, web]
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && needs.plan.result != 'skipped' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -254,6 +256,8 @@ jobs:
         with:
           pattern: dev-ota-*
           path: ota
+          # Each artifact holds <platform>/, so one or several land the same way.
+          merge-multiple: true
 
       - name: Publish
         if: steps.ready.outputs.platforms != ''
@@ -265,7 +269,7 @@ jobs:
           commit="$(jq -r .commit <<< "$PLAN")"
           message="$(jq -r .message <<< "$PLAN")"
           for platform in $PLATFORMS; do
-            dir="ota/dev-ota-$platform"
+            dir="ota/$platform"
             # The token reaches curl on a descriptor, never in a process's arguments.
             if response="$(curl -fsS --retry 3 -H @<(printf 'Authorization: Bearer %s\n' "$OTA_PUBLISH_TOKEN") \
               --form-string runtimeVersion="$(jq -r ".$platform.runtimeVersion" <<< "$PLAN")" \

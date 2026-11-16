@@ -6,9 +6,13 @@
  * catalog holds bearer tokens for every paired environment: keep it behind Access.
  */
 import * as NodeCrypto from "node:crypto";
+import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeHttp from "node:http";
 import * as NodePath from "node:path";
+import * as NodeStream from "node:stream";
+import * as NodeStreamPromises from "node:stream/promises";
+import type * as NodeStreamWeb from "node:stream/web";
 import * as NodeZlib from "node:zlib";
 
 export const SHARED_CATALOG_PATH = "/__t3code/shared-catalog";
@@ -385,14 +389,28 @@ export function makeDevBundleStore(input: {
     const response = await fetchOta(manifest.launchAsset.url, {
       signal: AbortSignal.timeout(5 * 60 * 1000),
     });
-    if (!response.ok) throw new Error(`bundle download: HTTP ${response.status}`);
-    const archive = Buffer.from(await response.arrayBuffer());
-    const hash = NodeCrypto.createHash("sha256").update(archive).digest("base64url");
-    if (hash !== manifest.launchAsset.hash) throw new Error("bundle does not match its hash");
+    if (!response.ok || !response.body) throw new Error(`bundle download: HTTP ${response.status}`);
 
     const staging = NodePath.join(bundlesDir, `.${manifest.id}.${process.pid}.partial`);
+    const archive = `${staging}.tgz`;
     await NodeFSP.rm(staging, { recursive: true, force: true });
+    await NodeFSP.mkdir(bundlesDir, { recursive: true });
     try {
+      // The pod's memory limit is far below a bundle's unpacked size, so it streams through disk.
+      const hasher = NodeCrypto.createHash("sha256");
+      await NodeStreamPromises.pipeline(
+        NodeStream.Readable.fromWeb(response.body as NodeStreamWeb.ReadableStream<Uint8Array>),
+        new NodeStream.Transform({
+          transform(chunk: Buffer, _encoding, callback) {
+            hasher.update(chunk);
+            callback(null, chunk);
+          },
+        }),
+        NodeFS.createWriteStream(archive),
+      );
+      if (hasher.digest("base64url") !== manifest.launchAsset.hash) {
+        throw new Error("bundle does not match its hash");
+      }
       await extractTarGz(archive, staging);
       if (!(await isFile(NodePath.join(staging, "index.html")))) {
         throw new Error("bundle has no index.html at its root");
@@ -402,6 +420,8 @@ export function makeDevBundleStore(input: {
     } catch (error) {
       await NodeFSP.rm(staging, { recursive: true, force: true });
       throw error;
+    } finally {
+      await NodeFSP.rm(archive, { force: true });
     }
     const installed: InstalledBundle = {
       runtimeVersion: manifest.runtimeVersion,
@@ -534,49 +554,90 @@ function verifyExpoSignature(body: Buffer, header: string | undefined, key: Node
  * Extracts the regular files and directories of a gzipped ustar archive (with
  * pax and GNU long names), refusing any entry that would land outside `target`.
  */
-async function extractTarGz(archive: Buffer, target: string) {
-  const tar = NodeZlib.gunzipSync(archive);
+async function extractTarGz(archivePath: string, target: string) {
   const root = NodePath.resolve(target);
   await NodeFSP.mkdir(root, { recursive: true });
-  const text = (start: number, length: number) => {
-    const field = tar.subarray(start, start + length);
-    const end = field.indexOf(0);
-    return field.subarray(0, end < 0 ? length : end).toString("utf8");
+  const reader = byteReader(NodeFS.createReadStream(archivePath).pipe(NodeZlib.createGunzip()));
+  const field = (header: Buffer, start: number, length: number) => {
+    const bytes = header.subarray(start, start + length);
+    const end = bytes.indexOf(0);
+    return bytes.subarray(0, end < 0 ? length : end).toString("utf8");
   };
   let longName: string | null = null;
-  let offset = 0;
-  while (offset + 512 <= tar.length) {
-    if (tar.subarray(offset, offset + 512).every((byte) => byte === 0)) break;
-    const size = Number.parseInt(text(offset + 124, 12).trim() || "0", 8);
-    const type = text(offset + 156, 1) || "0";
-    const prefix = text(offset + 257, 6) === "ustar" ? text(offset + 345, 155) : "";
-    const headerName = prefix ? `${prefix}/${text(offset, 100)}` : text(offset, 100);
-    const data = tar.subarray(offset + 512, offset + 512 + size);
-    offset += 512 + Math.ceil(size / 512) * 512;
+  for (;;) {
+    const header = await reader.read(512);
+    if (!header || header.every((byte) => byte === 0)) break;
+    const size = Number.parseInt(field(header, 124, 12).trim() || "0", 8);
+    const type = field(header, 156, 1) || "0";
+    const prefix = field(header, 257, 6) === "ustar" ? field(header, 345, 155) : "";
+    const headerName = prefix ? `${prefix}/${field(header, 0, 100)}` : field(header, 0, 100);
+    const padding = (512 - (size % 512)) % 512;
 
-    if (type === "L") {
-      longName = data.toString("utf8").replace(/\0+$/, "");
-      continue;
-    }
-    if (type === "x") {
-      longName = /(?:^|\n)\d+ path=([^\n]*)\n/.exec(data.toString("utf8"))?.[1] ?? longName;
+    if (type === "L" || type === "x") {
+      if (size > 1024 * 1024) throw new Error("archive has an oversized name record");
+      const chunks: Buffer[] = [];
+      for await (const chunk of reader.chunks(size)) chunks.push(chunk);
+      const data = Buffer.concat(chunks).toString("utf8");
+      longName =
+        type === "L"
+          ? data.replace(/\0+$/, "")
+          : (/(?:^|\n)\d+ path=([^\n]*)\n/.exec(data)?.[1] ?? longName);
+      for await (const _ of reader.chunks(padding));
       continue;
     }
     const name = longName ?? headerName;
     longName = null;
-    if (type !== "0" && type !== "5") continue;
     const destination = NodePath.resolve(root, name);
-    if (destination === root) continue;
-    if (!destination.startsWith(`${root}${NodePath.sep}`)) {
+    const kept = (type === "0" || type === "5") && destination !== root;
+    if (kept && !destination.startsWith(`${root}${NodePath.sep}`)) {
       throw new Error(`archive entry ${name} leaves the bundle`);
     }
-    if (type === "5") {
+    if (kept && type === "5") {
       await NodeFSP.mkdir(destination, { recursive: true });
-    } else {
+    } else if (kept) {
       await NodeFSP.mkdir(NodePath.dirname(destination), { recursive: true });
-      await NodeFSP.writeFile(destination, data);
+      const file = await NodeFSP.open(destination, "w");
+      try {
+        for await (const chunk of reader.chunks(size)) await file.write(chunk);
+      } finally {
+        await file.close();
+      }
+    } else {
+      for await (const _ of reader.chunks(size));
     }
+    for await (const _ of reader.chunks(padding));
   }
+}
+
+function byteReader(source: AsyncIterable<Buffer>) {
+  const iterator = source[Symbol.asyncIterator]();
+  let buffered: Buffer = Buffer.alloc(0);
+  const fill = async () => {
+    const next = await iterator.next();
+    if (next.done) return false;
+    buffered = buffered.length === 0 ? next.value : Buffer.concat([buffered, next.value]);
+    return true;
+  };
+  return {
+    async read(length: number): Promise<Buffer | null> {
+      while (buffered.length < length) if (!(await fill())) return null;
+      const out = buffered.subarray(0, length);
+      buffered = buffered.subarray(length);
+      return out;
+    },
+    async *chunks(length: number): AsyncGenerator<Buffer> {
+      let left = length;
+      while (left > 0) {
+        if (buffered.length === 0 && !(await fill())) {
+          throw new Error("archive ends inside an entry");
+        }
+        const out = buffered.subarray(0, Math.min(left, buffered.length));
+        buffered = buffered.subarray(out.length);
+        left -= out.length;
+        yield out;
+      }
+    },
+  };
 }
 
 interface AccessJwk extends NodeCrypto.JsonWebKey {
