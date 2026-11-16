@@ -120,13 +120,14 @@ describe("deriveSuperThreadSections", () => {
     expect([...claimedThreadKeys]).toEqual([keyOf(header)]);
   });
 
-  it("orders rows needing input first, then done, then working, newest first within each", () => {
+  it("orders rows needing you first, then working, then finished, newest first within each", () => {
     const header = superShell("super", [
       member("working"),
       member("done-old"),
       member("asking"),
       member("done-new", remote),
       member("failed"),
+      member("awaiting"),
     ]);
     const { sections } = deriveSuperThreadSections([
       header,
@@ -135,13 +136,19 @@ describe("deriveSuperThreadSections", () => {
       shell("asking", asking),
       shell("done-new", done(9), remote),
       shell("failed", { latestRunId: RunId.make("run-f"), status: "failed" }),
+      shell("awaiting", {
+        ...done(8),
+        status: "idle",
+        pendingBackgroundTasks: [{ kind: "command", taskId: "watch", awaited: true }],
+      }),
     ]);
     expect(idsOf(sections[0]!.rows)).toEqual([
       "asking",
       "failed",
+      "awaiting",
+      "working",
       "done-new",
       "done-old",
-      "working",
     ]);
   });
 
