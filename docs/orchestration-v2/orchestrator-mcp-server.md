@@ -63,8 +63,8 @@ Codex gets T3's MCP server in each thread's `thread/start`, `thread/resume`,
 and `thread/fork` config, with the provider-session token in an
 `Authorization` header. The same server is registered twice:
 
-- `t3-code`: every tool except `t3_thread_wait`.
-- `t3-code-direct`: only `t3_thread_wait`, with `omit_tools_from = ["code_mode", "deferred"]`.
+- `t3-code`: every tool except the blocking waits `t3_thread_wait` and `t3_thread_wait_any`.
+- `t3-code-direct`: only those two, with `omit_tools_from = ["code_mode", "deferred"]`.
 
 Code Mode runs a nested call as part of a script, so the model keeps working
 while a blocking wait runs. The second entry makes the wait a direct tool call,
@@ -494,6 +494,26 @@ Waits for a selected run to become `completed`, `failed`, `cancelled`,
 `interrupted`, or `rolled_back`. Without `runId`, it pins the latest run at call
 time; an idle thread returns immediately. A timeout reports the latest durable
 status and does not cancel work.
+
+### `t3_thread_wait_any`
+
+Waits on up to 20 threads, local or on linked environments, and returns every
+one that has an outcome: its latest run ended, it waits for the person (a
+pending approval, question, secret or link card), or it has never run. A thread
+holding on work it awaits still counts as working, as in the sidebar. Readiness
+comes from the thread shell, so the tool agrees with what the person sees.
+
+It is fork-owned, not a list form of `t3_thread_wait`: that tool's contract and
+its forwarded form belong to upstream, and a list would change both.
+
+The result's `cursor` maps a short hash of each thread id to a hash of the
+outcome last returned for it. A call skips outcomes the cursor already holds,
+so a caller looping on it is never handed the same one twice, and the cursor
+moves only for outcomes the call returns. Thread ids are unique across
+environments, so a linked environment's cursor entries merge unchanged. Each
+linked environment gets the same tool with its own threads, in pieces of
+`FORWARDED_WAIT_CHUNK_MS`, so it must run a build that has the tool. Timeouts
+and `next` work as in `t3_thread_wait`.
 
 ### `t3_thread_interrupt`
 
