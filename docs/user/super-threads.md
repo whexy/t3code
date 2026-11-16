@@ -22,6 +22,11 @@ Each super thread gets its own sidebar section, above your other threads. The su
 section's header, and the threads it started are listed under it, those that need you or are done
 first. They don't appear in your other sections.
 
+A thread in the section works like any other thread row: hover over it on the web and desktop to
+settle it, or right-click it to rename, archive or delete it. On mobile, swipe it to settle, or
+touch and hold for the same menu. Pin and snooze aren't offered there, because the section always
+lists its threads that aren't settled, in its own order.
+
 Select the header to open the super thread's conversation, which works like any other thread. To see
 the goal and the task map beside it, select **Super thread** in the header, or choose **Show goal and
 task map** in the command palette. Select **Super thread** again to hide them. On iOS, **Super
@@ -52,7 +57,8 @@ section.
 
 ## Settle and reopen
 
-Settling the super thread settles every thread in its section. If any of them is still working,
+Settling one thread in the section settles only that thread, and it still belongs to the super
+thread. Settling the super thread settles every thread in its section. If any of them is still working,
 waiting for your answer, or on a machine T3 Code can't reach right now, you are asked first.
 Settling stops a thread that is still running, and can dismiss the open questions of a thread
 that waits for your answer. A thread that starts
