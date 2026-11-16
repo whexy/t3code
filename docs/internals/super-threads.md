@@ -50,7 +50,7 @@ files only through short seams, so the nightly rebase rarely conflicts.
   MCP tools patch it by node and edge id and read it back. It lives on the thread,
   not in a run's plan artifact, because it must outlive any single run. Each patch
   carries a reason, kept in a short change log so clients can show what changed
-  since a person last looked.
+  since a person last looked at the map.
 - **The agent picks the structure, the system draws it.** The agent chooses the
   nodes, groups, edges and words. Clients own the look and the layout: a lane per
   group, columns from `depends` edges, computed from ids and edges only so a status
@@ -60,9 +60,12 @@ files only through short seams, so the nightly rebase rarely conflicts.
   forgot to update can't claim progress that isn't happening. The agent's status
   covers what threads can't show: planned, blocked, done and dropped. Nodes link
   only members, so every node's threads belong to this group.
-- **The super page is not the chat page.** The section header opens the super
-  page: goal, task map, a prompt box and the agent's pending questions and approvals.
-  The transcript stays on the normal chat route, reached from the super page.
+- **The conversation is the super thread's page.** Every way in, the section header
+  included, opens the normal chat route, so the composer, pickers, approvals and
+  questions work as in any thread. The goal, the map and members not on the map live
+  in a right-panel surface that opens only when the person asks. "Since you last
+  looked" counts from the previous time that panel was on screen, kept per client,
+  because the conversation moves the thread's own visit mark while the person chats.
 
 ## Verification
 
