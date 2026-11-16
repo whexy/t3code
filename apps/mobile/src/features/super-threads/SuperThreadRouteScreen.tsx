@@ -1,4 +1,4 @@
-import { useAtomValue } from "@effect/atom-react";
+import { useAtomMount, useAtomValue } from "@effect/atom-react";
 import { StackActions, useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
@@ -38,6 +38,7 @@ import { useQuietThreadStructure } from "../../state/use-thread-detail";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
 import { useWorkspaceBackNavigation } from "../layout/workspace/useAndroidWorkspaceNavigation";
 import { ChildApproval } from "../threads/ChildThreadApprovals";
+import { threadVisitTracker } from "../threads/ThreadDetailScreen";
 import { SuperThreadStatus } from "./SuperThreadStatus";
 
 type SuperThreadRouteParams = {
@@ -76,6 +77,8 @@ function SuperThreadScreen(props: { readonly threadRef: ScopedThreadRef }) {
   const keyboardVisible = useKeyboardState((state) => state.isVisible);
   const shell = useThreadShell(threadRef);
   const detail = useQuietThreadStructure(threadRef);
+  // The page stands in for the transcript, so seeing it clears the header's Done.
+  useAtomMount(threadVisitTracker(threadRef));
   const [composerHeight, setComposerHeight] = useState(64);
   const superThread = detail?.projection.thread.superThread;
   const members = superThread?.members ?? shell?.source.superThread?.members ?? [];
