@@ -35,8 +35,8 @@ const SuperThreadMemberItem = memo(function SuperThreadMemberItem(props: {
         className="flex items-center gap-3 px-3 py-2 text-sm outline-none hover:bg-accent/40 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
       >
         <span className="flex min-w-0 flex-1 flex-col">
-          <span className="truncate text-foreground">{shell.title}</span>
-          <span className="truncate text-xs text-secondary-label">
+          <span className="truncate font-medium text-foreground">{shell.title}</span>
+          <span className="truncate text-xs text-muted-foreground">
             {[project, environment].filter(Boolean).join(" · ")}
           </span>
         </span>
