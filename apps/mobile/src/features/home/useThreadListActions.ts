@@ -4,7 +4,7 @@ import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell
 import * as ThreadUndo from "@t3tools/client-runtime/state/thread-undo";
 import { showThreadUndoNotice } from "./thread-undo-notice";
 import { canSnooze } from "@t3tools/client-runtime/state/thread-settled";
-import { AuthOrchestrationOperateScope } from "@t3tools/contracts";
+import { AuthOrchestrationOperateScope, type RunId } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Haptics from "expo-haptics";
 import { msg } from "gt-react-native";
@@ -43,6 +43,7 @@ import { getThreadListV2OrderedSection } from "../threads/threadListV2";
 import { threadCanArchive } from "./threadArchive";
 import { resolveThreadTitleRename } from "../threads/thread-title-rename";
 import { useStableCallback } from "../../lib/useStableCallback";
+import { useSuperThreadSettle } from "../super-threads/useSuperThreadSettle";
 
 function environmentConfigLoaded(environmentId: EnvironmentThreadShell["environmentId"]) {
   return appAtomRegistry.get(environmentServerConfigsAtom).has(environmentId);
@@ -136,6 +137,7 @@ function useThreadActionExecutor(
     onStarted?: () => void,
     restoreUnsettledAt?: string | null,
     onSucceeded?: (value: unknown) => void,
+    expectedLatestRunId?: RunId,
   ) => {
     const triage = action === "settle" || action === "unsettle";
     if (!checkThreadOperationPermission(thread, actionFailureTitle(action), triage)) return false;
@@ -196,7 +198,7 @@ function useThreadActionExecutor(
                       : deleteMutation
               )({
                 environmentId: thread.environmentId,
-                input: { threadId: thread.id },
+                input: { threadId: thread.id, ...(expectedLatestRunId && { expectedLatestRunId }) },
               }),
         (result) => result._tag === "Success",
       );
@@ -266,6 +268,7 @@ export function useThreadListActions(): {
   readonly regenerateThreadTitle: (thread: EnvironmentThreadShell) => Promise<boolean>;
 } {
   const executeAction = useThreadActionExecutor();
+  const confirmSuperThreadSettle = useSuperThreadSettle();
   const snoozeMutation = useAtomCommand(threadEnvironment.snooze, { reportFailure: false });
   const unsnoozeMutation = useAtomCommand(threadEnvironment.unsnooze, { reportFailure: false });
   const pinMutation = useAtomCommand(threadEnvironment.pin, { reportFailure: false });
@@ -353,14 +356,26 @@ export function useThreadListActions(): {
       },
     });
   const settleThread = async (thread: EnvironmentThreadShell) => {
+    // Awaited only for a super thread, so a plain settle claims its pending slot synchronously.
+    const superSettle =
+      thread.source.superThread === undefined ? null : await confirmSuperThreadSettle(thread);
+    if (superSettle === "cancelled") return false;
     const key = scopedThreadKey(thread.environmentId, thread.id);
     const plan = ThreadUndo.planThreadUndo("settle", thread);
     let claim: ReturnType<typeof ThreadUndo.begin> | undefined;
-    const succeeded = await executeAction("settle", thread, () => {
-      ThreadUndo.invalidate("pin", key);
-      ThreadUndo.invalidate("snooze", key);
-      claim = ThreadUndo.begin("settle", key);
-    });
+    const succeeded = await executeAction(
+      "settle",
+      thread,
+      () => {
+        ThreadUndo.invalidate("pin", key);
+        ThreadUndo.invalidate("snooze", key);
+        claim = ThreadUndo.begin("settle", key);
+      },
+      undefined,
+      undefined,
+      superSettle?.expectedLatestRunId,
+    );
+    if (succeeded) superSettle?.settleMembers();
     if (claim) {
       if (succeeded) offerUndo(thread, "Settled", claim, plan);
       else claim.finish();
