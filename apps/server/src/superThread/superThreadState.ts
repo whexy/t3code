@@ -1,8 +1,15 @@
-import type {
-  OrchestrationV2AppThread,
-  OrchestrationV2ThreadShell,
-  SuperThreadInternalCommand,
-  ThreadId,
+import {
+  SUPER_THREAD_MAP_MAX_CHANGES,
+  SUPER_THREAD_MAP_MAX_EDGES,
+  SUPER_THREAD_MAP_MAX_NODES,
+  type OrchestrationV2AppThread,
+  type OrchestrationV2ThreadShell,
+  type SuperThreadInternalCommand,
+  type SuperThreadMap,
+  type SuperThreadMapEdgeRef,
+  type SuperThreadMapUpdate,
+  type SuperThreadMember,
+  type ThreadId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -28,12 +35,96 @@ export function applySuperThreadCommand(
       }
       return { ...thread, superThread: { ...state, members: [...state.members, command.member] } };
     }
-    case "super_thread.board.set":
-      return {
-        ...thread,
-        superThread: { ...state, board: { ...command.board, updatedAt: DateTime.formatIso(now) } },
-      };
+    case "super_thread.map.update": {
+      const map = applySuperThreadMapUpdate(
+        state.map,
+        state.members,
+        command.update,
+        DateTime.formatIso(now),
+      );
+      return "refused" in map ? map : { ...thread, superThread: { ...state, map } };
+    }
   }
+}
+
+const edgeKey = (edge: SuperThreadMapEdgeRef) => JSON.stringify([edge.from, edge.to]);
+const memberKey = (member: SuperThreadMember) =>
+  JSON.stringify([member.environmentId, member.threadId]);
+
+/** Applies one agent patch: upserts keep their node's place, and removing a node removes its edges. */
+export function applySuperThreadMapUpdate(
+  current: SuperThreadMap | undefined,
+  members: ReadonlyArray<SuperThreadMember>,
+  update: SuperThreadMapUpdate,
+  at: string,
+): SuperThreadMap | { readonly refused: string } {
+  const base = update.reset === true ? undefined : current;
+  const nodes = new Map((base?.nodes ?? []).map((node) => [node.id, node]));
+  const removed: Array<{ id: string; title: string }> = [];
+  for (const id of update.removeNodes ?? []) {
+    const node = nodes.get(id);
+    if (node === undefined) continue;
+    nodes.delete(id);
+    removed.push({ id, title: node.title });
+  }
+  const added: Array<string> = [];
+  for (const node of update.upsertNodes ?? []) {
+    if (!nodes.has(node.id)) added.push(node.id);
+    nodes.set(node.id, node);
+  }
+  if (nodes.size > SUPER_THREAD_MAP_MAX_NODES) {
+    return { refused: `A map holds at most ${SUPER_THREAD_MAP_MAX_NODES} nodes.` };
+  }
+  const memberKeys = new Set(members.map(memberKey));
+  for (const node of nodes.values()) {
+    const stranger = node.threads?.find((thread) => !memberKeys.has(memberKey(thread)));
+    if (stranger !== undefined) {
+      return {
+        refused: `Node "${node.id}" links thread ${stranger.threadId}, which this super thread did not launch.`,
+      };
+    }
+  }
+
+  const edges = new Map((base?.edges ?? []).map((edge) => [edgeKey(edge), edge]));
+  for (const edge of update.removeEdges ?? []) edges.delete(edgeKey(edge));
+  for (const edge of update.upsertEdges ?? []) {
+    if (edge.from === edge.to)
+      return { refused: `Edge ${edge.from} → ${edge.to} links a node to itself.` };
+    edges.set(edgeKey(edge), edge);
+  }
+  for (const edge of edges.values()) {
+    const missing = [edge.from, edge.to].find((id) => !nodes.has(id));
+    if (missing === undefined) continue;
+    // An edge the patch names is a mistake; an older edge simply goes with its removed node.
+    if ((update.upsertEdges ?? []).some((named) => edgeKey(named) === edgeKey(edge))) {
+      return {
+        refused: `Edge ${edge.from} → ${edge.to} names node "${missing}", which is not on the map.`,
+      };
+    }
+    edges.delete(edgeKey(edge));
+  }
+  if (edges.size > SUPER_THREAD_MAP_MAX_EDGES) {
+    return { refused: `A map holds at most ${SUPER_THREAD_MAP_MAX_EDGES} edges.` };
+  }
+
+  const revision = (current?.revision ?? 0) + 1;
+  return {
+    goal: update.goal ?? base?.goal ?? "",
+    nodes: [...nodes.values()],
+    edges: [...edges.values()],
+    revision,
+    updatedAt: at,
+    changes: [
+      ...(base?.changes ?? []),
+      {
+        revision,
+        reason: update.reason,
+        at,
+        added: added.filter((id) => nodes.has(id)),
+        removed: removed.filter(({ id }) => !nodes.has(id)),
+      },
+    ].slice(-SUPER_THREAD_MAP_MAX_CHANGES),
+  };
 }
 
 /**
@@ -51,7 +142,7 @@ export const superThreadUpdatedEvent = (
   payload: thread,
 });
 
-/** The shell streams on every thread change, so it leaves the board to thread detail. */
+/** The shell streams on every thread change, so it leaves the map to thread detail. */
 export const superThreadShellFields = (
   thread: OrchestrationV2AppThread,
 ): Pick<OrchestrationV2ThreadShell, "superThread"> =>

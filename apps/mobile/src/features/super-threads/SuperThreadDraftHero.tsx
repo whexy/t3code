@@ -11,8 +11,7 @@ export function SuperThreadDraftHero(props: { readonly environmentControl: React
         New super thread
       </Text>
       <Text className="text-center text-sm leading-normal text-foreground-muted">
-        Describe the goal. Its agent launches threads across your projects and tracks them on a
-        board.
+        Describe the goal. Its agent launches threads across your projects and maps the plan.
       </Text>
       {props.environmentControl}
     </View>

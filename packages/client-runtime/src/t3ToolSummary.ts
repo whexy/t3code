@@ -1255,18 +1255,35 @@ export function summarizeT3ToolCalls(
           );
       break;
     }
-    case "super-thread-board": {
+    case "super-thread-map": {
       const count = selected.length;
       label = done
         ? resolve(
             msg(
-              "{count, plural, one {Updated the goal board {count} time} other {Updated the goal board {count} times}}",
+              "{count, plural, one {Updated the task map {count} time} other {Updated the task map {count} times}}",
               { count },
             ),
           )
         : resolve(
             msg(
-              "{count, plural, one {Tried to update the goal board {count} time} other {Tried to update the goal board {count} times}}",
+              "{count, plural, one {Tried to update the task map {count} time} other {Tried to update the task map {count} times}}",
+              { count },
+            ),
+          );
+      break;
+    }
+    case "super-thread-map-read": {
+      const count = selected.length;
+      label = done
+        ? resolve(
+            msg(
+              "{count, plural, one {Read the task map {count} time} other {Read the task map {count} times}}",
+              { count },
+            ),
+          )
+        : resolve(
+            msg(
+              "{count, plural, one {Tried to read the task map {count} time} other {Tried to read the task map {count} times}}",
               { count },
             ),
           );
