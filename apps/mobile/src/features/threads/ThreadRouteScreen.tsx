@@ -130,7 +130,7 @@ import { useOpenLinkedThread } from "./useOpenLinkedThread";
 import { useThreadStatusAnnouncements } from "./useThreadStatusAnnouncements";
 import type { ThreadInspectorMode, ThreadInspectorTarget } from "./thread-inspector-navigation";
 import { useSelectWorkspaceDetail } from "../layout/workspace/useSelectWorkspaceDetail";
-import { useSuperThreadPanelItems } from "../super-threads/useSuperThreadPanelItems";
+import { useSuperThreadPanel } from "../super-threads/useSuperThreadPanel";
 
 function firstRouteParam(value: string | string[] | undefined): string | null {
   const first = Array.isArray(value) ? value[0] : value;
@@ -364,7 +364,6 @@ function ThreadRouteContent(
     selectedEnvironmentConnection,
   } = useThreadSelection();
   useRememberThreadProject(selectedThreadProject);
-  const superThreadPanelItems = useSuperThreadPanelItems(selectedThread);
   const canOperateThread = useEnvironmentScope(
     selectedThread?.environmentId ?? null,
     AuthOrchestrationOperateScope,
@@ -512,6 +511,11 @@ function ThreadRouteContent(
           : chosenInspectorMode;
     return mode === "files" && selectedThreadCwd === null ? null : mode;
   })();
+  const superThreadPanel = useSuperThreadPanel({
+    thread: selectedThread,
+    inspectorMode,
+    choose: setChosenInspectorMode,
+  });
   const revealPreview = useEffectEvent(() => showInspector());
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- opens the workspace navigator's inspector pane when route params bring a preview target
   useEffect(() => {
@@ -711,6 +715,7 @@ function ThreadRouteContent(
               : []),
             { key: "files", render: renderFilesInspector, prewarm: true },
             { key: "sideChats", render: renderSideChatsInspector },
+            ...superThreadPanel.panes,
             { key: "git", render: renderGitInspector, prewarm: true },
             ...(props.renderInspector ? [{ key: "route", render: props.renderInspector }] : []),
           ],
@@ -1053,7 +1058,7 @@ function ThreadRouteContent(
                       },
                     })}
                 onReturnToThread={props.onReturnToThread}
-                extraPanelItems={superThreadPanelItems}
+                extraPanelItems={superThreadPanel.items}
               />
             )
           }
