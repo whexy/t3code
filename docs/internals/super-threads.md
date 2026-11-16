@@ -52,6 +52,9 @@ files only through short seams, so the nightly rebase rarely conflicts.
   Pinned, Active and Working.
   Settled members sit on the Settled shelf like any thread. A client that cannot
   reach the super thread's environment shows its members as ordinary threads.
+  Mobile lists every super thread as a row under one heading and shows a super
+  thread's members one level down, in place of the list, so a super thread and
+  its members are never rows at the same level of the native list.
 - **Settling the header settles the group; unsettling it does not.** Settling the
   super thread asks for confirmation, listing members that are running, waiting
   for input, or unreachable, then settles the header and every unsettled member.
