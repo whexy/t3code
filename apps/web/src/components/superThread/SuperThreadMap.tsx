@@ -177,10 +177,10 @@ const SuperThreadMapNode = memo(function SuperThreadMapNode(props: {
   );
 });
 
-/** The plan the super agent draws; people read it and steer through the prompt box. */
+/** The plan the super agent draws; people read it and steer through the conversation. */
 export function SuperThreadMap(props: {
   readonly map: SuperThreadMapState;
-  /** When the person last looked before opening the page. */
+  /** When the person last looked before this look at the panel. */
   readonly seenAt: string | null | undefined;
 }) {
   const { map } = props;
@@ -188,7 +188,7 @@ export function SuperThreadMap(props: {
   const since = superThreadMapChangesSince(map, props.seenAt);
 
   return (
-    <section aria-label="Task map" className="flex flex-col gap-2">
+    <section aria-label="Task map" className="flex min-w-0 flex-col gap-2">
       <h2 className="text-sm font-medium text-foreground">Map</h2>
       {since.changes.length > 0 ? (
         <div className="flex flex-col gap-1 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs">
@@ -212,7 +212,8 @@ export function SuperThreadMap(props: {
       {map.nodes.length === 0 ? (
         <p className="text-sm text-muted-foreground">The agent has not drawn any work yet.</p>
       ) : (
-        <div className="max-h-[70vh] overflow-auto rounded-xl border border-border/70 bg-muted/20">
+        // min-w-0: a flex item otherwise widens to the whole map and the page clips its right edge.
+        <div className="max-h-[70vh] min-w-0 overflow-auto rounded-xl border border-border/70 bg-muted/20">
           <div className="relative" style={{ width: layout.width, height: layout.height }}>
             {layout.lanes.map((lane) =>
               lane.group === null ? null : (

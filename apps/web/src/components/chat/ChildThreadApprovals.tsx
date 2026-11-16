@@ -18,7 +18,7 @@ import { ApprovalText } from "./ApprovalText";
 import { ComposerPendingApprovalActions } from "./ComposerPendingApprovalActions";
 import { PushHooksApprovalDetails } from "./PushHooksApprovalDetails";
 
-export function ChildApproval({ entry }: { entry: ChildThreadApproval }) {
+function ChildApproval({ entry }: { entry: ChildThreadApproval }) {
   const canRespond = useEnvironmentScope(entry.thread.environmentId, AuthOrchestrationOperateScope);
   const respond = useAtomCommand(threadEnvironment.respondToApproval, { reportFailure: false });
   const gt = useGT();
