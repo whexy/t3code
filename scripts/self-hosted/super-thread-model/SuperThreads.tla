@@ -33,14 +33,12 @@ CONSTANTS
     MaxCascades,    \* times the person settles the header
     MaxWakes,       \* member outcomes that report a wake to S
     WriteAheadLocal,         \* a local launch records the member before it dispatches thread.create
-    GuardSettleByRun,        \* each cascade settle carries expectedLatestRunId from the confirmation
     LaunchOnlyMembership,    \* nothing but the super thread's own launch adds a member
     ExcludeDelegates,        \* delegate_task children never join
     SectionFromAnyUnsettled, \* a section shows while the header or any held member is unsettled
     SettledMembersLeaveSection, \* a settled member sits on the Settled shelf, not in the section
     HeaderLeavesShelf,       \* a settled super thread whose section shows is the header, not on the shelf
     UnsettleHeaderOnly,      \* unsettling the super thread leaves its members as they are
-    GuardEverySettle,        \* the header and runless members are guarded too (null = no run yet)
     ReplayRemoteLaunch,      \* a remote launch is written down before it goes; E1 replays it after a crash
     WakeSkipsSettled,        \* the wake command checks S's settled state under S's command lock
     FoldWakes                \* an outcome while a wake is queued joins it instead of queuing another
@@ -59,7 +57,6 @@ VARIABLES
     exists,     \* the thread row exists on its environment
     settled,    \* settledOverride = "settled"
     phase,      \* the latest run's state
-    run,        \* ordinal of the latest run
     members,    \* S's superThread.members (environment-qualified ids; env is fixed per thread here)
     members2,   \* S2's superThread.members
     lpc,        \* each launch call: none, step1, step2, failed, crashed, done, abandoned, replaced
@@ -69,18 +66,14 @@ VARIABLES
     reach2,     \* E2 reachable from E1 and from the client
     cstate,     \* the client's settle cascade: idle, confirming, sending
     targets,    \* threads the cascade still has to settle
-    seen,       \* latest run ordinal per thread when the person was shown the warning
-    warned,     \* members the warning listed (busy, waiting, or unreachable)
-    guarded,    \* threads the cascade sends with an expectedLatestRunId
-    badSettle,  \* ghost: the cascade settled a busy unwarned member, or a thread with newer work
     headerTouched, \* ghost: unsettling the header changed a member
     owed,       \* members whose outcome E1 has yet to turn into a wake of S
     queuedWake, \* wake runs queued on S behind its current run
     wakes,      \* member outcomes reported so far
     badWake     \* ghost: a member's outcome reopened a settled S or started work on it
 
-vars == <<exists, settled, phase, run, members, members2, lpc, pending, rpc, retries, crashes, msgs,
-          outages, adopts, cascades, reach2, cstate, targets, seen, warned, guarded, badSettle,
+vars == <<exists, settled, phase, members, members2, lpc, pending, rpc, retries, crashes, msgs,
+          outages, adopts, cascades, reach2, cstate, targets,
           headerTouched, owed, queuedWake, wakes, badWake>>
 
 TypeOK ==
@@ -92,7 +85,7 @@ TypeOK ==
                               "replaced"}]
     /\ pending \subseteq Remotes /\ rpc \in [Remotes -> {"none", "record"}]
     /\ cstate \in {"idle", "confirming", "sending"}
-    /\ targets \subseteq Threads /\ warned \subseteq Threads
+    /\ targets \subseteq Threads
     /\ owed \subseteq Threads /\ queuedWake \in Nat /\ wakes \in Nat
 
 Init ==
@@ -100,14 +93,13 @@ Init ==
     /\ settled = [t \in Threads |-> FALSE]
     \* A super thread starts with its first message (draft send or the bridge's task).
     /\ phase = [t \in Threads |-> IF t = "S" THEN "working" ELSE "idle"]
-    /\ run = [t \in Threads |-> IF t = "S" THEN 1 ELSE 0]
     /\ members = {} /\ members2 = {}
     /\ lpc = [c \in Children |-> "none"]
     /\ pending = {} /\ rpc = [c \in Remotes |-> "none"]
     /\ retries = 0 /\ crashes = 0 /\ msgs = 0 /\ outages = 0 /\ adopts = 0 /\ cascades = 0
     /\ reach2 = TRUE
-    /\ cstate = "idle" /\ targets = {} /\ seen = [t \in Threads |-> 0] /\ warned = {}
-    /\ guarded = {} /\ badSettle = FALSE /\ headerTouched = FALSE
+    /\ cstate = "idle" /\ targets = {}
+    /\ headerTouched = FALSE
     /\ owed = {} /\ queuedWake = 0 /\ wakes = 0 /\ badWake = FALSE
 
 \* ---------------------------------------------------------------------------
@@ -143,27 +135,27 @@ Places(t) ==
 \* prompt): the thread then exists with no run.
 Create(c) ==
     IF exists[c]
-      THEN UNCHANGED <<exists, run, phase>>                   \* a replayed launch
+      THEN UNCHANGED <<exists, phase>>                        \* a replayed launch
       ELSE /\ exists' = [exists EXCEPT ![c] = TRUE]
-           /\ \/ run' = [run EXCEPT ![c] = 1] /\ phase' = [phase EXCEPT ![c] = "working"]
-              \/ UNCHANGED <<run, phase>>
+           /\ \/ phase' = [phase EXCEPT ![c] = "working"]
+              \/ UNCHANGED phase
 
 \* Everything the cascade and the client track, and the member wakes, for actions that leave it alone.
 wvars == <<owed, queuedWake, wakes, badWake>>
-cvars == <<cascades, cstate, targets, seen, warned, guarded, badSettle, headerTouched, wvars>>
+cvars == <<cascades, cstate, targets, headerTouched, wvars>>
 \* E1's record of remote launches, for actions that leave it alone.
 rvars == <<pending, rpc>>
 
 StartLaunch(c) ==
     /\ c \in {"L", "R"} /\ lpc[c] = "none"
     /\ lpc' = [lpc EXCEPT ![c] = "step1"]
-    /\ UNCHANGED <<exists, settled, phase, run, members, members2, retries, crashes, msgs,
+    /\ UNCHANGED <<exists, settled, phase, members, members2, retries, crashes, msgs,
                    outages, adopts, reach2>> /\ UNCHANGED cvars /\ UNCHANGED rvars
 
 LocalStep1(c) ==
     /\ c \in Locals /\ lpc[c] = "step1"
     /\ IF WriteAheadLocal
-         THEN /\ members' = members \cup {c} /\ UNCHANGED <<exists, run, phase>>
+         THEN /\ members' = members \cup {c} /\ UNCHANGED <<exists, phase>>
          ELSE /\ Create(c) /\ UNCHANGED members
     /\ lpc' = [lpc EXCEPT ![c] = "step2"]
     /\ UNCHANGED <<settled, members2, retries, crashes, msgs, outages, adopts, reach2>>
@@ -173,7 +165,7 @@ LocalStep2(c) ==
     /\ c \in Locals /\ lpc[c] = "step2"
     /\ IF WriteAheadLocal
          THEN /\ Create(c) /\ UNCHANGED members
-         ELSE /\ members' = members \cup {c} /\ UNCHANGED <<exists, run, phase>>
+         ELSE /\ members' = members \cup {c} /\ UNCHANGED <<exists, phase>>
     /\ lpc' = [lpc EXCEPT ![c] = "done"]
     /\ UNCHANGED <<settled, members2, retries, crashes, msgs, outages, adopts, reach2>>
     /\ UNCHANGED cvars /\ UNCHANGED rvars
@@ -182,7 +174,7 @@ LocalStep2(c) ==
 RemotePending(c) ==
     /\ ReplayRemoteLaunch /\ c \in Remotes /\ lpc[c] = "step1" /\ c \notin pending
     /\ pending' = pending \cup {c}
-    /\ UNCHANGED <<exists, settled, phase, run, members, members2, lpc, rpc, retries, crashes,
+    /\ UNCHANGED <<exists, settled, phase, members, members2, lpc, rpc, retries, crashes,
                    msgs, outages, adopts, reach2>> /\ UNCHANGED cvars
 
 \* The forwarded launch runs on E2; E1 learns its id only from the result. A call that fails may
@@ -193,7 +185,7 @@ RemoteLaunch(c) ==
          THEN /\ Create(c) /\ lpc' = [lpc EXCEPT ![c] = "step2"]
          ELSE /\ lpc' = [lpc EXCEPT ![c] = "failed"]
               /\ \/ Create(c)
-                 \/ UNCHANGED <<exists, run, phase>>
+                 \/ UNCHANGED <<exists, phase>>
     /\ UNCHANGED <<settled, members, members2, pending, rpc, retries, crashes, msgs, outages,
                    adopts, reach2>>
     /\ UNCHANGED cvars
@@ -204,7 +196,7 @@ RemoteRecord(c) ==
     /\ members' = members \cup {c}
     /\ pending' = pending \ {c}
     /\ lpc' = [lpc EXCEPT ![c] = "done"]
-    /\ UNCHANGED <<exists, settled, phase, run, members2, rpc, retries, crashes, msgs, outages,
+    /\ UNCHANGED <<exists, settled, phase, members2, rpc, retries, crashes, msgs, outages,
                    adopts, reach2>> /\ UNCHANGED cvars
 
 \* After a restart E1 replays each pending launch whose handler is gone, with the same scoped
@@ -214,7 +206,7 @@ RemoteRecord(c) ==
 ReplayLaunch(c) ==
     /\ c \in pending /\ rpc[c] = "none" /\ lpc[c] \notin {"step1", "step2"} /\ reach2
     /\ \/ Create(c) /\ rpc' = [rpc EXCEPT ![c] = "record"] /\ UNCHANGED pending
-       \/ ~exists[c] /\ pending' = pending \ {c} /\ UNCHANGED <<exists, run, phase, rpc>>
+       \/ ~exists[c] /\ pending' = pending \ {c} /\ UNCHANGED <<exists, phase, rpc>>
     /\ UNCHANGED <<settled, members, members2, lpc, retries, crashes, msgs, outages, adopts,
                    reach2>> /\ UNCHANGED cvars
 
@@ -223,7 +215,7 @@ ReplayRecord(c) ==
     /\ members' = members \cup {c}
     /\ pending' = pending \ {c}
     /\ rpc' = [rpc EXCEPT ![c] = "none"]
-    /\ UNCHANGED <<exists, settled, phase, run, members2, lpc, retries, crashes, msgs, outages,
+    /\ UNCHANGED <<exists, settled, phase, members2, lpc, retries, crashes, msgs, outages,
                    adopts, reach2>> /\ UNCHANGED cvars
 
 \* E1 restarts: every launch handler and replay in flight on it dies, and the agent's call fails.
@@ -234,7 +226,7 @@ CrashE1 ==
     /\ crashes' = crashes + 1
     /\ lpc' = [c \in Children |-> IF lpc[c] \in {"step1", "step2"} THEN "crashed" ELSE lpc[c]]
     /\ rpc' = [c \in Remotes |-> "none"]
-    /\ UNCHANGED <<exists, settled, phase, run, members, members2, pending, retries, msgs,
+    /\ UNCHANGED <<exists, settled, phase, members, members2, pending, retries, msgs,
                    outages, adopts, reach2>> /\ UNCHANGED cvars
 
 \* A retry with the same clientRequestId. After an E2 outage the agent's provider session is the
@@ -248,19 +240,18 @@ Retry(c) ==
           /\ lpc' = [lpc EXCEPT ![c] = "step1"]
        \/ /\ lpc[c] = "crashed" /\ c \in {"L", "R"} /\ lpc[Successor(c)] = "none"
           /\ lpc' = [lpc EXCEPT ![c] = "replaced", ![Successor(c)] = "step1"]
-    /\ UNCHANGED <<exists, settled, phase, run, members, members2, crashes, msgs, outages,
+    /\ UNCHANGED <<exists, settled, phase, members, members2, crashes, msgs, outages,
                    adopts, reach2>> /\ UNCHANGED cvars /\ UNCHANGED rvars
 
 GiveUp(c) ==
     /\ lpc[c] \in {"failed", "crashed"}
     /\ lpc' = [lpc EXCEPT ![c] = "abandoned"]
-    /\ UNCHANGED <<exists, settled, phase, run, members, members2, retries, crashes, msgs,
+    /\ UNCHANGED <<exists, settled, phase, members, members2, retries, crashes, msgs,
                    outages, adopts, reach2>> /\ UNCHANGED cvars /\ UNCHANGED rvars
 
 DelegateTask ==
     /\ ~exists["D"]
     /\ exists' = [exists EXCEPT !["D"] = TRUE]
-    /\ run' = [run EXCEPT !["D"] = 1]
     /\ phase' = [phase EXCEPT !["D"] = "working"]
     /\ members' = IF ExcludeDelegates THEN members ELSE members \cup {"D"}
     /\ UNCHANGED <<settled, members2, lpc, retries, crashes, msgs, outages, adopts, reach2>>
@@ -273,7 +264,7 @@ Adopt ==
     /\ adopts' = adopts + 1
     /\ \/ members' = members \cup {"O"} /\ UNCHANGED members2
        \/ exists["L"] /\ members2' = members2 \cup {"L"} /\ UNCHANGED members
-    /\ UNCHANGED <<exists, settled, phase, run, lpc, retries, crashes, msgs, outages, reach2>>
+    /\ UNCHANGED <<exists, settled, phase, lpc, retries, crashes, msgs, outages, reach2>>
     /\ UNCHANGED cvars
     /\ UNCHANGED rvars
 
@@ -284,7 +275,6 @@ Adopt ==
 Message(t) ==
     /\ t \in Active /\ exists[t] /\ msgs < MaxMessages
     /\ msgs' = msgs + 1
-    /\ run' = [run EXCEPT ![t] = @ + 1]
     /\ phase' = [phase EXCEPT ![t] = "working"]
     /\ settled' = [settled EXCEPT ![t] = FALSE]
     /\ UNCHANGED <<exists, members, members2, lpc, retries, crashes, outages, adopts, reach2>>
@@ -302,18 +292,18 @@ Progress(t) ==
     /\ t \in Active /\ exists[t] /\ phase[t] # "idle"
     /\ phase' = [phase EXCEPT ![t] = IF @ = "input" THEN "working" ELSE "input"]
     /\ IF phase[t] = "working" THEN Report(t) ELSE UNCHANGED <<owed, wakes>>
-    /\ UNCHANGED <<exists, settled, run, members, members2, lpc, retries, crashes, msgs,
+    /\ UNCHANGED <<exists, settled, members, members2, lpc, retries, crashes, msgs,
                    outages, adopts, reach2, queuedWake, badWake>>
-    /\ UNCHANGED <<cascades, cstate, targets, seen, warned, guarded, badSettle, headerTouched>>
+    /\ UNCHANGED <<cascades, cstate, targets, headerTouched>>
     /\ UNCHANGED rvars
 
 Finish(t) ==
     /\ t \in Active /\ exists[t] /\ phase[t] = "working"
     /\ phase' = [phase EXCEPT ![t] = "idle"]
     /\ Report(t)
-    /\ UNCHANGED <<exists, settled, run, members, members2, lpc, retries, crashes, msgs,
+    /\ UNCHANGED <<exists, settled, members, members2, lpc, retries, crashes, msgs,
                    outages, adopts, reach2, queuedWake, badWake>>
-    /\ UNCHANGED <<cascades, cstate, targets, seen, warned, guarded, badSettle, headerTouched>>
+    /\ UNCHANGED <<cascades, cstate, targets, headerTouched>>
     /\ UNCHANGED rvars
 
 \* Settling S, by hand or automatically, cancels its queued automatic runs (thread.settle).
@@ -321,31 +311,29 @@ AutoSettle(t) ==
     /\ t \in Active /\ exists[t] /\ phase[t] = "idle" /\ ~settled[t]
     /\ settled' = [settled EXCEPT ![t] = TRUE]
     /\ queuedWake' = IF t = "S" THEN 0 ELSE queuedWake
-    /\ UNCHANGED <<exists, phase, run, members, members2, lpc, retries, crashes, msgs,
+    /\ UNCHANGED <<exists, phase, members, members2, lpc, retries, crashes, msgs,
                    outages, adopts, reach2, owed, wakes, badWake>>
-    /\ UNCHANGED <<cascades, cstate, targets, seen, warned, guarded, badSettle, headerTouched>>
+    /\ UNCHANGED <<cascades, cstate, targets, headerTouched>>
     /\ UNCHANGED rvars
 
 \* E1 turns a reported outcome into the super_thread.member.wake command, which the orchestrator
 \* decides under S's lock: nothing on a settled S, a line added to a queued wake, or a new wake
-\* that dispatchMessage starts on an idle S or queues behind a busy one. A queued run counts as
-\* S's latest run, as the settle guard reads it.
+\* that dispatchMessage starts on an idle S or queues behind a busy one.
 Deliver(m) ==
     /\ m \in owed /\ (Env(m) = "E1" \/ reach2)
     /\ owed' = owed \ {m}
     /\ IF settled["S"] /\ WakeSkipsSettled
-         THEN UNCHANGED <<settled, phase, run, queuedWake, badWake>>
+         THEN UNCHANGED <<settled, phase, queuedWake, badWake>>
        ELSE IF queuedWake > 0 /\ FoldWakes
-         THEN UNCHANGED <<settled, phase, run, queuedWake, badWake>>
-       ELSE /\ run' = [run EXCEPT !["S"] = @ + 1]
-            /\ settled' = [settled EXCEPT !["S"] = FALSE]
+         THEN UNCHANGED <<settled, phase, queuedWake, badWake>>
+       ELSE /\ settled' = [settled EXCEPT !["S"] = FALSE]
             /\ badWake' = (badWake \/ settled["S"])
             /\ IF phase["S"] = "idle" /\ queuedWake = 0
                  THEN /\ phase' = [phase EXCEPT !["S"] = "working"] /\ UNCHANGED queuedWake
                  ELSE /\ queuedWake' = queuedWake + 1 /\ UNCHANGED phase
     /\ UNCHANGED <<exists, members, members2, lpc, retries, crashes, msgs, outages, adopts,
                    reach2, wakes>>
-    /\ UNCHANGED <<cascades, cstate, targets, seen, warned, guarded, badSettle, headerTouched>>
+    /\ UNCHANGED <<cascades, cstate, targets, headerTouched>>
     /\ UNCHANGED rvars
 
 \* S's run ends and its next queued run starts.
@@ -354,16 +342,16 @@ StartQueued ==
     /\ queuedWake' = queuedWake - 1
     /\ phase' = [phase EXCEPT !["S"] = "working"]
     /\ badWake' = (badWake \/ settled["S"])
-    /\ UNCHANGED <<exists, settled, run, members, members2, lpc, retries, crashes, msgs,
+    /\ UNCHANGED <<exists, settled, members, members2, lpc, retries, crashes, msgs,
                    outages, adopts, reach2, owed, wakes>>
-    /\ UNCHANGED <<cascades, cstate, targets, seen, warned, guarded, badSettle, headerTouched>>
+    /\ UNCHANGED <<cascades, cstate, targets, headerTouched>>
     /\ UNCHANGED rvars
 
 \* The person settles or unsettles one member row by hand.
 ToggleMember(t) ==
     /\ t \in {"L", "L2", "R", "R2", "D"} /\ Held(t)
     /\ settled' = [settled EXCEPT ![t] = ~@]
-    /\ UNCHANGED <<exists, phase, run, members, members2, lpc, retries, crashes, msgs,
+    /\ UNCHANGED <<exists, phase, members, members2, lpc, retries, crashes, msgs,
                    outages, adopts, reach2>> /\ UNCHANGED cvars
     /\ UNCHANGED rvars
 
@@ -374,16 +362,15 @@ UnsettleHeader ==
                      ELSE IF ~UnsettleHeaderOnly /\ t \in members THEN FALSE
                      ELSE settled[t]]
     /\ headerTouched' = (headerTouched \/ \E m \in members : settled'[m] # settled[m])
-    /\ UNCHANGED <<exists, phase, run, members, members2, lpc, retries, crashes, msgs,
-                   outages, adopts, reach2, cascades, cstate, targets, seen, warned, guarded,
-                   badSettle>>
+    /\ UNCHANGED <<exists, phase, members, members2, lpc, retries, crashes, msgs,
+                   outages, adopts, reach2, cascades, cstate, targets>>
     /\ UNCHANGED rvars
     /\ UNCHANGED wvars
 
 Outage ==
     /\ \/ reach2 /\ outages < MaxOutages /\ outages' = outages + 1 /\ reach2' = FALSE
        \/ ~reach2 /\ reach2' = TRUE /\ UNCHANGED outages
-    /\ UNCHANGED <<exists, settled, phase, run, members, members2, lpc, retries, crashes,
+    /\ UNCHANGED <<exists, settled, phase, members, members2, lpc, retries, crashes,
                    msgs, adopts>> /\ UNCHANGED cvars
     /\ UNCHANGED rvars
 
@@ -396,26 +383,19 @@ PlanSettle ==
     /\ cstate = "idle" /\ cascades < MaxCascades /\ Shown("S", members)
     /\ cascades' = cascades + 1
     /\ LET planned == {m \in members : Held(m) /\ ~settled[m]}
-           ts      == {"S"} \cup planned
-           \* Without GuardEverySettle: a thread with no run seen, and a header already settled
-           \* when pressed, go out without expectedLatestRunId.
-           withRun == {t \in planned \cup (IF settled["S"] THEN {} ELSE {"S"}) : run[t] > 0}
-       IN /\ targets' = ts
-          /\ guarded' = IF GuardEverySettle THEN ts ELSE withRun
-          /\ warned' = {m \in planned : phase[m] # "idle"} \cup {m \in members : ~Held(m)}
-    /\ seen' = run
+       IN targets' = {"S"} \cup planned
     /\ cstate' = "confirming"
-    /\ UNCHANGED <<exists, settled, phase, run, members, members2, lpc, retries, crashes,
-                   msgs, outages, adopts, reach2, badSettle, headerTouched>>
+    /\ UNCHANGED <<exists, settled, phase, members, members2, lpc, retries, crashes,
+                   msgs, outages, adopts, reach2, headerTouched>>
     /\ UNCHANGED rvars
     /\ UNCHANGED wvars
 
 Confirm ==
     /\ cstate = "confirming"
     /\ cstate' = "sending"
-    /\ UNCHANGED <<exists, settled, phase, run, members, members2, lpc, retries, crashes,
-                   msgs, outages, adopts, cascades, reach2, targets, seen, warned, guarded,
-                   badSettle, headerTouched>>
+    /\ UNCHANGED <<exists, settled, phase, members, members2, lpc, retries, crashes,
+                   msgs, outages, adopts, cascades, reach2, targets,
+                   headerTouched>>
     /\ UNCHANGED rvars
     /\ UNCHANGED wvars
 
@@ -423,26 +403,24 @@ Confirm ==
 StopCascade ==
     /\ cstate # "idle"
     /\ cstate' = "idle" /\ targets' = {}
-    /\ UNCHANGED <<exists, settled, phase, run, members, members2, lpc, retries, crashes,
-                   msgs, outages, adopts, cascades, reach2, seen, warned, guarded, badSettle,
+    /\ UNCHANGED <<exists, settled, phase, members, members2, lpc, retries, crashes,
+                   msgs, outages, adopts, cascades, reach2,
                    headerTouched>>
     /\ UNCHANGED rvars
     /\ UNCHANGED wvars
 
-\* The person acted on the header directly with its status in view, so only members need a
-\* warning; but no thread may settle on work newer than what the person saw.
+\* Each settle is the thread.settle a swipe on that one thread sends, with nothing added. The model
+\* lets it settle a busy thread too, a superset of the server, which refuses one.
 SendSettle(t) ==
     /\ cstate = "sending" /\ t \in targets
     /\ targets' = targets \ {t}
     /\ cstate' = IF targets' = {} THEN "idle" ELSE "sending"
-    /\ IF (Env(t) = "E2" /\ ~reach2) \/ (GuardSettleByRun /\ t \in guarded /\ run[t] # seen[t])
-         THEN UNCHANGED <<settled, badSettle, queuedWake>>    \* unreachable, or refused
+    /\ IF Env(t) = "E2" /\ ~reach2
+         THEN UNCHANGED <<settled, queuedWake>>
          ELSE /\ settled' = [settled EXCEPT ![t] = TRUE]
-              /\ badSettle' = (badSettle \/ run[t] # seen[t]
-                                \/ (t # "S" /\ phase[t] # "idle" /\ t \notin warned))
               /\ queuedWake' = IF t = "S" THEN 0 ELSE queuedWake
-    /\ UNCHANGED <<exists, phase, run, members, members2, lpc, retries, crashes, msgs,
-                   outages, adopts, cascades, reach2, seen, warned, guarded, headerTouched,
+    /\ UNCHANGED <<exists, phase, members, members2, lpc, retries, crashes, msgs,
+                   outages, adopts, cascades, reach2, headerTouched,
                    owed, wakes, badWake>>
     /\ UNCHANGED rvars
 
@@ -474,10 +452,6 @@ MembersOnlyOwnLaunches == members \subseteq Children /\ members2 = {}
 
 \* No thread is a member of two super threads.
 AtMostOneGroup == members \cap members2 = {}
-
-\* Settling the header never settles a busy member the warning did not list, or any thread that
-\* started new work after the person was shown the confirmation.
-NoUnwarnedSettle == ~badSettle
 
 \* For a client that reaches both environments, an unsettled member is always in its shown section.
 UnsettledMemberStaysVisible ==
