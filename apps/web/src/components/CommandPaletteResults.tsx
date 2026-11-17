@@ -189,7 +189,10 @@ export function CommandPaletteVirtualizedResults(props: CommandPaletteVirtualize
         />
       ) : null}
       {props.footerRows.length > 0 ? (
-        <div className={cn("shrink-0 p-2", props.rows.length > 0 && "border-t border-border/70")}>
+        <div
+          className={cn("shrink-0 p-2", props.rows.length > 0 && "border-t border-border/70")}
+          data-slot="command-pinned-rows"
+        >
           {props.footerRows.map((row) => (
             <Fragment key={row.key}>{renderRow(row)}</Fragment>
           ))}
