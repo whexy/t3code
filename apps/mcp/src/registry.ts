@@ -20,7 +20,7 @@ export const ServerRecord = Schema.Struct({
   /** The server's own identity; a re-pair must come from the same server. */
   environmentId: Schema.String,
   url: Schema.String,
-  /** Bearer token with orchestration scopes only. Never leaves the bridge. */
+  /** Bearer token with the permissions its pairing link granted. Never leaves the bridge. */
   token: Schema.String,
   enabled: Schema.Boolean,
   pairedAt: Schema.String,
@@ -61,6 +61,14 @@ const replace = (state: BridgeState, id: string, next: ServerRecord): BridgeStat
   servers: state.servers.map((server) => (server.id === id ? next : server)),
 });
 
+/** Two servers can share a name; the second gets the first free `-2`, `-3`, … suffix. */
+function freeId(state: BridgeState, name: string) {
+  const base = slugify(name);
+  let id = base;
+  for (let n = 2; find(state, id) !== undefined; n++) id = `${base}-${n}`;
+  return id;
+}
+
 export function addServer(state: BridgeState, pairing: Pairing, requestedId?: string) {
   const existing = state.servers.find((server) => server.environmentId === pairing.environmentId);
   if (existing !== undefined) {
@@ -68,10 +76,21 @@ export function addServer(state: BridgeState, pairing: Pairing, requestedId?: st
       `This server is already paired as "${existing.id}". Re-pair that entry to refresh its token.`,
     );
   }
-  return Result.map(checkId(state, requestedId ?? slugify(pairing.name)), (id): BridgeState => ({
-    ...state,
-    servers: [...state.servers, { ...pairing, id, enabled: true }],
-  }));
+  return Result.map(
+    checkId(state, requestedId ?? freeId(state, pairing.name)),
+    (id): BridgeState => ({
+      ...state,
+      servers: [...state.servers, { ...pairing, id, enabled: true }],
+    }),
+  );
+}
+
+/** Adds a new server, or refreshes the token of one paired before under its existing id. */
+export function upsertServer(state: BridgeState, pairing: Pairing, requestedId?: string) {
+  const existing = state.servers.find((server) => server.environmentId === pairing.environmentId);
+  return existing === undefined
+    ? addServer(state, pairing, requestedId)
+    : repairServer(state, existing.id, pairing);
 }
 
 /** Refreshes the token, and the URL the link came from, of a server paired before. */
