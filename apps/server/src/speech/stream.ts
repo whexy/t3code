@@ -1,10 +1,13 @@
 import {
   AuthOrchestrationOperateScope,
+  CloudSpeechError,
   SPEECH_STREAM_PATH,
   SPEECH_STREAM_MAX_CHUNK_BYTES,
   SpeechStreamCommand,
   SPEECH_MAX_OPTIONS_BYTES,
   type SpeechStreamEvent,
+  type SpeechStreamText,
+  type SpeechTranscriptionOptions,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -17,16 +20,28 @@ import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as SpeechService from "./SpeechService.ts";
 
 const decodeCommand = Schema.decodeUnknownEffect(Schema.fromJsonString(SpeechStreamCommand));
+const isCloudSpeechError = Schema.is(CloudSpeechError);
+
+export type SocketSpeechStream<E> = {
+  readonly feed: (
+    pcm: Uint8Array,
+  ) => Effect.Effect<{ readonly revision: number; readonly text: SpeechStreamText | null }, E>;
+  readonly finish: Effect.Effect<string, E>;
+};
 
 /** One socket owns one stream. Audio is processed and acknowledged in arrival order. */
-export const runSpeechSocket = Effect.fn("speech.runSocket")(function* (
+export const runSpeechSocket = Effect.fn("speech.runSocket")(function* <E>(
   socket: Socket.Socket,
-  speech: Pick<SpeechService.SpeechService["Service"], "startStream">,
+  speech: {
+    readonly startStream: (
+      options: SpeechTranscriptionOptions,
+    ) => Effect.Effect<SocketSpeechStream<E>, E, Scope.Scope>;
+  },
 ) {
   const scope = yield* Scope.Scope;
   const writer = yield* socket.writer;
   const send = (event: SpeechStreamEvent) => writer.write(JSON.stringify(event));
-  let stream: SpeechService.SpeechStream | undefined;
+  let stream: SocketSpeechStream<E> | undefined;
   let ended = false;
   const fail = Effect.fn("speech.failSocket")(function* (message: string) {
     if (ended) return;
@@ -62,7 +77,13 @@ export const runSpeechSocket = Effect.fn("speech.runSocket")(function* (
     }).pipe(
       Effect.catch((cause) =>
         Effect.logError("live transcription operation failed", { cause }).pipe(
-          Effect.andThen(fail("Live transcription failed. Please try recording again.")),
+          Effect.andThen(
+            fail(
+              isCloudSpeechError(cause)
+                ? cause.message
+                : "Live transcription failed. Please try recording again.",
+            ),
+          ),
         ),
       ),
     );

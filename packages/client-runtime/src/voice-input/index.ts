@@ -21,6 +21,7 @@ export {
   transcribeCloudPcm,
   getEnvironmentSpeechStatus,
   getEnvironmentSpeechStreamUrl,
+  getCloudWhisperSpeechStreamUrl,
   linkEnvironmentSpeechModels,
   postProcessEnvironmentTranscript,
   removeEnvironmentSpeechModel,
