@@ -277,7 +277,16 @@ const withSenderThread = (
   }
   return Option.isNone(decoded)
     ? invocation
-    : { ...invocation, client: { ...invocation.client, senderThread: decoded.value } };
+    : {
+        ...invocation,
+        client: {
+          ...invocation.client,
+          senderThread: decoded.value,
+          ...(request.headers[McpInvocationContext.SENDER_SUPER_THREAD_HEADER] === "1"
+            ? { senderSuperThread: true }
+            : {}),
+        },
+      };
 };
 
 // The Linked environments beta is off here: links wait until it is on again.

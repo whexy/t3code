@@ -48,7 +48,7 @@ export class PeerMcpClient extends Context.Service<
       readonly arguments: Record<string, unknown>;
       readonly limits: PeerCallLimits;
       /** The thread here the call is made for, sent as `T3-Sender-Thread`. */
-      readonly sender?: OrchestrationV2LinkedSender;
+      readonly sender?: OrchestrationV2LinkedSender & { readonly superThread?: boolean };
       readonly success: S;
     }) => Effect.Effect<S["Type"], OrchestratorMcpFailure>;
   }
@@ -210,6 +210,9 @@ const make = Effect.gen(function* () {
                 // encodeURIComponent throws on an unpaired surrogate, which a title can hold.
                 .map((part) => encodeURIComponent(part.toWellFormed()))
                 .join("/"),
+              ...(input.sender.superThread === true
+                ? { [McpInvocationContext.SENDER_SUPER_THREAD_HEADER]: "1" }
+                : {}),
             };
       const sessionKey = `${input.environmentId} ${resolved.url}`;
       const callOnce = (sessionId: string) =>

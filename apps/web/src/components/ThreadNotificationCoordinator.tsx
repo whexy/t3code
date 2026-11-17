@@ -10,6 +10,10 @@ import type { AnyRouter } from "@tanstack/react-router";
 import { parseThreadKey, threadKey } from "@t3tools/client-runtime/state/entities";
 import type { EnvironmentId, OrchestrationV2ThreadShell, ThreadId } from "@t3tools/contracts";
 import { monitorHoldsWakeCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
+import {
+  isSuperThreadMember,
+  superThreadMembersHoldCompletion,
+} from "@t3tools/shared/superThreadAwareness";
 import type { ClientSettings } from "@t3tools/contracts/settings";
 import * as Option from "effect/Option";
 import type { AtomRegistry } from "effect/reactivity";
@@ -54,6 +58,8 @@ type ToastId = ReturnType<typeof toastManager.add>;
 
 interface WatchedEnvironment {
   unsubscribe: () => void;
+  /** The live shells by id, built on first lookup after each update. */
+  shellById: () => ReadonlyMap<ThreadId, OrchestrationV2ThreadShell>;
   previous: Map<ThreadId, NotificationState>;
   reconnecting: boolean;
   readonly gate: ReturnType<typeof createThreadNotificationGate<ThreadId>>;
@@ -232,6 +238,16 @@ export function startThreadNotifications(
     }
   };
 
+  // Members can live in any watched environment; one not watched yet counts as idle.
+  const superThreadMembersHold = (thread: OrchestrationV2ThreadShell) =>
+    thread.superThread !== undefined &&
+    superThreadMembersHoldCompletion(
+      thread.superThread.members.flatMap((member) => {
+        const shell = watched.get(member.environmentId)?.shellById().get(member.threadId);
+        return shell === undefined ? [] : [shell];
+      }),
+    );
+
   const observeThreads = (
     environmentId: EnvironmentId,
     entry: WatchedEnvironment,
@@ -247,6 +263,7 @@ export function startThreadNotifications(
     const changed: Array<[NotificationState | undefined, NotificationState]> = [];
     for (const rawThread of threads) {
       if (
+        isSuperThreadMember(rawThread) ||
         isShownUnderParent(
           { environmentId, threadId: rawThread.id },
           rawThread.lineage,
@@ -257,10 +274,12 @@ export function startThreadNotifications(
       }
       const prior = previous.get(rawThread.id);
       const subagentRequest = subagentRequests.get(rawThread.id) ?? null;
+      // A super thread's hold reads its members, so it is checked again on every update.
       if (
         !entry.reconnecting &&
         prior?.raw === rawThread &&
-        prior.subagentRequest === subagentRequest
+        prior.subagentRequest === subagentRequest &&
+        rawThread.superThread === undefined
       ) {
         next.set(rawThread.id, prior);
         continue;
@@ -283,7 +302,8 @@ export function startThreadNotifications(
           ? `${status}:${requestId}`
           : `${thread.latestRun?.runId ?? ""}:${status}`;
       const completed = status === "ready" && thread.latestRun?.status === "completed";
-      const settled = completed && !monitorHoldsWakeCompletion(rawThread);
+      const settled =
+        completed && !monitorHoldsWakeCompletion(rawThread) && !superThreadMembersHold(rawThread);
       const parsedCompletedAt = Date.parse(thread.latestRun?.completedAt ?? "");
       const completedAt = Number.isFinite(parsedCompletedAt) ? parsedCompletedAt : null;
       const state = {
@@ -295,7 +315,9 @@ export function startThreadNotifications(
         requestId,
         settled,
         completedAt: settled ? completedAt : null,
-        backgroundWake: rawThread.latestRunBackgroundWake === true,
+        // A member's outcome that releases the hold also wakes the super thread, which takes a moment to start.
+        backgroundWake:
+          rawThread.latestRunBackgroundWake === true || rawThread.superThread !== undefined,
       };
       next.set(thread.id, state);
       changed.push([prior, state]);
@@ -314,7 +336,13 @@ export function startThreadNotifications(
   };
 
   const watchEnvironment = (environmentId: EnvironmentId): WatchedEnvironment => {
+    let threads: ReadonlyArray<OrchestrationV2ThreadShell> | null = null;
+    let byId: Map<ThreadId, OrchestrationV2ThreadShell> | null = null;
     const entry: WatchedEnvironment = {
+      shellById: () => {
+        byId ??= new Map((threads ?? []).map((thread) => [thread.id, thread]));
+        return byId;
+      },
       previous: new Map(),
       reconnecting: false,
       unsubscribe: () => {},
@@ -323,10 +351,10 @@ export function startThreadNotifications(
         if (state) present(environmentId, state, kind);
       }),
     };
-    let threads: ReadonlyArray<OrchestrationV2ThreadShell> | null = null;
     const unsubscribeShell = registry.subscribe(
       environmentShell.stateValueAtom(environmentId),
       (shell) => {
+        byId = null;
         threads =
           shell.status === "live" && Option.isSome(shell.snapshot)
             ? shell.snapshot.value.threads

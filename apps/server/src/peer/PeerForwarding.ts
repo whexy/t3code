@@ -197,6 +197,7 @@ const make = Effect.gen(function* () {
             environmentId: scope.environmentId,
             threadId: caller.id,
             title: caller.title,
+            ...(caller.superThread === undefined ? {} : { superThread: true }),
           };
     return yield* peers.call({
       environmentId,
