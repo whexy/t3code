@@ -1,9 +1,15 @@
 name: Check this run may still publish
 description: >-
-  Fails unless this is the run's first attempt. Outputs current=false, and
-  writes the SUPERSEDED summary line, when self-hosted-nightly has moved past
-  the run's commit, since the newer push publishes itself. Publishing jobs run
+  Fails unless this is the run's first attempt or allow-rerun is set. Outputs
+  current=false, and writes the SUPERSEDED summary line, when
+  self-hosted-nightly has moved past the run's commit, since the newer push
+  publishes itself. Publishing jobs run
   it right before they change anything and gate those steps on `current`.
+inputs:
+  allow-rerun:
+    description: "'true' for a job whose re-run publishes under a version of its own"
+    required: false
+    default: "false"
 outputs:
   current:
     description: "'true' when self-hosted-nightly still points at this run's commit"
@@ -15,8 +21,9 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
+        ALLOW_RERUN: ${{ inputs.allow-rerun }}
       run: |
-        if ((GITHUB_RUN_ATTEMPT > 1)); then
+        if ((GITHUB_RUN_ATTEMPT > 1)) && [[ "$ALLOW_RERUN" != true ]]; then
           echo "::error::Use workflow_dispatch to retry; re-running reuses run_number, and with it the 1.2.N version."
           exit 1
         fi
