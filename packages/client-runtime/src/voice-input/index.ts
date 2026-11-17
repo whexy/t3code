@@ -43,3 +43,8 @@ export {
   type VoiceTranscriptionErrorCode,
   type VoiceTranscriptionOptions,
 } from "./transcription.ts";
+export {
+  unlockedWhisperEndpointPatch,
+  whisperEndpointLocks,
+  type WhisperEndpointLocks,
+} from "./whisperEndpoint.ts";

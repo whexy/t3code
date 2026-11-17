@@ -137,19 +137,21 @@ export const makeWhisperSpeechStream = Effect.fn("WhisperSpeechStream.start")(fu
   const current = yield* settings.getSettings.pipe(Effect.mapError(() => failure("unavailable")));
   const source = current.cloudSpeechCredentials.whisper;
   const endpoint = current.cloudSpeechWhisper;
-  if (!source || !endpoint.url || !endpoint.streamingUrl) return yield* failure("missing-key");
+  if (!endpoint.url || !endpoint.streamingUrl) return yield* failure("missing-key");
   // A vault that locked since the last recording must not authorize a new stream.
   if (isSecretReference(source)) yield* resolver.invalidate([source]);
-  const key = yield* requireSettingsSecret(resolver, source).pipe(
-    Effect.mapError(() => failure("unreadable-key")),
-  );
-  if (!isApiKey(key)) return yield* failure("unreadable-key");
+  const key = source
+    ? yield* requireSettingsSecret(resolver, source).pipe(
+        Effect.mapError(() => failure("unreadable-key")),
+      )
+    : undefined;
+  if (key !== undefined && !isApiKey(key)) return yield* failure("unreadable-key");
   const language = effectiveSpeechLanguage(cloudSpeechLanguages, options.speechLanguage);
   const terms = options.speechCustomWords.map(({ term }) => term);
 
   const upstream = yield* Socket.makeWebSocket(endpoint.streamingUrl, {
     openTimeout: "10 seconds",
-    headers: { authorization: `Bearer ${key}` },
+    headers: key === undefined ? {} : { authorization: `Bearer ${key}` },
   }).pipe(Effect.provide(upstreamWebSocketConstructor));
   const write = yield* upstream.writer;
   const reader = yield* upstream.reader.pipe(Effect.mapError(openFailure));

@@ -57,6 +57,7 @@ it.effect.each(["openai", "xai"] as const)("sends only to %s using its own saved
       xai: true,
       openrouter: false,
       whisper: false,
+      whisperKey: false,
       whisperStreaming: false,
     });
     yield* Effect.flip(transcribe(new Uint8Array(3)));
@@ -212,79 +213,86 @@ it.effect("removing a key while a catalog read is pending prevents the upload", 
   }),
 );
 
-it.effect("sends a Whisper request to the configured endpoint only with its URL and key", () =>
-  Effect.gen(function* () {
-    const reference = { provider: SecretProviderId.make("work"), reference: "op://Work/Whisper" };
-    let onRead = (): Effect.Effect<void> => Effect.void;
-    const upstream = vi.fn<typeof fetch>(async () => Response.json({ text: "你好 hello" }));
-    const { service, settings } = yield* Effect.all({
-      service: CloudSpeech.CloudSpeech,
-      settings: ServerSettings.ServerSettingsService,
-    }).pipe(
-      Effect.provide(
-        CloudSpeech.layer.pipe(
-          Layer.provideMerge(ServerSettings.ServerSettingsService.layerTest()),
-          Layer.provide(FetchHttpClient.layer),
-          Layer.provide(
-            Layer.mock(SecretResolver.SecretResolver)({
-              read: () => onRead().pipe(Effect.as(["vault-key"])),
-              invalidate: () => Effect.void,
-            }),
+it.effect(
+  "sends a Whisper request to the configured endpoint, with a key only when one is saved",
+  () =>
+    Effect.gen(function* () {
+      const reference = { provider: SecretProviderId.make("work"), reference: "op://Work/Whisper" };
+      let onRead = (): Effect.Effect<void> => Effect.void;
+      const upstream = vi.fn<typeof fetch>(async () => Response.json({ text: "你好 hello" }));
+      const { service, settings } = yield* Effect.all({
+        service: CloudSpeech.CloudSpeech,
+        settings: ServerSettings.ServerSettingsService,
+      }).pipe(
+        Effect.provide(
+          CloudSpeech.layer.pipe(
+            Layer.provideMerge(ServerSettings.ServerSettingsService.layerTest()),
+            Layer.provide(FetchHttpClient.layer),
+            Layer.provide(
+              Layer.mock(SecretResolver.SecretResolver)({
+                read: () => onRead().pipe(Effect.as(["vault-key"])),
+                invalidate: () => Effect.void,
+              }),
+            ),
           ),
         ),
-      ),
-    );
-    const transcribe = (speechLanguage = "zh") =>
-      service
-        .transcribe("whisper", new Uint8Array(new Float32Array([0, 0.5]).buffer), {
-          ...DEFAULT_SPEECH_TRANSCRIPTION_OPTIONS,
-          speechLanguage,
-          speechCustomWords: [
-            { term: "T3 Code", aliases: [] },
-            { term: "Wenxuan", aliases: ["when Shuan"] },
-          ],
-        })
-        .pipe(Effect.provideService(FetchHttpClient.Fetch, upstream));
+      );
+      const transcribe = (speechLanguage = "zh") =>
+        service
+          .transcribe("whisper", new Uint8Array(new Float32Array([0, 0.5]).buffer), {
+            ...DEFAULT_SPEECH_TRANSCRIPTION_OPTIONS,
+            speechLanguage,
+            speechCustomWords: [
+              { term: "T3 Code", aliases: [] },
+              { term: "Wenxuan", aliases: ["when Shuan"] },
+            ],
+          })
+          .pipe(Effect.provideService(FetchHttpClient.Fetch, upstream));
 
-    yield* service.setKey("whisper", Redacted.make("cluster-key"));
-    expect((yield* service.configured).whisper).toBe(false);
-    expect(yield* Effect.flip(transcribe())).toMatchObject({ reason: "missing-key" });
-    expect(upstream).not.toHaveBeenCalled();
+      yield* service.setKey("whisper", Redacted.make("cluster-key"));
+      expect(yield* service.configured).toMatchObject({ whisper: false, whisperKey: true });
+      expect(yield* Effect.flip(transcribe())).toMatchObject({ reason: "missing-key" });
+      expect(upstream).not.toHaveBeenCalled();
 
-    const url = "http://asr.test:8080/v1/audio/transcriptions";
-    yield* settings.updateSettings({ cloudSpeechWhisper: { url } });
-    expect((yield* service.configured).whisper).toBe(true);
-    expect(yield* transcribe()).toBe("你好 hello");
-    const [target, init] = upstream.mock.calls[0]!;
-    expect(String(target)).toBe(url);
-    expect(init?.redirect).toBe("error");
-    expect(new Headers(init?.headers).get("authorization")).toBe("Bearer cluster-key");
-    const form = init?.body as FormData;
-    expect(
-      Object.fromEntries([...form.keys()].map((key) => [key, form.getAll(key).length])),
-    ).toEqual({ model: 1, response_format: 1, language: 1, prompt: 1, file: 1 });
-    expect(form.get("model")).toBe("whisper-1");
-    expect(form.get("response_format")).toBe("json");
-    expect(form.get("language")).toBe("zh");
-    expect(form.get("prompt")).toBe("T3 Code, Wenxuan");
-    const file = form.get("file") as File;
-    expect([file.name, file.type]).toEqual(["dictation.wav", "audio/wav"]);
-    expect(new DataView(yield* Effect.promise(() => file.arrayBuffer())).getUint32(24, true)).toBe(
-      16_000,
-    );
+      const url = "http://asr.test:8080/v1/audio/transcriptions";
+      yield* settings.updateSettings({ cloudSpeechWhisper: { url } });
+      expect((yield* service.configured).whisper).toBe(true);
+      expect(yield* transcribe()).toBe("你好 hello");
+      const [target, init] = upstream.mock.calls[0]!;
+      expect(String(target)).toBe(url);
+      expect(init?.redirect).toBe("error");
+      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer cluster-key");
+      const form = init?.body as FormData;
+      expect(
+        Object.fromEntries([...form.keys()].map((key) => [key, form.getAll(key).length])),
+      ).toEqual({ model: 1, response_format: 1, language: 1, prompt: 1, file: 1 });
+      expect(form.get("model")).toBe("whisper-1");
+      expect(form.get("response_format")).toBe("json");
+      expect(form.get("language")).toBe("zh");
+      expect(form.get("prompt")).toBe("T3 Code, Wenxuan");
+      const file = form.get("file") as File;
+      expect([file.name, file.type]).toEqual(["dictation.wav", "audio/wav"]);
+      expect(
+        new DataView(yield* Effect.promise(() => file.arrayBuffer())).getUint32(24, true),
+      ).toBe(16_000);
 
-    yield* settings.updateSettings({ cloudSpeechWhisper: { model: "wetype" } });
-    yield* transcribe("auto");
-    const auto = upstream.mock.calls[1]?.[1]?.body as FormData;
-    expect([auto.get("model"), auto.has("language")]).toEqual(["wetype", false]);
+      yield* settings.updateSettings({ cloudSpeechWhisper: { model: "wetype" } });
+      yield* transcribe("auto");
+      const auto = upstream.mock.calls[1]?.[1]?.body as FormData;
+      expect([auto.get("model"), auto.has("language")]).toEqual(["wetype", false]);
 
-    // A URL changed while the vault resolves the key must not receive it.
-    yield* service.setKey("whisper", reference);
-    onRead = () =>
-      settings
-        .updateSettings({ cloudSpeechWhisper: { url: "https://elsewhere.test/v1/audio" } })
-        .pipe(Effect.ignore);
-    expect(yield* Effect.flip(transcribe())).toMatchObject({ reason: "key-changed" });
-    expect(upstream).toHaveBeenCalledTimes(2);
-  }),
+      yield* service.setKey("whisper", null);
+      expect(yield* service.configured).toMatchObject({ whisper: true, whisperKey: false });
+      yield* transcribe();
+      expect(new Headers(upstream.mock.calls[2]?.[1]?.headers).has("authorization")).toBe(false);
+
+      // A URL changed while the vault resolves the key must not receive it.
+      yield* service.setKey("whisper", reference);
+      onRead = () =>
+        settings
+          .updateSettings({ cloudSpeechWhisper: { url: "https://elsewhere.test/v1/audio" } })
+          .pipe(Effect.ignore);
+      expect(yield* Effect.flip(transcribe())).toMatchObject({ reason: "key-changed" });
+      expect(upstream).toHaveBeenCalledTimes(3);
+    }),
 );
