@@ -61,8 +61,13 @@ native change waits for the next TestFlight build.
 
 ### iOS signing
 
-The `ios-testflight` job runs on GitHub's `xcode-27` runner and skips until
-these repository secrets exist:
+The `ios-testflight` job runs on the runner the `IOS_RUNNER` repository
+variable names as JSON: `["self-hosted","t3-testflight"]` is sheridan's
+persistent runner (dotfiles' `services.t3codeRunner`), and unset is GitHub's
+`xcode-27`. Setting it back to `"xcode-27"` is the rollback. Sheridan's runner
+refuses every other job in its job-started hook, since a pull request can
+rewrite any workflow in this public repository. The job skips until these
+repository secrets exist:
 
 | Secret                 | Value                                                                  |
 | ---------------------- | ---------------------------------------------------------------------- |
