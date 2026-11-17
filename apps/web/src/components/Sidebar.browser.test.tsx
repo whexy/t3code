@@ -18,6 +18,7 @@ import { userEvent } from "vite-plus/test/browser";
 
 import { act, fakeTimers, render } from "../../test/render";
 import { openCommandPalette } from "../commandPaletteBus";
+import { useComposerDraftStore } from "../composerDraftStore";
 import { makeThreadFixture } from "../test-fixtures";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useNowMinute } from "../hooks/useNowMinute";
@@ -401,6 +402,11 @@ describe("sidebar settled pagination", () => {
 
 describe("sidebar super thread section", () => {
   it("lists a super thread's members under it, nowhere else, in keyboard order", async () => {
+    // Drafts another test file persisted would otherwise lead the rows Home and End visit.
+    const resetDrafts = () =>
+      useComposerDraftStore.setState(useComposerDraftStore.getInitialState(), true);
+    resetDrafts();
+    using _drafts = { [Symbol.dispose]: resetDrafts };
     const activeProject = project("active");
     const environmentId = activeProject.environmentId;
     const member = threadShell(activeProject.id, 1);
