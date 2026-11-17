@@ -2,7 +2,11 @@ import { encodeSpeechPcmRequest } from "@t3tools/shared/speech";
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
-import { CloudSpeechError, SPEECH_STREAM_PATH } from "@t3tools/contracts";
+import {
+  CloudSpeechError,
+  SPEECH_CLOUD_WHISPER_STREAM_PATH,
+  SPEECH_STREAM_PATH,
+} from "@t3tools/contracts";
 import type {
   CloudSpeechModelId,
   CloudSpeechProvider,
@@ -95,15 +99,13 @@ export const requireCloudSpeechKey = (
   provider: CloudSpeechProvider,
 ) =>
   getCloudSpeechKeys(prepared).pipe(
-    Effect.flatMap((keys) =>
-      keys[provider]
-        ? Effect.void
-        : Effect.fail(
-            new VoiceTranscriptionError({
-              code: "unavailable",
-              message: new CloudSpeechError({ provider, reason: "missing-key" }).message,
-            }),
-          ),
+    Effect.filterOrFail(
+      (keys) => Boolean(keys[provider]),
+      () =>
+        new VoiceTranscriptionError({
+          code: "unavailable",
+          message: new CloudSpeechError({ provider, reason: "missing-key" }).message,
+        }),
     ),
   );
 
@@ -160,7 +162,14 @@ export const transcribeCloudPcm = (
   );
 };
 
-export const getEnvironmentSpeechStreamUrl = (prepared: PreparedConnection) => {
+export const getEnvironmentSpeechStreamUrl = (prepared: PreparedConnection) =>
+  speechStreamUrl(prepared, SPEECH_STREAM_PATH);
+
+/** The Whisper-compatible provider's own socket; cloud audio never uses the local model's. */
+export const getCloudWhisperSpeechStreamUrl = (prepared: PreparedConnection) =>
+  speechStreamUrl(prepared, SPEECH_CLOUD_WHISPER_STREAM_PATH);
+
+const speechStreamUrl = (prepared: PreparedConnection, path: string) => {
   let endpoint = prepared.httpBaseUrl;
   return request({
     group: "auth",
@@ -173,7 +182,7 @@ export const getEnvironmentSpeechStreamUrl = (prepared: PreparedConnection) => {
     run: ({ client, headers }) => client.webSocketTicketFor({ headers, params: { use: "media" } }),
   }).pipe(
     Effect.map(({ ticket }) => {
-      const url = new URL(SPEECH_STREAM_PATH, endpoint);
+      const url = new URL(path, endpoint);
       url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
       url.searchParams.set("wsTicket", Redacted.value(ticket));
       return url.toString();

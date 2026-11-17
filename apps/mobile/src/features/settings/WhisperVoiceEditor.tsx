@@ -5,6 +5,7 @@ import {
 import {
   CloudSpeechApiKey,
   CloudSpeechWhisperModel,
+  CloudSpeechWhisperStreamingUrl,
   CloudSpeechWhisperUrl,
   DEFAULT_CLOUD_SPEECH_WHISPER_MODEL,
   isSecretReference,
@@ -30,6 +31,7 @@ import { pendingCloudVoiceChoice } from "../voice-input/voiceDestination";
 const isApiKey = Schema.is(CloudSpeechApiKey);
 const isUrl = Schema.is(CloudSpeechWhisperUrl);
 const isModel = Schema.is(CloudSpeechWhisperModel);
+const isStreamingUrl = Schema.is(CloudSpeechWhisperStreamingUrl);
 const FIELD = "rounded-lg bg-background px-3 py-2 text-foreground";
 
 function enableChoice(commit: () => void) {
@@ -67,6 +69,7 @@ export function WhisperVoiceEditor({
   const endpoint = settings?.cloudSpeechWhisper ?? {
     url: "",
     model: DEFAULT_CLOUD_SPEECH_WHISPER_MODEL,
+    streamingUrl: "",
   };
   const stored = settings?.cloudSpeechCredentials?.whisper;
   const sources =
@@ -81,6 +84,7 @@ export function WhisperVoiceEditor({
       : null;
   const [url, setUrl] = useState(endpoint.url);
   const [model, setModel] = useState(endpoint.model);
+  const [streamingUrl, setStreamingUrl] = useState(endpoint.streamingUrl);
   const [sourceId, setSourceId] = useState<SecretProviderId | null>(
     storedReference?.provider ?? null,
   );
@@ -108,10 +112,21 @@ export function WhisperVoiceEditor({
   const nextUrl = url.trim();
   const nextModel = model.trim();
   const urlInvalid = nextUrl !== "" && !isUrl(nextUrl);
+  const nextStreamingUrl = streamingUrl.trim();
+  const streamingUrlInvalid = !isStreamingUrl(nextStreamingUrl);
   const keyReady = draft.trim() ? credential !== undefined : ready;
-  const changed = nextUrl !== endpoint.url || nextModel !== endpoint.model || keyChanged;
+  const changed =
+    nextUrl !== endpoint.url ||
+    nextModel !== endpoint.model ||
+    nextStreamingUrl !== endpoint.streamingUrl ||
+    keyChanged;
   const canSave =
-    nextUrl !== "" && !urlInvalid && isModel(nextModel) && keyReady && (enable || changed);
+    nextUrl !== "" &&
+    !urlInvalid &&
+    !streamingUrlInvalid &&
+    isModel(nextModel) &&
+    keyReady &&
+    (enable || changed);
 
   const write = async (patch: ServerSettingsPatch, thenEnable: boolean) => {
     if (saving) return;
@@ -131,7 +146,7 @@ export function WhisperVoiceEditor({
     if (!canSave) return;
     void write(
       {
-        cloudSpeechWhisper: { url: nextUrl, model: nextModel },
+        cloudSpeechWhisper: { url: nextUrl, model: nextModel, streamingUrl: nextStreamingUrl },
         ...(keyChanged ? { cloudSpeechCredentials: { whisper: credential } } : {}),
       },
       enable,
@@ -150,7 +165,9 @@ export function WhisperVoiceEditor({
             footer={
               urlInvalid
                 ? "Enter a full http(s) URL without credentials."
-                : "Recordings are posted to this exact URL with the model below."
+                : streamingUrlInvalid
+                  ? "Enter a full wss:// streaming URL without credentials, or leave it empty."
+                  : "Recordings are posted to this exact URL with the model below. An optional wss:// streaming URL lets web and desktop send audio while you speak."
             }
           >
             <View className="gap-3 px-4 py-3">
@@ -179,6 +196,20 @@ export function WhisperVoiceEditor({
                 onSubmitEditing={save}
                 value={model}
                 onChangeText={setModel}
+                className={FIELD}
+              />
+              <TextInput
+                accessibilityLabel="Whisper streaming URL"
+                placeholder="Streaming URL (optional, wss://)"
+                keyboardType="url"
+                autoCapitalize="none"
+                autoCorrect={false}
+                autoComplete="off"
+                editable={!saving}
+                returnKeyType="done"
+                onSubmitEditing={save}
+                value={streamingUrl}
+                onChangeText={setStreamingUrl}
                 className={FIELD}
               />
             </View>
@@ -265,7 +296,7 @@ export function WhisperVoiceEditor({
                       onConfirm: () =>
                         void write(
                           {
-                            cloudSpeechWhisper: { url: "" },
+                            cloudSpeechWhisper: { url: "", streamingUrl: "" },
                             cloudSpeechCredentials: { whisper: "" },
                           },
                           false,
