@@ -47,6 +47,7 @@ import { ThreadGuestShare } from "./guestShare.ts";
 import { StoredThreadTags, ThreadTag } from "./threadTags.ts";
 import {
   SuperThreadInternalCommand,
+  SuperThreadMemberOf,
   SuperThreadShellState,
   SuperThreadState,
 } from "./superThread.ts";
@@ -528,6 +529,7 @@ export const OrchestrationV2AppThread = Schema.Struct({
   /** Absent on threads written before tags existed; read as empty. */
   tags: Schema.optional(StoredThreadTags),
   superThread: Schema.optional(SuperThreadState),
+  superThreadMemberOf: Schema.optional(SuperThreadMemberOf),
   lastVisitedAt: Schema.NullOr(Schema.DateTimeUtc).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
@@ -2317,6 +2319,7 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   /** Absent on threads written before tags existed; read as empty. */
   tags: Schema.optional(StoredThreadTags),
   superThread: Schema.optional(SuperThreadShellState),
+  superThreadMemberOf: Schema.optional(SuperThreadMemberOf),
   lastVisitedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   opens: Schema.optional(LenientThreadOpens),
   titleRegeneration: Schema.optional(
@@ -3158,6 +3161,8 @@ export const OrchestrationV2Command = Schema.Union([
     /** Only the server sets this, with `linkOrigin`, for a linked environment's delegated task. */
     delegatedFrom: Schema.optional(OrchestrationV2DelegatedFrom),
     superThread: Schema.optional(Schema.Literal(true)),
+    /** Only the server sets this, for a thread a super thread launches. */
+    superThreadMemberOf: Schema.optional(SuperThreadMemberOf),
     importedNativeThread: Schema.optional(
       Schema.Struct({
         ref: Schema.Struct({

@@ -20,6 +20,10 @@ import {
   turnItemCanChangeUserWait,
 } from "@t3tools/shared/agentAwareness";
 import { turnItemUpdateCanEndBackgroundWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
+import {
+  isSuperThreadMember,
+  superThreadMembersHoldCompletion,
+} from "@t3tools/shared/superThreadAwareness";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import { withRelayClientTracing } from "@t3tools/shared/relayTracing";
 import { normalizeRelayIssuer, RELAY_ACTIVITY_PUBLISH_TYP } from "@t3tools/shared/relayJwt";
@@ -89,6 +93,15 @@ function shouldPublishAgentAwarenessEvent(
     event.payload.historyOrigin === "v1_import"
   ) {
     return false;
+  }
+  // A followed member run elsewhere ending rewrites the super thread record, which can end its hold.
+  if (
+    event.type === "thread.tags-updated" &&
+    typeof event.payload === "object" &&
+    event.payload !== null &&
+    "superThread" in event.payload
+  ) {
+    return true;
   }
   switch (event.type) {
     case "thread.created":
@@ -331,6 +344,7 @@ function resolveAgentAwarenessRelayPublishSnapshot(input: {
   readonly thread: Option.Option<AgentAwarenessThread>;
   readonly project: Option.Option<Project>;
   readonly pendingSubagentRequest: SubagentRequestAwareness | null;
+  readonly superThreadMembersHold?: boolean;
 }): {
   readonly projectId: string | null;
   readonly state: RelayAgentActivityState | null;
@@ -362,6 +376,7 @@ function resolveAgentAwarenessRelayPublishSnapshot(input: {
   const state = projectThreadAwarenessV2({
     ...awarenessInput,
     pendingSubagentRequest: input.pendingSubagentRequest,
+    superThreadMembersHold: input.superThreadMembersHold === true,
   });
   const childDrivesWait =
     input.pendingSubagentRequest !== null &&
@@ -590,9 +605,13 @@ export const make = Effect.gen(function* () {
     // Read only this thread; full shell reads would make each activity event scale with all threads.
     const threadShell = yield* readAwarenessThread(threadId);
     yield* trackSubagentRequest(threadId, threadShell);
+    const superThreadHere = threadShell?.superThreadMemberOf;
+    if (superThreadHere?.environmentId === environmentId) {
+      yield* enqueueTopLevelPublish(superThreadHere.threadId);
+    }
     if (
       threadShell !== null &&
-      !isListedThreadLineage(threadShell.lineage) &&
+      (!isListedThreadLineage(threadShell.lineage) || isSuperThreadMember(threadShell)) &&
       !hasLivePublishedState(yield* Ref.get(publishedStateByThreadRef), threadId)
     ) {
       // Subagents and side chats have no relay rows to clear; per-event tombstones would needlessly redeliver user aggregates.
@@ -605,11 +624,15 @@ export const make = Effect.gen(function* () {
     const project = Option.isSome(thread)
       ? yield* projects.getById(thread.value.projectId)
       : Option.none<Project>();
+    const superThreadMembersHold = Option.isSome(thread)
+      ? yield* readSuperThreadMembersHold(thread.value, environmentId)
+      : false;
     const snapshot = resolveAgentAwarenessRelayPublishSnapshot({
       environmentId,
       thread,
       project,
       pendingSubagentRequest: yield* currentSubagentRequestFor(threadId),
+      superThreadMembersHold,
     });
     const publishIdentity = agentAwarenessPublishIdentity(snapshot.state, snapshot.subagentWait);
     const publishedStateByThread = yield* Ref.get(publishedStateByThreadRef);
@@ -677,6 +700,7 @@ export const make = Effect.gen(function* () {
               thread: Option.some({ ...thread.value, settledOverride: null }),
               project,
               pendingSubagentRequest: null,
+              superThreadMembersHold,
             })
           : null;
       if (unsettled?.state?.phase === "completed") {
@@ -739,6 +763,23 @@ export const make = Effect.gen(function* () {
     threads
       .getAgentAwarenessSnapshot(threadId)
       .pipe(Effect.map((snapshot) => snapshot.threads[0] ?? null));
+
+  // Untraced like the subagent helpers below; a failed read releases the hold, so it still alerts.
+  const readSuperThreadMembersHold = Effect.fnUntraced(
+    function* (thread: AgentAwarenessThread, hereId: EnvironmentId) {
+      if (thread.superThread === undefined) return false;
+      const { thread: record } = yield* threads.getThreadRecords(thread.id, []);
+      const local = yield* Effect.forEach(
+        thread.superThread.members.filter((member) => member.environmentId === hereId),
+        (member) => readAwarenessThread(member.threadId),
+      );
+      return superThreadMembersHoldCompletion(
+        local.filter((member) => member !== null),
+        (record.superThread?.following?.length ?? 0) > 0,
+      );
+    },
+    Effect.orElseSucceed(() => false),
+  );
 
   // The subagent helpers below are untraced: they run per event inside
   // publishThreadUnsafe, whose span already covers them.

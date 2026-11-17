@@ -96,10 +96,15 @@ const refusal = new OrchestratorMcpFailure({
   message: "Thread thread-gone was not found.",
 });
 
+const SenderResult = Schema.Struct({
+  senderThread: Schema.NullOr(OrchestrationV2LinkedSender),
+  senderSuperThread: Schema.Boolean,
+});
+
 const senderToolkit = Toolkit.make(
   Tool.make("sender", {
     description: "Returns the thread this request is made for.",
-    success: Schema.Struct({ senderThread: Schema.NullOr(OrchestrationV2LinkedSender) }),
+    success: SenderResult,
     dependencies: [McpInvocationContext.McpInvocationContext],
   }),
 );
@@ -110,7 +115,10 @@ it.effect("tells the peer which thread a call is made for", () =>
       const handlers = McpToolAccess.toLayer(senderToolkit, {
         sender: McpToolAccess.reads(() =>
           McpInvocationContext.McpInvocationContext.pipe(
-            Effect.map((scope) => ({ senderThread: scope.client?.senderThread ?? null })),
+            Effect.map((scope) => ({
+              senderThread: scope.client?.senderThread ?? null,
+              senderSuperThread: scope.client?.senderSuperThread === true,
+            })),
           ),
         ),
       });
@@ -128,17 +136,24 @@ it.effect("tells the peer which thread a call is made for", () =>
         threadId: ThreadId.make("import:claude/orc lead"),
         title: "orc lead / opus → fable",
       };
-      const call = (input: { readonly sender?: typeof sender }) =>
+      const call = (input: {
+        readonly sender?: typeof sender & { readonly superThread?: boolean };
+      }) =>
         client.call({
           environmentId: box.environmentId,
           tool: "sender",
           arguments: {},
           limits: { runtimeMode: "full-access", interactionMode: "default" },
           ...input,
-          success: Schema.Struct({ senderThread: Schema.NullOr(OrchestrationV2LinkedSender) }),
+          success: SenderResult,
         });
-      expect(yield* call({ sender })).toEqual({ senderThread: sender });
-      expect(yield* call({})).toEqual({ senderThread: null });
+      expect(yield* call({ sender })).toEqual({ senderThread: sender, senderSuperThread: false });
+      expect(yield* call({})).toEqual({ senderThread: null, senderSuperThread: false });
+      // A super thread says so, so what it launches there becomes its quiet member.
+      expect(yield* call({ sender: { ...sender, superThread: true } })).toEqual({
+        senderThread: sender,
+        senderSuperThread: true,
+      });
       // A long title is cut to whole characters rather than breaking the call.
       const long = yield* call({ sender: { ...sender, title: "🧵".repeat(5000) } });
       expect(long.senderThread?.title).toBe("🧵".repeat(200));

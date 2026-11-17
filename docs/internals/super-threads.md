@@ -78,6 +78,16 @@ files only through short seams, so the nightly rebase rarely conflicts.
   `t3_thread_send`) is recorded on the super thread and followed with the same
   wait `RemoteDelegation` uses, so a restart resumes it. That wait returns only
   when the run ends, so a linked member waiting for the person does not wake it.
+- **Only the super thread alerts the person.** A member's outcomes already wake
+  the super thread, so a member alerting too repeats news the person has no
+  context for. A member carries `superThreadMemberOf` from creation, so its own
+  server can silence it with no lookup, including a member in a linked
+  environment: the forwarding peer sends `T3-Sender-Super-Thread` beside
+  `T3-Sender-Thread`, a separate header so older peers ignore it. The super
+  thread ends its turn while members work, so the relay and the web notifier
+  treat that completion as still running until no member is working or one waits
+  for the person (`superThreadMembersHoldCompletion`). A linked member counts as
+  working while its run is in `following`.
 - **The task map is the super agent's, and read-only for people.** Super-thread-only
   MCP tools patch it by node and edge id and read it back. It lives on the thread,
   not in a run's plan artifact, because it must outlive any single run. Each patch

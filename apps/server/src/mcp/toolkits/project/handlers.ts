@@ -42,6 +42,7 @@ import { newCommandId, readCaller, resolveProjectId, unavailable } from "../../t
 import { ProjectToolkit } from "./tools.ts";
 import { recordForwardedLaunch, recordLocalLaunch } from "../superThread/handlers.ts";
 import { recordPendingForwardedLaunch } from "../superThread/handlers.ts";
+import { launchingSuperThread } from "../../../superThread/superThreadMembers.ts";
 
 const isAboveCeilingError = Schema.is(OrchestratorRuntimeModeAboveCeilingError);
 
@@ -406,6 +407,11 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
           });
         }
         yield* recordLocalLaunch(context, threadId);
+        const superThreadMemberOf = launchingSuperThread(
+          scope,
+          caller,
+          input.delegatedFrom !== undefined,
+        );
         const result = yield* ThreadMessageIntake.launchThread({
           commandId,
           threadId,
@@ -430,6 +436,7 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
           ...(linkOrigin === undefined ? {} : { linkOrigin }),
           // Kept only alongside linkOrigin: thread.create drops it otherwise.
           ...(input.delegatedFrom === undefined ? {} : { delegatedFrom: input.delegatedFrom }),
+          ...(superThreadMemberOf === undefined ? {} : { superThreadMemberOf }),
         }).pipe(
           Effect.mapError((error) => {
             if (error._tag === "AttachmentClaimError") {

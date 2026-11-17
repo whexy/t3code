@@ -4024,6 +4024,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ? {}
         : { delegatedFrom: command.delegatedFrom }),
       ...(command.superThread === true ? { superThread: { members: [] } } : {}),
+      ...(command.superThreadMemberOf === undefined
+        ? {}
+        : { superThreadMemberOf: command.superThreadMemberOf }),
       lineage: {
         parentThreadId: null,
         relationshipToParent: null,
