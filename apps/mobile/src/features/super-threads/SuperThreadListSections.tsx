@@ -95,24 +95,40 @@ export function SuperThreadListSections(props: {
             <SymbolView name="chevron.left" size={14} tintColorClassName="accent-primary" />
             <Text className="text-base text-primary">Super threads</Text>
           </Pressable>
-          <Text
-            accessibilityRole="header"
-            numberOfLines={2}
-            className={cn(
-              "text-lg font-t3-bold leading-snug",
-              sidebar ? "text-drawer-foreground" : "text-foreground",
-            )}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Open ${header.title}`}
+            onPress={() => props.onSelectThread(header)}
+            className="flex-row items-center gap-2"
+            style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
           >
-            {header.title}
-          </Text>
-          <Text
-            className={cn(
-              "text-xs",
-              sidebar ? "text-drawer-foreground-muted" : "text-foreground-muted",
-            )}
-          >
-            {summary(rows)}
-          </Text>
+            <View className="flex-1 gap-0.5">
+              <Text
+                numberOfLines={2}
+                className={cn(
+                  "text-lg font-t3-bold leading-snug",
+                  sidebar ? "text-drawer-foreground" : "text-foreground",
+                )}
+              >
+                {header.title}
+              </Text>
+              <Text
+                className={cn(
+                  "text-xs",
+                  sidebar ? "text-drawer-foreground-muted" : "text-foreground-muted",
+                )}
+              >
+                {summary(rows)}
+              </Text>
+            </View>
+            <SymbolView
+              name="chevron.right"
+              size={13}
+              tintColorClassName={
+                sidebar ? "accent-drawer-foreground-muted" : "accent-foreground-muted"
+              }
+            />
+          </Pressable>
         </View>
         {rows.length > 0 ? (
           <SuperThreadMemberRows
