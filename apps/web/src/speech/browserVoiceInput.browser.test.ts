@@ -31,6 +31,8 @@ vi.mock("../connection/runtime", async () => {
 function capture() {
   let receive: ((event: { data: Float32Array | "stopped" }) => void) | undefined;
   const stopTrack = vi.fn();
+  const workletOptions: Array<AudioWorkletNodeOptions | undefined> = [];
+  const workletMessages: unknown[] = [];
   const resources = new DisposableStack();
   resources.use(
     stubGlobal(
@@ -49,11 +51,15 @@ function capture() {
     stubGlobal(
       "AudioWorkletNode",
       class {
+        constructor(_context: unknown, _name: string, options?: AudioWorkletNodeOptions) {
+          workletOptions.push(options);
+        }
         port = {
           set onmessage(handler: typeof receive) {
             receive = handler;
           },
-          postMessage(message: string) {
+          postMessage(message: unknown) {
+            workletMessages.push(message);
             if (message === "stop") receive?.({ data: "stopped" });
           },
           close() {},
@@ -71,6 +77,8 @@ function capture() {
   return {
     feed: (data: Float32Array) => receive?.({ data }),
     stopTrack,
+    workletOptions,
+    workletMessages,
     [Symbol.dispose]: () => resources.dispose(),
   };
 }
@@ -267,7 +275,11 @@ it("streams the opening audio in order when the destination becomes ready during
     },
     async () => {
       await ready.promise;
-      return { locale: "en", streaming: { feed, finish }, transcribe: async () => "" };
+      return {
+        locale: "en",
+        streaming: { feed, finish, frameSamples: 2_400 },
+        transcribe: async () => "",
+      };
     },
   );
   const abort = new AbortController();
@@ -286,6 +298,7 @@ it("streams the opening audio in order when the destination becomes ready during
   expect(feed).not.toHaveBeenCalled();
   ready.resolve();
   await vi.waitFor(() => expect(feed).toHaveBeenCalledExactlyOnceWith(opening));
+  expect(microphone.workletMessages).toContainEqual({ frameSamples: 2_400 });
   microphone.feed(continuing);
   await platform.recorder.stop();
   expect(feed.mock.calls).toEqual([[opening], [continuing]]);
@@ -358,6 +371,7 @@ it.each([
 ] as const)(
   "streams cloud audio only for a Whisper grant, on its own socket: %j",
   async ({ provider, streamingUrl, live }) => {
+    using microphone = capture();
     const sockets: string[] = [];
     using _socket = stubGlobal(
       "WebSocket",
@@ -391,15 +405,25 @@ it.each([
       hasAudioConsent: () => true,
       // The local models' streaming preference does not apply to cloud streaming.
       getStreamingEnabled: () => false,
-      getTranscriptionOptions: () => DEFAULT_SPEECH_TRANSCRIPTION_OPTIONS,
+      getTranscriptionOptions: () => ({
+        ...DEFAULT_SPEECH_TRANSCRIPTION_OPTIONS,
+        speechLanguage: "fr",
+      }),
       getMicrophoneId: () => "",
       onLevel() {},
       onDurationLimit() {},
       onText() {},
       onError() {},
     });
+    using _capture = { [Symbol.dispose]: () => platform.cancelRecording() };
     const transcription = await platform.transcriber.prepare({ signal: abort.signal });
+    await vi.waitFor(() => expect(transcription.locale).toBe("fr"));
     expect(Boolean(transcription.streaming)).toBe(live);
+    await platform.recorder.prepareToRecordAsync(abort.signal);
+    // Small frames let a live cloud recognizer hear each word promptly.
+    expect(microphone.workletOptions.at(-1)?.processorOptions?.frameSamples).toBe(
+      live ? 2_400 : undefined,
+    );
     expect(sockets).toEqual(
       live
         ? ["wss://transcription.example.test/ws/voice/cloud/whisper?wsTicket=stream-ticket"]
