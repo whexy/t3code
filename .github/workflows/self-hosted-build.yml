@@ -757,6 +757,12 @@ jobs:
           security create-keychain -p "$password" "$keychain"
           security set-keychain-settings -lut 21600 "$keychain"
           security unlock-keychain -p "$password" "$keychain"
+          # The signing certificates chain through WWDR G3, which GitHub's image
+          # preinstalls and a plain Mac does not; without it no identity is valid.
+          curl -fsSL -o "$RUNNER_TEMP/AppleWWDRCAG3.cer" https://www.apple.com/certificateauthority/AppleWWDRCAG3.cer
+          echo "dcf21878c77f4198e4b4614f03d696d89c66c66008d4244e1b99161aac91601f  $RUNNER_TEMP/AppleWWDRCAG3.cer" | shasum -a 256 -c -
+          security import "$RUNNER_TEMP/AppleWWDRCAG3.cer" -k "$keychain"
+          rm "$RUNNER_TEMP/AppleWWDRCAG3.cer"
           for p12 in "$DEVELOPMENT_P12" "$DISTRIBUTION_P12"; do
             base64 --decode <<< "$p12" > "$RUNNER_TEMP/identity.p12"
             security import "$RUNNER_TEMP/identity.p12" -k "$keychain" -P "$P12_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
