@@ -403,14 +403,23 @@ Open the admin port in a browser. The sidebar switches between its pages.
   without a restart. The id is the `server_id` a chat uses, so renaming breaks
   the session ids it already holds.
 - **Pair a server** takes a pairing link. Create one in T3 Code under Settings →
-  Connections on that server. The bridge asks only for the permissions its
-  tools use: view environment and operate tasks, view diagnostics and usage
-  (`get_usage`), and change source control (cloning in `create_project` and
-  branch checkouts). It never asks for terminals, files, settings, or access
-  control. A link that leaves one of these out still pairs, but the tools that
-  need it fail and the server's status says which permissions are missing. The
-  server lists the bridge as "T3 MCP bridge" under its Connections, where you
-  can revoke it.
+  Connections on that server, or choose **Pair a device** under Settings →
+  Environments for one `t3code://pair` link to every server that client
+  reaches; the bridge pairs with each server in it. A server it already has
+  keeps its id and gets the new token, so pasting a fresh link from Pair a
+  device renews every token at once. The bridge takes every permission the
+  link grants, so its own links can pair other devices; its tools use only
+  viewing and operating tasks, usage (`get_usage`), and source control
+  (cloning in `create_project` and branch checkouts). A link that leaves one of
+  those out still pairs, but the tools that need it fail and the server's status
+  says which permissions are missing. The server lists the bridge as "T3 MCP
+  bridge" under its Connections, where you can revoke it.
+- **Pair a device** makes one single-use link, shown as QR codes and a link to
+  copy, for every enabled server, the way T3 Code's own Pair a device does.
+  Scan it with the T3 Code app or paste it into Add environment on another
+  computer. The new device gets the permissions the bridge holds on each server,
+  so a server paired before the bridge took every permission is left out until
+  you re-pair it.
 - **MCP endpoint** shows the URL to give your MCP client once you enter the
   public URL the bridge is reached at. In ChatGPT or Claude, add a custom
   connector with that URL and OAuth, leaving the client ID and secret empty.

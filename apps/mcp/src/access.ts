@@ -35,7 +35,7 @@ export const CLIENT_METADATA: AuthClientPresentationMetadata = {
 /**
  * Every permission a tool needs: reading and running threads, usage totals
  * for `get_usage`, and cloning or switching branches for `create_project` and
- * session checkouts. No terminal, file, settings, or access control.
+ * session checkouts. A server's status reports the ones its token lacks.
  */
 export const BRIDGE_SCOPES: ReadonlyArray<AuthGrantScope> = [
   AuthOrchestrationReadScope,
@@ -61,8 +61,8 @@ const describe = (host: string, error: RemoteEnvironmentRequestError) => {
 };
 
 /**
- * Pairs like any remote client, but asks only for `BRIDGE_SCOPES`. The server
- * grants the ones the pairing link allows and ignores ones it does not know.
+ * Pairs like any remote client, taking every permission the link grants: the
+ * bridge's pairing links can hand a new device only what its own token holds.
  */
 export const pair = Effect.fn("pair")(function* (link: string) {
   const target = yield* Effect.try({
@@ -85,7 +85,6 @@ export const pair = Effect.fn("pair")(function* (link: string) {
   const access = yield* bootstrapRemoteBearerSession({
     httpBaseUrl: target.httpBaseUrl,
     credential: target.credential,
-    scopes: BRIDGE_SCOPES,
     clientMetadata: CLIENT_METADATA,
   }).pipe(Effect.catch(fail));
   const now = yield* DateTime.now;
