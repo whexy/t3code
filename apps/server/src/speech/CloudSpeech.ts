@@ -26,6 +26,7 @@ import { requireSettingsSecret } from "../secrets/settingsSecretValue.ts";
 import { applySpeechAliases, speechRecognitionWords } from "./customWords.ts";
 import { removeSpeechFillerWords } from "./fillerWords.ts";
 import { decodeSpeechPcm, SpeechInvalidAudioError } from "./SpeechService.ts";
+import { whisperSpeechRequest } from "./whisperSpeech.ts";
 
 const endpoints = {
   openai: { url: "https://api.openai.com/v1/audio/transcriptions", model: "gpt-transcribe" },
@@ -132,11 +133,15 @@ export const layer = Layer.effect(
     const credentials = settings.getSettings.pipe(
       Effect.map((value) => value.cloudSpeechCredentials),
     );
-    const configured = credentials.pipe(
-      Effect.map(({ openai, xai, openrouter }) => ({
+    const whisperEndpoint = settings.getSettings.pipe(
+      Effect.map((value) => value.cloudSpeechWhisper),
+    );
+    const configured = settings.getSettings.pipe(
+      Effect.map(({ cloudSpeechCredentials: { openai, xai, openrouter, whisper }, ...value }) => ({
         openai: Boolean(openai),
         xai: Boolean(xai),
         openrouter: Boolean(openrouter),
+        whisper: Boolean(whisper) && Boolean(value.cloudSpeechWhisper.url),
       })),
     );
     const execute = (request: HttpClientRequest.HttpClientRequest) =>
@@ -190,6 +195,9 @@ export const layer = Layer.effect(
       ) {
         const source = (yield* credentials)[provider];
         if (!source) return yield* new CloudSpeechError({ provider, reason: "missing-key" });
+        const whisper = provider === "whisper" ? yield* whisperEndpoint : undefined;
+        if (whisper && !whisper.url)
+          return yield* new CloudSpeechError({ provider, reason: "missing-key" });
         if (provider === "openrouter" && (!model || !isModelId(model)))
           return yield* new CloudSpeechError({ provider, reason: "model-unavailable" });
         const samples = yield* Effect.try({
@@ -211,16 +219,20 @@ export const layer = Layer.effect(
         );
         if (!isApiKey(key)) return yield* unreadable();
         const audio = wave(samples);
-        const request = HttpClientRequest.post(endpoints[provider].url).pipe(
-          HttpClientRequest.bearerToken(Redacted.make(key)),
-          provider === "openrouter"
-            ? openRouterBody(model!, audio, language)
-            : audioBody(provider, audio, language, options),
-        );
+        const request = (
+          provider === "whisper"
+            ? whisperSpeechRequest(whisper!, audio, language, options)
+            : HttpClientRequest.post(endpoints[provider].url).pipe(
+                provider === "openrouter"
+                  ? openRouterBody(model!, audio, language)
+                  : audioBody(provider, audio, language, options),
+              )
+        ).pipe(HttpClientRequest.bearerToken(Redacted.make(key)));
         const unavailable = () => new CloudSpeechError({ provider, reason: "unavailable" });
-        // A catalog fetch or vault lookup may have outlived the credential it started with.
+        // A catalog fetch or vault lookup may have outlived the credential or endpoint it started with.
         const current = (yield* credentials)[provider];
-        if (!current || !sameCredential(source, current))
+        const moved = whisper !== undefined && (yield* whisperEndpoint).url !== whisper.url;
+        if (!current || !sameCredential(source, current) || moved)
           return yield* new CloudSpeechError({
             provider,
             reason: current ? "key-changed" : "missing-key",

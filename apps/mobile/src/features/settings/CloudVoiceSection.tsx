@@ -28,6 +28,7 @@ import { ScrollView, TextInput, View } from "react-native";
 import { Sheet } from "../../components/ui/Sheet";
 import * as Dialog from "../../components/ui/Dialog";
 import { ProviderIcon } from "../../components/ProviderIcon";
+import { SymbolView } from "../../components/ui/AppSymbol";
 import { AppText as Text } from "../../components/ui/AppText";
 import { ListActionRow } from "../../components/ui/ListActionRow";
 import { ListChoiceRow } from "../../components/ui/ListChoiceRow";
@@ -43,6 +44,7 @@ import {
   cloudVoiceModelsAtom,
   runSpeech,
 } from "../voice-input/voiceDestination";
+import { WhisperVoiceEditor } from "./WhisperVoiceEditor";
 
 type CloudDestination = Extract<VoiceTranscriptionDestination, { kind: "cloud" }>;
 type Props = { environment: EnvironmentPresentation; active: CloudDestination | null };
@@ -269,6 +271,21 @@ function CloudChoices({ environment, active, onClose }: Props & { onClose: () =>
   };
   const catalog = AsyncResult.isSuccess(models) ? (models.value?.models ?? null) : null;
   const content = (() => {
+    // Rendered before the loading state so a key reload, such as on reconnect, keeps its form.
+    if (editing?.provider === "whisper")
+      return (
+        <WhisperVoiceEditor
+          environment={environment}
+          ready={AsyncResult.isSuccess(keys) && keys.value?.whisper === true}
+          enable={editing.enable}
+          canManage={canManage}
+          onSaved={() => {
+            reload();
+            onClose();
+          }}
+          onBack={reset}
+        />
+      );
     if (!AsyncResult.isSuccess(keys) || !keys.value || !connection)
       return (
         <ListSection>
@@ -303,12 +320,21 @@ function CloudChoices({ environment, active, onClose }: Props & { onClose: () =>
                 key={provider}
                 label={label}
                 leading={
-                  <ProviderIcon
-                    provider={
-                      provider === "openai" ? "codex" : provider === "xai" ? "grok" : provider
-                    }
-                    size={20}
-                  />
+                  provider === "whisper" ? (
+                    <SymbolView
+                      name="server.rack"
+                      size={20}
+                      tintColorClassName="accent-icon"
+                      type="monochrome"
+                    />
+                  ) : (
+                    <ProviderIcon
+                      provider={
+                        provider === "openai" ? "codex" : provider === "xai" ? "grok" : provider
+                      }
+                      size={20}
+                    />
+                  )
                 }
                 selected={isActive}
                 separated={index > 0}
@@ -327,7 +353,9 @@ function CloudChoices({ environment, active, onClose }: Props & { onClose: () =>
                             ? gt("API key saved · choose a model to use it")
                             : gt("API key saved")
                           : canManage
-                            ? gt("Add an API key to use this provider")
+                            ? provider === "whisper"
+                              ? gt("Set up an endpoint to use this provider")
+                              : gt("Add an API key to use this provider")
                             : gt("Ask an environment administrator to add an API key")
                 }
                 onPress={() => {

@@ -56,6 +56,9 @@ import {
 import { PullRequestMergeMethod } from "./pullRequest.ts";
 import {
   CloudSpeechModelId,
+  CloudSpeechWhisperModel,
+  CloudSpeechWhisperUrl,
+  DEFAULT_CLOUD_SPEECH_WHISPER_MODEL,
   SpeechAcceleration,
   SpeechCorrectionCue,
   SpeechCustomWords,
@@ -402,7 +405,7 @@ export const VoiceTranscriptionDestination = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("cloud"),
     environmentId: EnvironmentId,
-    provider: Schema.Literals(["openai", "xai"]),
+    provider: Schema.Literals(["openai", "xai", "whisper"]),
   }),
   Schema.Struct({
     kind: Schema.Literal("cloud"),
@@ -1405,7 +1408,15 @@ export const CloudSpeechCredentials = Schema.Struct({
   openai: CloudSpeechCredential,
   xai: CloudSpeechCredential,
   openrouter: CloudSpeechCredential,
+  whisper: CloudSpeechCredential,
 });
+export const CloudSpeechWhisperEndpoint = Schema.Struct({
+  url: CloudSpeechWhisperUrl.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  model: CloudSpeechWhisperModel.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_CLOUD_SPEECH_WHISPER_MODEL)),
+  ),
+});
+export type CloudSpeechWhisperEndpoint = typeof CloudSpeechWhisperEndpoint.Type;
 
 export const ServerSettings = Schema.Struct({
   // Null means unmigrated; empty is authoritative and must not resurrect cleared preferences.
@@ -1446,7 +1457,14 @@ export const ServerSettings = Schema.Struct({
   /** Lets clients reach this machine's loopback ports over `/api/preview/tunnel`. */
   enablePreviewTunnel: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   cloudSpeechCredentials: CloudSpeechCredentials.pipe(
-    Schema.withDecodingDefault(Effect.succeed({ openai: "", xai: "", openrouter: "" })),
+    Schema.withDecodingDefault(
+      Effect.succeed({ openai: "", xai: "", openrouter: "", whisper: "" }),
+    ),
+  ),
+  cloudSpeechWhisper: CloudSpeechWhisperEndpoint.pipe(
+    Schema.withDecodingDefault(
+      Effect.succeed({ url: "", model: DEFAULT_CLOUD_SPEECH_WHISPER_MODEL }),
+    ),
   ),
   speechModelId: Schema.String.pipe(
     Schema.withDecodingDefault(Effect.succeed("handy-computer/parakeet-unified-en-0.6b-gguf")),
@@ -1920,6 +1938,13 @@ export const ServerSettingsPatch = Schema.Struct({
       openai: Schema.optionalKey(SettingsSecretValue),
       xai: Schema.optionalKey(SettingsSecretValue),
       openrouter: Schema.optionalKey(SettingsSecretValue),
+      whisper: Schema.optionalKey(SettingsSecretValue),
+    }),
+  ),
+  cloudSpeechWhisper: Schema.optionalKey(
+    Schema.Struct({
+      url: Schema.optionalKey(CloudSpeechWhisperUrl),
+      model: Schema.optionalKey(CloudSpeechWhisperModel),
     }),
   ),
   speechModelId: Schema.optionalKey(Schema.String),
