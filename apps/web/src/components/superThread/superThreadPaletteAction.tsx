@@ -22,6 +22,18 @@ export function newSuperThreadPaletteAction(
   };
 }
 
+/** The "New thread in..." row, named like the composer's project picker row. */
+export function superThreadPickerPaletteAction(
+  environmentId: EnvironmentId,
+  handleNewThread: NewThreadHandler,
+): CommandPaletteActionItem {
+  return {
+    ...newSuperThreadPaletteAction(environmentId, handleNewThread),
+    value: "new-thread-in:super-thread",
+    title: "Super thread",
+  };
+}
+
 /** Opens the open super thread's goal and task map; nothing for other threads. */
 export function superThreadPanelPaletteActions(
   thread: EnvironmentThreadShell | null,
