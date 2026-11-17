@@ -46,7 +46,9 @@ model. The one cloud stream is the Whisper-compatible provider's own socket,
 [`/ws/voice/cloud/whisper`](../../apps/server/src/speech/whisperStream.ts), used only
 when the grant names that provider and the environment has a streaming URL. It
 speaks the local socket's client protocol, so the client reuses its stream session,
-while the server relays to the endpoint's realtime socket with the saved key. A
+while the server relays to the endpoint's realtime socket with the saved key. The
+endpoint's running partials, which may revise earlier words, replace the live
+preview; only its final transcript, after the batch path's corrections, reaches the draft. A
 failed stream reports its error; like any streamed recording it keeps no audio to
 retry, and it never retries through the batch endpoint.
 

@@ -79,7 +79,7 @@ export function TextFieldSpeechControls({
           className="order-first max-h-24 w-full overflow-y-auto rounded-lg border border-border/60 bg-muted/30 px-2.5 py-1.5 text-sm break-words whitespace-pre-wrap"
         >
           {speech.preview.committed}
-          <span className="text-muted-foreground">{speech.preview.tentative}</span>
+          <span className="text-foreground/80">{speech.preview.tentative}</span>
         </p>
       ) : null}
       <ComposerSpeechRecordingPill
