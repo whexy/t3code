@@ -1,6 +1,12 @@
 import { useState } from "react";
 
-import { devUpdatesAtom, resolveDevUpdatesBackend, setDevUpdatesEnabled } from "~/state/devUpdates";
+import {
+  canReloadDevUpdates,
+  devUpdatesAtom,
+  reloadDevUpdates,
+  resolveDevUpdatesBackend,
+  setDevUpdatesEnabled,
+} from "~/state/devUpdates";
 import { useEnvironmentQuery } from "~/state/query";
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
@@ -18,19 +24,20 @@ export function DevUpdatesSettingsRow() {
   if (!current) return null;
   const view = describeDevUpdates({ ...current, enabledBeforeChange });
 
+  const showError = (title: string, error: unknown) =>
+    toastManager.add(
+      stackedThreadToast({
+        type: "error",
+        title,
+        description: error instanceof Error ? error.message : "Something went wrong.",
+      }),
+    );
+
   const toggle = (enabled: boolean) => {
     setSaving(true);
     void setDevUpdatesEnabled(enabled)
       .then(() => setEnabledBeforeChange((before) => before ?? current.state.enabled))
-      .catch((error: unknown) => {
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Could not change dev updates",
-            description: error instanceof Error ? error.message : "Something went wrong.",
-          }),
-        );
-      })
+      .catch((error: unknown) => showError("Could not change dev updates", error))
       .finally(() => setSaving(false));
   };
 
@@ -41,8 +48,16 @@ export function DevUpdatesSettingsRow() {
       description={view.description}
       control={
         <div className="flex items-center gap-2">
-          {view.offerReload ? (
-            <Button size="sm" variant="outline" onClick={() => window.location.reload()}>
+          {view.offerReload && canReloadDevUpdates() ? (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() =>
+                void reloadDevUpdates().catch((error: unknown) =>
+                  showError("Could not reload", error),
+                )
+              }
+            >
               Reload
             </Button>
           ) : null}
