@@ -197,8 +197,14 @@ export const superThreadUpdatedEvent = (
 /** The shell streams on every thread change, so it leaves the map to thread detail. */
 export const superThreadShellFields = (
   thread: OrchestrationV2AppThread,
-): Pick<OrchestrationV2ThreadShell, "superThread"> =>
-  thread.superThread === undefined ? {} : { superThread: { members: thread.superThread.members } };
+): Pick<OrchestrationV2ThreadShell, "superThread" | "superThreadMemberOf"> => ({
+  ...(thread.superThread === undefined
+    ? {}
+    : { superThread: { members: thread.superThread.members } }),
+  ...(thread.superThreadMemberOf === undefined
+    ? {}
+    : { superThreadMemberOf: thread.superThreadMemberOf }),
+});
 
 /** Whether a thread's MCP session should see the super thread tools; a failed read hides them. */
 export const isSuperThread = <E, R>(

@@ -1116,6 +1116,8 @@ export type AgentAwarenessThread = ProjectThreadAwarenessV2Input["thread"] &
     | "activeRunId"
     | "latestRunId"
     | "hasActionableProposedPlan"
+    | "superThread"
+    | "superThreadMemberOf"
   >;
 
 type ShellThreadRow = {
@@ -8910,6 +8912,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               latestRunBackgroundWake: state.latestRunBackgroundWake,
               pendingRuntimeRequest: state.pendingRuntimeRequest,
               pendingBackgroundTasks: state.pendingBackgroundTasks,
+              ...superThreadShellFields(state.thread),
             })),
           ),
         );

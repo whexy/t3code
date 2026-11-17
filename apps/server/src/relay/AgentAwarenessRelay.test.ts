@@ -174,6 +174,7 @@ const makeTestRelay = Effect.fnUntraced(function* (
     readonly domainEvents?: Stream.Stream<OrchestrationV2DomainEvent>;
     readonly catchUpThreads?: ReadonlyArray<OrchestrationV2ThreadShell>;
     readonly env?: Record<string, string>;
+    readonly getThreadRecords?: ThreadManagementService.ThreadManagementService["Service"]["getThreadRecords"];
   } = {},
 ) {
   const values = new Map<string, Uint8Array>(
@@ -242,7 +243,7 @@ const makeTestRelay = Effect.fnUntraced(function* (
     getMessageCount: () => Effect.die("unused message count"),
     getMessagesById: () => Effect.die("unused messages by id"),
     getTurnItem: () => Effect.die("unused turn item read"),
-    getThreadRecords: () => Effect.die("unused record read"),
+    getThreadRecords: options.getThreadRecords ?? (() => Effect.die("unused record read")),
     getThreadProjection: unused,
     getCheckpointContext: unused,
     getThreadSnapshot: unused,
@@ -771,6 +772,62 @@ describe("AgentAwarenessRelay", () => {
         yield* relay.drain;
         assert.equal(publications.length, 3);
         assert.equal(publications[2]?.state, null);
+      }),
+  );
+
+  it.effect(
+    "keeps a super thread working until its members finish, and never publishes a member",
+    () =>
+      Effect.gen(function* () {
+        const environmentId = EnvironmentId.make("relay-environment");
+        const members = [{ environmentId, threadId: SECOND_THREAD_ID }];
+        const superShell = (status: OrchestrationV2ThreadShell["status"]) =>
+          shell({ status, superThread: { members } });
+        const memberShell = (status: OrchestrationV2ThreadShell["status"]) =>
+          shell({
+            id: SECOND_THREAD_ID,
+            status,
+            superThreadMemberOf: { environmentId, threadId: THREAD_ID },
+          });
+        const shells = yield* Ref.make(
+          new Map([
+            [THREAD_ID, superShell("running")],
+            [SECOND_THREAD_ID, memberShell("running")],
+          ]),
+        );
+        const setShell = (next: OrchestrationV2ThreadShell) =>
+          Ref.update(shells, (current) => new Map(current).set(next.id, next));
+        const { relay, publications } = yield* makeTestRelay({
+          readShell: (threadId) =>
+            Ref.get(shells).pipe(Effect.map((current) => current.get(threadId) ?? null)),
+          getThreadRecords: () => Effect.succeed({ thread: { superThread: { members } } } as never),
+        });
+        const settle = Effect.gen(function* () {
+          yield* TestClock.adjust("5 seconds");
+          yield* relay.drain;
+        });
+        const phases = () =>
+          publications.map((publication) => [
+            publication.url.includes(`/threads/${SECOND_THREAD_ID}/`) ? "member" : "super",
+            publication.state?.phase ?? null,
+          ]);
+
+        yield* relay.publishThread(THREAD_ID);
+        yield* relay.publishThread(SECOND_THREAD_ID);
+        // The super thread ends its turn while its member works: still working, no alert.
+        yield* setShell(superShell("completed"));
+        yield* relay.publishThread(THREAD_ID);
+        yield* settle;
+        assert.deepEqual(phases(), [["super", "running"]]);
+
+        // The member finishing is the end of the task, and it alerts on the super thread only.
+        yield* setShell(memberShell("completed"));
+        yield* relay.publishThread(SECOND_THREAD_ID);
+        yield* settle;
+        assert.deepEqual(phases(), [
+          ["super", "running"],
+          ["super", "completed"],
+        ]);
       }),
   );
 
