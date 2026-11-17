@@ -8,6 +8,7 @@ import { Pressable, View } from "react-native";
 import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { cn } from "../../lib/cn";
+import { useDeviceType } from "../../native/native-layout-metrics";
 import { scopedProjectKey, scopedThreadKey } from "../../lib/scopedEntities";
 import { useProjects } from "../../state/entities";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
@@ -66,6 +67,8 @@ export function SuperThreadListSections(props: {
 }) {
   const projects = useProjects();
   const { savedConnectionsById } = useSavedRemoteConnections();
+  // The folded Duo's workspace bar carries this back button instead.
+  const backInBar = useDeviceType() === "duo-folded";
   if (props.list.sections.length === 0) return null;
   const sidebar = props.pane === "sidebar";
   const projectByKey = new Map(
@@ -84,17 +87,19 @@ export function SuperThreadListSections(props: {
     return (
       <View className="pb-2">
         <View className={cn("gap-0.5 pt-1 pb-3", sidebar ? "px-4" : "px-5")}>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Back to super threads"
-            hitSlop={8}
-            onPress={() => openSuperThread(null)}
-            className="min-h-8 flex-row items-center gap-1 self-start"
-            style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
-          >
-            <SymbolView name="chevron.left" size={14} tintColorClassName="accent-primary" />
-            <Text className="text-base text-primary">Super threads</Text>
-          </Pressable>
+          {backInBar ? null : (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Back to super threads"
+              hitSlop={8}
+              onPress={() => openSuperThread(null)}
+              className="min-h-8 flex-row items-center gap-1 self-start"
+              style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
+            >
+              <SymbolView name="chevron.left" size={14} tintColorClassName="accent-primary" />
+              <Text className="text-base text-primary">Super threads</Text>
+            </Pressable>
+          )}
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={`Open ${header.title}`}
