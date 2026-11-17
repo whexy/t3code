@@ -1,23 +1,102 @@
 # whexy/t3code
 
-An unofficial fork of [T3 Code](https://github.com/pingdotgg/t3code) that
-follows upstream's stable releases and runs Wenxuan's fleet: the machines
-[whexy/dotfiles](https://github.com/whexy/dotfiles) manages, the clusters-work
-Kubernetes cluster, an iPhone, and the desktop apps. It needs none of
-upstream's hosted services. For T3 Code itself (install, docs, issues), go to
-[pingdotgg/t3code](https://github.com/pingdotgg/t3code).
+An unofficial, experimental fork of [T3 Code](https://github.com/pingdotgg/t3code)
+that follows upstream's stable releases.
+For T3 Code itself (install, docs, issues), go to [pingdotgg/t3code](https://github.com/pingdotgg/t3code).
 
-## What the fork adds
+## Why the fork exists
 
-| Feature                                                       | What it does                                                                                                       | Where it runs                                                                                                   |
-| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------- |
-| Server ([`nix`](../nix))                                      | Upstream's `t3` server as a Nix package, with a managed policy file per user                                       | Every dotfiles host (x86_64-linux, aarch64-darwin)                                                              |
-| Web hub ([`scripts/self-hosted`](../scripts/self-hosted))     | The web client, with connections kept in a shared catalog instead of one browser                                   | `https://t3.clusters.work`                                                                                      |
-| Client MCP ([`apps/mcp`](../apps/mcp))                        | An MCP server that is a T3 Code client, so an MCP client can start and follow sessions on paired servers           | `https://t3-mcp.clusters.work/mcp`                                                                              |
-| Policy editor ([`apps/policy-editor`](../apps/policy-editor)) | Edits named managed policies; hosts that follow one pick up a change within about 2 minutes                        | Edited on the tailnet at `t3-policy.at-basking.ts.net`, served at `https://t3-policy.clusters.work/<name>.json` |
-| Push relay ([`apps/push`](../apps/push))                      | Sends the iOS app's notifications and Live Activity from every host's agent activity, replacing T3 Connect's relay | `https://t3-push.clusters.work`                                                                                 |
-| iOS app                                                       | Upstream's app, signed for Wenxuan's Apple team and wired to the push relay                                        | TestFlight, as `dev.whexy.t3code`                                                                               |
-| Desktop app                                                   | Upstream's nightly desktop app, updating from this repository's releases                                           | Linux, macOS, Windows                                                                                           |
+Upstream T3 Code serves one person with a few machines well. Running a dozen of
+them, mostly from a phone, without T3 Connect, ran into five gaps.
+
+### Super threads
+
+A thread belongs to one project, or to none, but my tasks often span several.
+Moving OTA publishing onto the cluster's S3 store, for example, touched the
+cluster's manifests, the OTA server, and this repository's CI. Upstream already
+lets a thread launch threads in other projects, or delegate to child threads, so
+one thread can coordinate the rest. It works, but the coordinating thread sits
+in the sidebar among the threads doing the work. With several tasks running at
+once, I had to remember which thread was managing which.
+
+A super thread keeps the manager apart from its workers. It gets its own sidebar
+section, with the threads it started listed under it and ordered by which need
+me first. Its agent launches threads instead of doing the work itself, draws its
+plan as a task map beside the conversation, and wakes when one of its threads
+finishes, fails, or asks a question. Settling the super thread settles its whole
+section. Everything underneath is upstream's existing thread launching and
+messaging. See [Super threads](../docs/user/super-threads.md).
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/super-thread-dark.webp">
+  <img src="assets/super-thread-light.webp" alt="A super thread on desktop: its section in the sidebar lists the threads it started with their status, the conversation is in the middle, and the goal and task map are in a panel on the right">
+</picture>
+
+<img src="assets/super-thread-iphone.webp" width="300" alt="The same super thread on iPhone, listing its seven threads with the one that needs input first">
+
+### Pairing a fleet
+
+Without T3 Connect, each client pairs with each environment (a machine running
+a T3 server) by its own link: 48 pairings for my 12 environments and 4 clients,
+and each one expired 30 days after pairing however often I used it. The fork
+fixes both:
+
+- Pairings renew themselves while a client is in use, so a client opened at
+  least every two weeks stays paired.
+- **Pair a device** in Settings turns a client that already reaches the fleet
+  into one link or set of QR codes that pairs a new client with every
+  environment at once.
+
+See [Pair a device with all your environments](../docs/user/fleet-pairing.md).
+
+### Notifications on my phone
+
+I spend more than half my T3 Code time on my phone. Upstream's iOS
+notifications and Live Activity come through T3 Connect, because only the
+app's own Apple team can push to it and running that relay costs money; that
+is a fair trade, not a flaw. Self-hosted, I sign the iOS app with my own team
+and run my own push relay, so notifications and the Live Activity work again
+without a paid service.
+
+### An MCP that acts as a client
+
+Each T3 server offers its own MCP endpoint, but I treat my environments as
+sandboxes that can go offline at any time, so none of them is a reliable place
+for one. Connecting an outside agent to each server also means granting it
+permissions per server, again whenever an environment is added or removed.
+
+The fork's MCP bridge is instead a headless T3 Code client on the cluster. It
+pairs with every environment, the way an app does, and does what I could do
+from an app: start, follow, answer, and file threads in any project. It can
+also call a bot back when a turn ends, which is how my Grok bot drives T3 Code.
+
+### One policy for the whole fleet
+
+Upstream reads a [managed policy](../docs/user/managed-policy.md) from a file
+on each machine. The fork adds a policy editor website, and each host's Nix
+configuration names the policy it follows. A new environment starts with my
+settings, and a change reaches every host within about two minutes.
+
+## What runs where
+
+- **Server** ([`nix`](../nix)): upstream's `t3` server as a Nix package, with a
+  managed policy file per user. Runs on every dotfiles host (x86_64-linux,
+  aarch64-darwin).
+- **Web hub** ([`scripts/self-hosted`](../scripts/self-hosted)): the web
+  client, keeping connections in a shared catalog instead of one browser. At
+  `https://t3.clusters.work`.
+- **MCP bridge** ([`apps/mcp`](../apps/mcp)): the client MCP above. At
+  `https://t3-mcp.clusters.work/mcp`.
+- **Policy editor** ([`apps/policy-editor`](../apps/policy-editor)): edits named
+  policies on the tailnet at `t3-policy.at-basking.ts.net`, and serves them at
+  `https://t3-policy.clusters.work/<name>.json`.
+- **Push relay** ([`apps/push`](../apps/push)): turns every host's agent
+  activity into the iOS app's notifications and Live Activity, replacing T3
+  Connect's relay. At `https://t3-push.clusters.work`.
+- **iOS app**: upstream's app, signed for my Apple team as `dev.whexy.t3code`
+  and wired to the push relay. On TestFlight.
+- **Desktop app**: upstream's nightly desktop app, updating from this
+  repository's releases. Linux, macOS and Windows.
 
 ## How a build reaches each device
 
