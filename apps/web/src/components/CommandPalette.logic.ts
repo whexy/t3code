@@ -235,6 +235,8 @@ export interface CommandPaletteGroup {
   readonly value: string;
   readonly label: string;
   readonly items: ReadonlyArray<CommandPaletteActionItem | CommandPaletteSubmenuItem>;
+  /** Rows shown below the scrolling list, so a long list cannot hide them. */
+  readonly pinnedToBottom?: boolean;
 }
 
 export interface CommandPaletteView {
@@ -300,29 +302,39 @@ export type CommandPaletteRow =
       readonly itemIndex: number | null;
     };
 
+/**
+ * Pinned groups' items come last in `itemValues`, matching their place below
+ * the list, and have no `rowIndexByItemIndex` entry since nothing scrolls them.
+ */
 export function buildCommandPaletteRows(groups: ReadonlyArray<CommandPaletteGroup>) {
   const rows: CommandPaletteRow[] = [];
+  const footerRows: CommandPaletteRow[] = [];
   const itemValues: string[] = [];
   const rowIndexByItemIndex: number[] = [];
-  for (const group of groups) {
+  const ordered = [
+    ...groups.filter((group) => !group.pinnedToBottom),
+    ...groups.filter((group) => group.pinnedToBottom),
+  ];
+  for (const group of ordered) {
+    const target = group.pinnedToBottom ? footerRows : rows;
     if (group.label) {
-      rows.push({
+      target.push({
         kind: "label",
         key: `group:${group.value}`,
         label: group.label,
-        first: rows.length === 0,
+        first: target.length === 0,
       });
     }
     for (const item of group.items) {
       const itemIndex = item.disabled ? null : itemValues.length;
       if (itemIndex !== null) {
         itemValues.push(item.value);
-        rowIndexByItemIndex.push(rows.length);
+        if (!group.pinnedToBottom) rowIndexByItemIndex.push(rows.length);
       }
-      rows.push({ kind: "item", key: `${group.value}:${item.value}`, item, itemIndex });
+      target.push({ kind: "item", key: `${group.value}:${item.value}`, item, itemIndex });
     }
   }
-  return { rows, itemValues, rowIndexByItemIndex };
+  return { rows, footerRows, itemValues, rowIndexByItemIndex };
 }
 
 export function findHighlightedCommandPaletteItem(
@@ -664,7 +676,7 @@ export function filterCommandPaletteGroups(input: {
         const matchHint = match.explain?.();
         return matchHint ? { ...item, matchHint } : item;
       });
-    return { value: group.value, label: group.label, items };
+    return { ...group, items };
   });
 
   if (!searchesEverything) return groups;
@@ -902,26 +914,4 @@ export function resolveCommandPaletteProject<TProject>(
   projectId: ProjectId | null,
 ) {
   return environmentId && projectId ? projects.get(`${environmentId}:${projectId}`) : undefined;
-}
-
-/**
- * Where "No project" goes among the new-thread picker's real projects: at the
- * scratch project's own place when it is pinned or current, else after the
- * pinned projects and the first unpinned one.
- */
-export function newThreadNoProjectIndex(
-  entries: ReadonlyArray<{
-    readonly isScratch: boolean;
-    readonly pinned: boolean;
-    readonly isPreferred: boolean;
-  }>,
-): number {
-  const projects = entries.filter((entry) => !entry.isScratch);
-  const scratchAt = entries.findIndex((entry) => entry.isScratch);
-  const scratch = entries[scratchAt];
-  if (scratch && (scratch.pinned || scratch.isPreferred)) {
-    return entries.slice(0, scratchAt).filter((entry) => !entry.isScratch).length;
-  }
-  const pinnedCount = projects.filter((entry) => entry.pinned).length;
-  return Math.min(pinnedCount + 1, projects.length);
 }

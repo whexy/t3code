@@ -4,7 +4,7 @@ import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools
 import type { Thread } from "../types";
 import { makeThreadFixture } from "../test-fixtures";
 import {
-  newThreadNoProjectIndex,
+  buildCommandPaletteRows,
   buildNestedSearchItems,
   resolveCommandPaletteProject,
   buildThreadActionItems,
@@ -966,24 +966,23 @@ it("resolves project metadata and browse roots within the active environment", (
   expect(resolveCommandPaletteProject(projects, EnvironmentId.make("local"), null)).toBeUndefined();
 });
 
-describe("newThreadNoProjectIndex", () => {
-  const entry = (pinned = false, isPreferred = false, isScratch = false) => ({
-    pinned,
-    isPreferred,
-    isScratch,
-  });
-
-  it("goes after the pinned projects and the first unpinned one", () => {
-    expect(newThreadNoProjectIndex([entry(false, true), entry(true), entry(true), entry()])).toBe(
-      3,
-    );
-    expect(newThreadNoProjectIndex([entry(false, true), entry(), entry(false, false, true)])).toBe(
-      1,
-    );
-  });
-
-  it("keeps a pinned or current scratch project in its own place", () => {
-    expect(newThreadNoProjectIndex([entry(false, true, true), entry()])).toBe(0);
-    expect(newThreadNoProjectIndex([entry(true), entry(true, false, true), entry()])).toBe(1);
+describe("buildCommandPaletteRows", () => {
+  it("keeps pinned groups below the list and indexes their items last", () => {
+    const item = (value: string) => ({
+      kind: "action" as const,
+      value,
+      title: value,
+      icon: null,
+      searchTerms: [],
+      run: async () => {},
+    });
+    const { rows, footerRows, itemValues, rowIndexByItemIndex } = buildCommandPaletteRows([
+      { value: "footer", label: "", pinnedToBottom: true, items: [item("no-project")] },
+      { value: "projects", label: "Projects", items: [item("a"), item("b")] },
+    ]);
+    expect(rows.map((row) => row.key)).toEqual(["group:projects", "projects:a", "projects:b"]);
+    expect(footerRows).toMatchObject([{ key: "footer:no-project", itemIndex: 2 }]);
+    expect(itemValues).toEqual(["a", "b", "no-project"]);
+    expect(rowIndexByItemIndex).toEqual([1, 2]);
   });
 });
