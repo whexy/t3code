@@ -8,25 +8,44 @@ export const CloudSpeechApiKey = TrimmedNonEmptyString.check(
   Schema.isPattern(/^(?![a-z][a-z\d+.-]*:\/\/)[!-~]+$/i),
 );
 
-export const CloudSpeechProvider = Schema.Literals(["openai", "xai", "openrouter"]);
+export const CloudSpeechProvider = Schema.Literals(["openai", "xai", "openrouter", "whisper"]);
 export type CloudSpeechProvider = typeof CloudSpeechProvider.Type;
 export const CLOUD_SPEECH_LABELS = {
   openai: "OpenAI",
   xai: "Grok Voice Transcribe",
   openrouter: "OpenRouter",
+  whisper: "Whisper-compatible",
 } as const;
 export const CLOUD_SPEECH_PROVIDER_NAMES = {
   openai: "OpenAI",
   xai: "xAI",
   openrouter: "OpenRouter",
+  whisper: "Whisper endpoint",
 } as const;
 /** Servers that predate OpenRouter report only the first two providers. */
 export const CloudSpeechKeys = Schema.Struct({
   openai: Schema.Boolean,
   xai: Schema.Boolean,
   openrouter: Schema.optionalKey(Schema.Boolean),
+  /** True only when both the endpoint URL and its key are saved. */
+  whisper: Schema.optionalKey(Schema.Boolean),
 });
 export type CloudSpeechKeys = typeof CloudSpeechKeys.Type;
+
+/** A full `POST` URL for an OpenAI Whisper-compatible transcription API; empty means unset. */
+export const CloudSpeechWhisperUrl = Schema.String.check(
+  Schema.isMaxLength(2048),
+  Schema.makeFilter((value) => {
+    if (value === "") return true;
+    try {
+      const { protocol, username, password } = new URL(value);
+      if (/^https?:$/.test(protocol) && !username && !password && !/\s/.test(value)) return true;
+    } catch {}
+    return "Enter a full http(s) URL without credentials, such as https://example.com/v1/audio/transcriptions.";
+  }),
+);
+export const CloudSpeechWhisperModel = TrimmedNonEmptyString.check(Schema.isMaxLength(160));
+export const DEFAULT_CLOUD_SPEECH_WHISPER_MODEL = "whisper-1";
 
 /** An exact `author/model` slug. Router shortcuts such as `:nitro` or `openrouter/auto` are not models. */
 export const CloudSpeechModelId = Schema.String.check(
@@ -60,7 +79,9 @@ export class CloudSpeechError extends Schema.TaggedError<CloudSpeechError>()(
     const name = CLOUD_SPEECH_PROVIDER_NAMES[this.provider];
     switch (this.reason) {
       case "missing-key":
-        return `Add your ${name} API key in Settings → Voice.`;
+        return this.provider === "whisper"
+          ? "Set up the Whisper-compatible endpoint in Settings → Voice."
+          : `Add your ${name} API key in Settings → Voice.`;
       case "key-changed":
         return `The ${name} key changed before your recording was sent. Try again.`;
       case "unreadable-key":

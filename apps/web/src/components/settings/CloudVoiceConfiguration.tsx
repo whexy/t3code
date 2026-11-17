@@ -68,7 +68,7 @@ import { SecretInput } from "./SecretInput";
 import { SecretSourceSelect } from "./SecretSourceInput";
 
 // Per dialog instance, not an Atom.family: key presence must be read fresh each time it opens.
-function useCloudRead<A, E>(
+export function useCloudRead<A, E>(
   prepared: PreparedConnection | null,
   read: (prepared: PreparedConnection) => Effect.Effect<A, E, HttpClient.HttpClient>,
 ) {
@@ -227,7 +227,7 @@ export function CloudVoiceConfiguration({
   const destination = (): CloudDestination =>
     routed && isModelId(model)
       ? { kind: "cloud", provider: "openrouter", environmentId: id, model }
-      : { kind: "cloud", provider: provider as "openai" | "xai", environmentId: id };
+      : { kind: "cloud", provider: provider as "openai" | "xai" | "whisper", environmentId: id };
   const enable = () => chooseAudioDestination(destination());
   const canSubmit = routed
     ? modelChosen && keyReady && (!active || modelChanged || keyChanged)
