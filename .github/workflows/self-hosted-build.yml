@@ -15,8 +15,10 @@
 #
 # Images get `sha-<12 hex>` and `1.2.<run_number>`, so the version only grows.
 # Retry with workflow_dispatch on the branch head, never "Re-run": a re-run
-# reuses run_number, so the publishing jobs refuse it. Never rename this file:
-# run_number counts per workflow file, and a new name restarts 1.2.N.
+# reuses run_number, so the publishing jobs refuse it. The one exception is a
+# failed ios-testflight: "Re-run failed jobs" uploads it as build
+# <run_number>.<attempt>. Never rename this file: run_number counts per
+# workflow file, and a new name restarts 1.2.N.
 name: self-hosted-build
 
 on:
@@ -640,7 +642,8 @@ jobs:
 
   # The preview app signed for the fork's Apple team (apps/mobile/forkIos.ts),
   # uploaded to TestFlight as 1.2.<run_number>, which is also its OTA runtime
-  # version, so an update reaches only the build it was checked against.
+  # version, so an update reaches only the build it was checked against. A
+  # re-run keeps that version and uploads build <run_number>.<attempt>.
   # Archiving signs with the Development identity and profiles Xcode makes
   # through the API key; the export re-signs with Distribution and the App
   # Store profiles that scripts/self-hosted/ios-profiles.ts installs. Without
@@ -661,7 +664,7 @@ jobs:
       EXPO_NO_GIT_STATUS: "1"
       NODE_OPTIONS: --max-old-space-size=8192
       T3CODE_FORK_IOS: "1"
-      T3CODE_FORK_IOS_BUILD_NUMBER: ${{ github.run_number }}
+      T3CODE_FORK_IOS_BUILD_NUMBER: ${{ github.run_attempt == '1' && github.run_number || format('{0}.{1}', github.run_number, github.run_attempt) }}
       T3CODE_FORK_IOS_RUNTIME_VERSION: 1.2.${{ github.run_number }}
       T3CODE_MOBILE_VERSION: 1.2.${{ github.run_number }}
     steps:
@@ -768,14 +771,25 @@ jobs:
           ccache --zero-stats > /dev/null
           workspace="$(echo ios/*.xcworkspace)"
           # The share extension's target carries no team of its own.
-          xcodebuild archive -quiet \
-            -workspace "$workspace" -scheme "$(basename "$workspace" .xcworkspace)" \
-            -configuration Release -destination generic/platform=iOS \
-            -archivePath "$RUNNER_TEMP/T3Code.xcarchive" \
-            DEVELOPMENT_TEAM="$team" \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath "$RUNNER_TEMP/AuthKey_$ASC_KEY_ID.p8" \
-            -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+          archive() {
+            xcodebuild archive -quiet \
+              -workspace "$workspace" -scheme "$(basename "$workspace" .xcworkspace)" \
+              -configuration Release -destination generic/platform=iOS \
+              -archivePath "$RUNNER_TEMP/T3Code.xcarchive" \
+              DEVELOPMENT_TEAM="$team" \
+              -allowProvisioningUpdates \
+              -authenticationKeyPath "$RUNNER_TEMP/AuthKey_$ASC_KEY_ID.p8" \
+              -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+              2>&1 | tee "$RUNNER_TEMP/archive.log"
+          }
+          # Provisioning asks Apple before anything compiles, and Apple sometimes
+          # times out; one more try is cheap next to a whole new run.
+          if ! archive; then
+            grep -qE 'The request timed out|unexpected status code: 5' "$RUNNER_TEMP/archive.log" || exit 1
+            echo "::warning::Apple's provisioning service failed; archiving again in 60s."
+            sleep 60
+            archive
+          fi
           built="$(/usr/libexec/PlistBuddy -c 'Print :EXUpdatesRuntimeVersion' "$RUNNER_TEMP"/T3Code.xcarchive/Products/Applications/*.app/Expo.plist)"
           if [[ "$built" != "$T3CODE_FORK_IOS_RUNTIME_VERSION" ]]; then
             echo "::error::The archive's runtime version is $built, not $T3CODE_FORK_IOS_RUNTIME_VERSION; no over-the-air update would reach it."
@@ -801,6 +815,8 @@ jobs:
       - id: current
         if: steps.gate.outputs.passed == 'true'
         uses: ./.github/actions/self-hosted-current
+        with:
+          allow-rerun: "true"
 
       - name: Upload to TestFlight
         id: upload
@@ -811,12 +827,25 @@ jobs:
         run: |
           ASC_KEY_PATH="$RUNNER_TEMP/AuthKey_$ASC_KEY_ID.p8" \
             node scripts/self-hosted/ios-profiles.ts "$RUNNER_TEMP/T3Code.xcarchive" "$RUNNER_TEMP/ExportOptions.plist"
-          xcodebuild -exportArchive \
-            -archivePath "$RUNNER_TEMP/T3Code.xcarchive" \
-            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
-            -exportPath "$RUNNER_TEMP/export" \
-            -authenticationKeyPath "$RUNNER_TEMP/AuthKey_$ASC_KEY_ID.p8" \
-            -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+          # App Store Connect answers 500 now and then, before or during the
+          # upload. Once it has said "Upload succeeded" the build is in, and
+          # sending it again would only be refused as a duplicate.
+          for delay in 30 60 120 0; do
+            rm -rf "$RUNNER_TEMP/export"
+            if xcodebuild -exportArchive \
+              -archivePath "$RUNNER_TEMP/T3Code.xcarchive" \
+              -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+              -exportPath "$RUNNER_TEMP/export" \
+              -authenticationKeyPath "$RUNNER_TEMP/AuthKey_$ASC_KEY_ID.p8" \
+              -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+              2>&1 | tee "$RUNNER_TEMP/export.log"; then
+              break
+            fi
+            grep -q 'Upload succeeded' "$RUNNER_TEMP/export.log" && break
+            ((delay > 0)) || exit 1
+            echo "::warning::The export or upload failed; trying again in ${delay}s."
+            sleep "$delay"
+          done
           echo "fingerprint=$IOS_FINGERPRINT" >> "$GITHUB_OUTPUT"
           echo "testflight: $T3CODE_MOBILE_VERSION ($T3CODE_FORK_IOS_BUILD_NUMBER) fingerprint $IOS_FINGERPRINT" >> "$GITHUB_STEP_SUMMARY"
 

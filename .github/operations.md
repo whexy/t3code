@@ -15,7 +15,9 @@ GitHub instead. A disabled workflow can still be called, which is how the build
 uses upstream's [`release-desktop.yml`](workflows/release-desktop.yml).
 
 Retry a failed build with "Run workflow" on the branch head, never "Re-run":
-a re-run reuses the run number, and the publishing jobs refuse it. Never rename
+a re-run reuses the run number, and the publishing jobs refuse it. When only
+`ios-testflight` failed, "Re-run failed jobs" is the cheaper retry: it uploads
+build `<run>.<attempt>` of the same `1.2.<run>`. Never rename
 `self-hosted-build.yml`, since run numbers count per workflow file and a new
 name would restart `1.2.<run>`.
 

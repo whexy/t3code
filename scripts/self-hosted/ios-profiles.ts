@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off globalConsole:off globalDate:off globalFetch:off - A plain Node script the macOS runner runs once per build.
+// @effect-diagnostics nodeBuiltinImport:off globalConsole:off globalDate:off globalFetch:off globalTimers:off - A plain Node script the macOS runner runs once per build.
 // Installs the App Store profile of every bundle in an archive and writes the
 // export options that sign with them. Xcode's automatic export signing wants
 // cloud-managed distribution certificates, which an API key gets only with the
@@ -86,8 +86,39 @@ interface ProfilesResponse {
   }>;
 }
 
+const RETRY_DELAYS_MS = [15_000, 30_000, 60_000];
+
+// App Store Connect answers 5xx and 429 for minutes at a time; those and dropped
+// connections are worth waiting out, any other answer is final.
+export async function fetchWithRetry(
+  url: string,
+  init: RequestInit,
+  {
+    fetch: fetchOnce = fetch,
+    delaysMs = RETRY_DELAYS_MS,
+    sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+  } = {},
+): Promise<Response> {
+  for (let attempt = 0; ; attempt++) {
+    const delay = delaysMs[attempt];
+    try {
+      const response = await fetchOnce(url, init);
+      if (delay === undefined || (response.status < 500 && response.status !== 429)) {
+        return response;
+      }
+      console.error(`App Store Connect answered ${response.status}; retrying in ${delay / 1000}s`);
+    } catch (error) {
+      if (delay === undefined) throw error;
+      console.error(
+        `App Store Connect request failed (${String(error)}); retrying in ${delay / 1000}s`,
+      );
+    }
+    await sleep(delay);
+  }
+}
+
 async function fetchProfiles(token: string): Promise<Profile[]> {
-  const response = await fetch(
+  const response = await fetchWithRetry(
     "https://api.appstoreconnect.apple.com/v1/profiles?filter[profileType]=IOS_APP_STORE&filter[profileState]=ACTIVE&include=bundleId&limit=200",
     { headers: { Authorization: `Bearer ${token}` } },
   );
