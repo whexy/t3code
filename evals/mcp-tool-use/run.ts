@@ -75,9 +75,11 @@ import { PreviewToolkit } from "../../apps/server/src/mcp/toolkits/preview/tools
 import { PreviewControlsToolkit } from "../../apps/server/src/mcp/toolkits/previewControls/tools.ts";
 import { ProjectToolkit } from "../../apps/server/src/mcp/toolkits/project/tools.ts";
 import {
+  CHECKS_ALREADY_PASSED_WATCH_NEXT,
   CHILD_PULL_REQUEST_REPORT_NEXT,
   PullRequestsToolkit,
 } from "../../apps/server/src/mcp/toolkits/pullRequests/tools.ts";
+import { pullRequestWatchStartResult } from "../../apps/server/src/pullRequest/pullRequestWatchStart.ts";
 import { SuperThreadToolkit } from "../../apps/server/src/mcp/toolkits/superThread/tools.ts";
 import { ThreadWaitAnyToolkit } from "../../apps/server/src/mcp/toolkits/threadWaitAny/tools.ts";
 import { superThreadRoleContext } from "../../apps/server/src/superThread/superThreadRole.ts";
@@ -1847,6 +1849,16 @@ const unsavedSecretNote = (Contracts as Record<string, unknown>).SECRET_REQUEST_
   | Readonly<Record<string, string>>
   | undefined;
 
+const isChecksState = Schema.is(Contracts.PullRequestChecksState);
+
+/** A watch mock names only the checks it started on; T3's own wording follows from them. */
+const watchStartFields = (checksState: unknown) =>
+  !isChecksState(checksState)
+    ? {}
+    : checksState === "passing"
+      ? { next: CHECKS_ALREADY_PASSED_WATCH_NEXT }
+      : pullRequestWatchStartResult({ checksState });
+
 /** Fields T3 adds to real thread and task results, applied to mocks and defaults alike. */
 const withProductFields = (name: string, value: unknown, child: boolean): unknown => {
   if (!isRecord(value)) return value;
@@ -1893,6 +1905,8 @@ const withProductFields = (name: string, value: unknown, child: boolean): unknow
     case "link_pull_requests":
     case "pull_request_create":
       return child ? { ...value, next: CHILD_PULL_REQUEST_REPORT_NEXT } : value;
+    case "watch_pull_request":
+      return { ...value, ...watchStartFields(value.checksState) };
     default:
       return value;
   }

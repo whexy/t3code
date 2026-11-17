@@ -16,6 +16,10 @@ import * as Schema from "effect/Schema";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as PullRequestService from "./PullRequestService.ts";
 import {
+  type PullRequestWatchStart,
+  pullRequestWatchStartResult,
+} from "./pullRequestWatchStart.ts";
+import {
   resolveTarget,
   type PullRequestTarget,
   type PullRequestTargetError,
@@ -69,7 +73,7 @@ export class PullRequestWatchService extends Context.Service<
         readonly state?: "merged" | "closed";
         /** CI as the start read saw it. Checks that already passed never wake the watch. */
         readonly checksState?: PullRequestChecksState;
-      },
+      } & PullRequestWatchStart,
       | PullRequestWatchFailedError
       | PullRequestWatchFromSubagentError
       | PullRequestWatchThreadNotFoundError
@@ -130,6 +134,7 @@ const make = Effect.gen(function* () {
     // A pending rollup has no failure yet, so any failure the first read finds is news.
     let checksPendingAtStart: boolean | undefined;
     let checksStateAtStart: PullRequestChecksState | undefined;
+    let started: PullRequestWatchStart = {};
     if (watching && !wasWatching) {
       const read = yield* pullRequests
         .summary(
@@ -152,6 +157,7 @@ const make = Effect.gen(function* () {
       if (read?.state === "merged" || read?.state === "closed") return alreadyEnded(read.state);
       checksPendingAtStart = read === undefined ? undefined : read.checksState === "pending";
       checksStateAtStart = read?.checksState ?? undefined;
+      started = pullRequestWatchStartResult(read ?? null);
     }
     const uuid = yield* random.uuidV4().pipe(Effect.orDie);
     yield* engine
@@ -182,6 +188,7 @@ const make = Effect.gen(function* () {
       watching: watchedLink(after)?.watch !== undefined,
       wasWatching,
       ...(checksStateAtStart !== undefined && { checksState: checksStateAtStart }),
+      ...started,
     };
   });
 
