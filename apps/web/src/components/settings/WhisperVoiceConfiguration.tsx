@@ -1,4 +1,8 @@
-import { getCloudSpeechKeys } from "@t3tools/client-runtime/voice-input";
+import {
+  getCloudSpeechKeys,
+  unlockedWhisperEndpointPatch,
+  whisperEndpointLocks,
+} from "@t3tools/client-runtime/voice-input";
 import {
   AuthOrchestrationOperateScope,
   AuthSettingsWriteScope,
@@ -19,6 +23,7 @@ import { useId, useState } from "react";
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { chooseAudioDestination, pendingCloudAudioChoice } from "../../speech/voiceConsent";
 import type { EnvironmentPresentation } from "../../state/environments";
+import { useManagedPolicy } from "../../state/managedPolicy";
 import { serverEnvironment } from "../../state/server";
 import { useEnvironmentScope, usePreparedConnection } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -69,6 +74,7 @@ export function WhisperVoiceConfiguration({
     (settings) => settings.cloudSpeechCredentials.whisper,
   );
   const sources = useSecretSources(id);
+  const locks = whisperEndpointLocks(useManagedPolicy(id));
   const updateSettings = useAtomCommand(serverEnvironment.updateSettings, {
     label: "save Whisper endpoint",
     reportFailure: false,
@@ -86,6 +92,10 @@ export function WhisperVoiceConfiguration({
 
   const connected = canUse && prepared !== null;
   const ready = AsyncResult.isSuccess(presence) ? presence.value?.whisper : undefined;
+  // Servers from before the key became optional saved an endpoint only together with a key.
+  const hasKey = AsyncResult.isSuccess(presence)
+    ? (presence.value?.whisperKey ?? ready)
+    : undefined;
   const nextUrl = url.trim();
   const nextModel = model.trim();
   const nextStreamingUrl = streamingUrl.trim();
@@ -93,9 +103,8 @@ export function WhisperVoiceConfiguration({
   const credential = typeof key === "string" ? key.trim() || undefined : key;
   const keyChanged = credential !== undefined && !sameReference(credential, storedKey);
   const keyReady =
-    credential === undefined
-      ? Boolean(ready)
-      : keyValid && (typeof credential !== "string" || isApiKey(credential));
+    credential === undefined ||
+    (keyValid && (typeof credential !== "string" || isApiKey(credential)));
   const endpointChanged =
     nextUrl !== endpoint.url ||
     nextModel !== endpoint.model ||
@@ -111,6 +120,8 @@ export function WhisperVoiceConfiguration({
     keyReady &&
     (!active || endpointChanged || keyChanged);
   const destination = { kind: "cloud", provider: "whisper", environmentId: id } as const;
+  // Under a policy that pins the URL only the key is the user's to remove.
+  const removesEndpoint = locks.url === undefined;
 
   const write = async (patch: ServerSettingsPatch, thenEnable: boolean) => {
     if (!connected || !canManage || busy) return;
@@ -129,7 +140,11 @@ export function WhisperVoiceConfiguration({
     if (!canSave) return;
     void write(
       {
-        cloudSpeechWhisper: { url: nextUrl, model: nextModel, streamingUrl: nextStreamingUrl },
+        cloudSpeechWhisper: unlockedWhisperEndpointPatch(locks, {
+          url: nextUrl,
+          model: nextModel,
+          streamingUrl: nextStreamingUrl,
+        }),
         ...(keyChanged ? { cloudSpeechCredentials: { whisper: credential } } : {}),
       },
       !active,
@@ -147,14 +162,18 @@ export function WhisperVoiceConfiguration({
         <DialogHeader>
           <DialogTitle>
             {remove
-              ? "Remove the Whisper-compatible endpoint?"
+              ? removesEndpoint
+                ? "Remove the Whisper-compatible endpoint?"
+                : "Remove the Whisper endpoint’s API key?"
               : active
                 ? "Manage Whisper-compatible endpoint"
                 : "Use a Whisper-compatible endpoint for dictation?"}
           </DialogTitle>
           <DialogDescription>
             {remove
-              ? `Everyone using it for dictation on ${environment.label} will lose access.`
+              ? removesEndpoint
+                ? `Everyone using it for dictation on ${environment.label} will lose access.`
+                : `Dictation on ${environment.label} will reach the endpoint without a key.`
               : cloudSpeechDisclosure("whisper", environment.label)}
           </DialogDescription>
         </DialogHeader>
@@ -192,13 +211,15 @@ export function WhisperVoiceConfiguration({
                       spellCheck={false}
                       placeholder="https://example.com/v1/audio/transcriptions"
                       aria-invalid={urlInvalid}
+                      disabled={locks.url !== undefined}
                       value={url}
                       onChange={(event) => setUrl(event.target.value)}
                     />
                     <p className="text-sm text-muted-foreground">
-                      {urlInvalid
-                        ? "Enter a full http(s) URL without credentials."
-                        : "Recordings are posted to this exact URL."}
+                      {locks.url ??
+                        (urlInvalid
+                          ? "Enter a full http(s) URL without credentials."
+                          : "Recordings are posted to this exact URL.")}
                     </p>
                   </div>
                   <div className="grid gap-1.5">
@@ -207,9 +228,11 @@ export function WhisperVoiceConfiguration({
                       id={`${formId}-model`}
                       autoComplete="off"
                       spellCheck={false}
+                      disabled={locks.model !== undefined}
                       value={model}
                       onChange={(event) => setModel(event.target.value)}
                     />
+                    {locks.model && <p className="text-sm text-muted-foreground">{locks.model}</p>}
                   </div>
                   <div className="grid gap-1.5">
                     <Label htmlFor={`${formId}-streaming-url`}>Streaming URL (optional)</Label>
@@ -220,23 +243,27 @@ export function WhisperVoiceConfiguration({
                       spellCheck={false}
                       placeholder="wss://example.com/v1/realtime?intent=transcription"
                       aria-invalid={streamingUrlInvalid}
+                      disabled={locks.streamingUrl !== undefined}
                       value={streamingUrl}
                       onChange={(event) => setStreamingUrl(event.target.value)}
                     />
                     <p className="text-sm text-muted-foreground">
-                      {streamingUrlInvalid
-                        ? "Enter a full wss:// URL without credentials."
-                        : "When set, audio streams while you speak, so text is ready soon after you stop."}
+                      {locks.streamingUrl ??
+                        (streamingUrlInvalid
+                          ? "Enter a full wss:// URL without credentials."
+                          : "When set, audio streams while you speak, so text is ready soon after you stop.")}
                     </p>
                   </div>
                   <div className="grid gap-1.5">
-                    <Label htmlFor={`${formId}-key`}>{ready ? "Replace API key" : "API key"}</Label>
+                    <Label htmlFor={`${formId}-key`}>
+                      {hasKey ? "Replace API key" : "API key (optional)"}
+                    </Label>
                     <SecretSourceInput
                       id={`${formId}-key`}
                       aria-label="Whisper endpoint API key"
                       placeholder="Enter API key"
                       environmentId={id}
-                      configured={Boolean(ready) && !isSecretReference(storedKey)}
+                      configured={Boolean(hasKey) && !isSecretReference(storedKey)}
                       maxLength={4096}
                       value={key}
                       sources={sources}
@@ -247,9 +274,9 @@ export function WhisperVoiceConfiguration({
                     <p className="text-sm text-muted-foreground">
                       {typeof credential === "string" && !isApiKey(credential)
                         ? "Enter an API key, not a URL or secret reference."
-                        : ready
+                        : hasKey
                           ? "Leave blank to keep the saved key. It is sent as a Bearer token."
-                          : `Sent as a Bearer token. Anyone with dictation access to ${environment.label} can use it.`}
+                          : `Only for an endpoint that asks for one. It is sent as a Bearer token, and anyone with dictation access to ${environment.label} can use it.`}
                     </p>
                   </div>
                 </fieldset>
@@ -270,7 +297,7 @@ export function WhisperVoiceConfiguration({
           </p>
         )}
         <DialogFooter>
-          {connected && canManage && ready && !remove && (
+          {connected && canManage && (removesEndpoint ? ready : hasKey) && !remove && (
             <div className="sm:mr-auto">
               <Button
                 type="button"
@@ -279,7 +306,7 @@ export function WhisperVoiceConfiguration({
                 disabled={busy}
                 onClick={() => setRemove(true)}
               >
-                Remove endpoint…
+                {removesEndpoint ? "Remove endpoint…" : "Remove API key…"}
               </Button>
             </div>
           )}
@@ -296,14 +323,21 @@ export function WhisperVoiceConfiguration({
                 onClick={() =>
                   void write(
                     {
-                      cloudSpeechWhisper: { url: "", streamingUrl: "" },
+                      ...(removesEndpoint
+                        ? {
+                            cloudSpeechWhisper: unlockedWhisperEndpointPatch(locks, {
+                              url: "",
+                              streamingUrl: "",
+                            }),
+                          }
+                        : {}),
                       cloudSpeechCredentials: { whisper: "" },
                     },
                     false,
                   )
                 }
               >
-                Remove endpoint
+                {removesEndpoint ? "Remove endpoint" : "Remove API key"}
               </Button>
             ) : canManage && ready !== undefined ? (
               <Button type="submit" form={formId} size="sm" disabled={busy || !canSave}>
