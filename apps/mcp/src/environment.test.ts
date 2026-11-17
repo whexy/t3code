@@ -15,14 +15,17 @@ import {
   OrchestrationV2ShellSnapshot,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import * as Socket from "effect/socket/Socket";
 
 import { check, pair, supportOf } from "./access.ts";
 import { Environments, layer } from "./environment.ts";
-import { Registry, type ServerRecord } from "./registry.ts";
+import { redeemPairingLinks } from "./devicePairing.ts";
+import { layer as registryLayer, Registry, type ServerRecord } from "./registry.ts";
 import { callTool, noCallbacks } from "./testing.ts";
 import { BridgeToolkitHandlersLive } from "./tools.ts";
 
@@ -175,14 +178,37 @@ function grantingServer(permissions: ReadonlyArray<AuthEnvironmentScope>) {
 }
 
 describe("bridge permissions", () => {
-  it.effect("asks to read usage and change source control, and nothing broader", () => {
+  it.effect("takes every permission the link grants, so it can pair other devices", () => {
     const server = grantingServer(bridgePermissions);
     return Effect.gen(function* () {
       yield* pair("https://home.example.test/pair#token=pairing-token");
-      expect(server.tokenRequests.map((body) => body.get("scope")?.split(" "))).toEqual([
-        bridgePermissions,
-      ]);
+      expect(server.tokenRequests.map((body) => body.get("scope"))).toEqual([null]);
     }).pipe(Effect.provide(server.services));
+  });
+
+  it.effect("refreshes a server it already has from a bundle instead of refusing it", () => {
+    const server = grantingServer(bridgePermissions);
+    return Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const registry = yield* Registry.pipe(
+        Effect.provide(registryLayer(yield* fileSystem.makeTempDirectoryScoped())),
+      );
+      const redeem = (links: ReadonlyArray<string>) =>
+        redeemPairingLinks(links).pipe(Effect.provideService(Registry, registry));
+      yield* registry.update((state) =>
+        Result.succeed({
+          ...state,
+          servers: [{ ...record("desk"), environmentId: "env", token: "old" }],
+        }),
+      );
+      expect(
+        yield* redeem(["https://home.example.test/pair#token=a", "not a pairing link"]),
+      ).toMatchObject([
+        { _tag: "Refreshed", id: "desk" },
+        { _tag: "Failed", name: "not a pairing link" },
+      ]);
+      expect((yield* registry.state).servers).toMatchObject([{ id: "desk", token: "token" }]);
+    }).pipe(Effect.scoped, Effect.provide([server.services, NodeServices.layer]));
   });
 
   it.effect(

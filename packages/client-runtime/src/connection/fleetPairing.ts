@@ -213,6 +213,30 @@ function pairingUrl(httpBaseUrl: string, credential: string): string {
 }
 
 /**
+ * Mints a one-time pairing link on one host, delegating what the session holds of the standard
+ * set (an older session may lack scopes added since). `pairingBaseUrl` is the address the link
+ * should name when it differs from the one the request goes to.
+ */
+export const mintHostPairingUrl = Effect.fn("clientRuntime.fleetPairing.mintHostPairingUrl")(
+  function* (input: {
+    readonly httpBaseUrl: string;
+    readonly bearerToken: string;
+    readonly pairingBaseUrl?: string;
+  }) {
+    const state = yield* fetchRemoteSessionState(input);
+    const held = new Set(state.permissions ?? state.scopes ?? []);
+    const issued = yield* issueWithScopes(
+      input,
+      AuthStandardClientScopes.filter((scope) => held.has(scope)),
+    );
+    return {
+      pairingUrl: pairingUrl(input.pairingBaseUrl ?? input.httpBaseUrl, issued.credential),
+      expiresAtEpochMs: issued.expiresAt.epochMilliseconds,
+    };
+  },
+);
+
+/**
  * Whether this client holds an authenticated session with the host, waiting up to `wait` for one
  * still connecting. A prepared connection is not enough: it exists while an attempt with an expired
  * token is still failing.
@@ -484,27 +508,17 @@ export const mintFleetPairing = Effect.fn("clientRuntime.fleetPairing.mint")(fun
           detail: entry.enabled ? "Not connected" : "Turned off",
         };
       }
-      return yield* fetchRemoteSessionState({
+      const pairingBaseUrl = pairedHttpBaseUrl(entry);
+      return yield* mintHostPairingUrl({
         httpBaseUrl: prepared.httpBaseUrl,
         bearerToken: session.token,
+        ...(pairingBaseUrl === null ? {} : { pairingBaseUrl }),
       }).pipe(
-        // An older session may lack scopes added since; delegate what it holds of the standard set.
-        Effect.flatMap((state) => {
-          const held = new Set(state.permissions ?? state.scopes ?? []);
-          return issueWithScopes(
-            { httpBaseUrl: prepared.httpBaseUrl, bearerToken: session.token },
-            AuthStandardClientScopes.filter((scope) => held.has(scope)),
-          );
-        }),
-        Effect.map((issued): FleetHostPairing => ({
+        Effect.map((minted): FleetHostPairing => ({
           _tag: "Minted",
           environmentId,
           label,
-          pairingUrl: pairingUrl(
-            pairedHttpBaseUrl(entry) ?? prepared.httpBaseUrl,
-            issued.credential,
-          ),
-          expiresAtEpochMs: issued.expiresAt.epochMilliseconds,
+          ...minted,
         })),
         Effect.catch((error) =>
           Effect.succeed<FleetHostPairing>({
