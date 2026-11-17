@@ -770,7 +770,15 @@ jobs:
           rm "$RUNNER_TEMP/identity.p12"
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain" > /dev/null
           security list-keychains -d user -s "$keychain" "$HOME/Library/Keychains/login.keychain-db"
-          security find-identity -v -p codesigning "$keychain"
+          # Without both identities valid and in the search list, automatic
+          # signing in the archive would ask Apple for a new development
+          # certificate instead.
+          security find-identity -p codesigning
+          valid="$(security find-identity -v -p codesigning | awk '/valid identities found/ { print $1 }')"
+          if ((valid < 2)); then
+            echo "::error::$valid of 2 signing identities are valid in the keychain search list."
+            exit 1
+          fi
           printf '%s\n' "$ASC_PRIVATE_KEY" > "$RUNNER_TEMP/AuthKey_$ASC_KEY_ID.p8"
 
       - name: Archive
