@@ -11,7 +11,11 @@ import { msg } from "gt-react";
 import { m } from "../i18n/messages";
 
 type PreparedBrowserTranscription = PreparedVoiceTranscription & {
-  readonly streaming?: VoiceStreamingSession & { readonly feed: (pcm: Float32Array) => void };
+  readonly streaming?: VoiceStreamingSession & {
+    readonly feed: (pcm: Float32Array) => void;
+    /** 16 kHz samples per captured frame; smaller frames reach a live recognizer sooner. */
+    readonly frameSamples?: number;
+  };
 };
 
 export function createBrowserPcmCapture(
@@ -31,6 +35,7 @@ export function createBrowserPcmCapture(
   let durationTimer: ReturnType<typeof setTimeout> | undefined;
   let signal: AbortSignal | undefined;
   let feed: ((pcm: Float32Array) => void) | undefined;
+  let frameSamples: number | undefined;
   let stopped:
     | { readonly resolve: () => void; readonly reject: (error: Error) => void }
     | undefined;
@@ -91,7 +96,10 @@ export function createBrowserPcmCapture(
         audioContext = context;
         await context.audioWorklet.addModule(workletUrl);
         captureSignal.throwIfAborted();
-        const node = new AudioWorkletNode(context, "t3-pcm-capture", { channelCount: 1 });
+        const node = new AudioWorkletNode(context, "t3-pcm-capture", {
+          channelCount: 1,
+          ...(frameSamples ? { processorOptions: { frameSamples } } : {}),
+        });
         worklet = node;
         node.port.onmessage = ({
           data,
@@ -180,6 +188,7 @@ export function createBrowserPcmCapture(
         options.signal.throwIfAborted();
         signal = options.signal;
         feed = prepared.streaming?.feed;
+        frameSamples = prepared.streaming?.frameSamples;
         return prepared;
       },
     },

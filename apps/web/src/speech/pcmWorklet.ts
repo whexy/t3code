@@ -8,7 +8,7 @@ declare function registerProcessor(name: string, processor: typeof AudioWorkletP
 
 class PcmCaptureProcessor extends AudioWorkletProcessor {
   private readonly resampler = new PcmResampler(sampleRate);
-  private chunk = new Float32Array(8_000);
+  private readonly chunk: Float32Array<ArrayBuffer>;
   private length = 0;
   private recording = false;
   private flushed = false;
@@ -18,9 +18,12 @@ class PcmCaptureProcessor extends AudioWorkletProcessor {
   private level = 0;
   private readonly meterOnly: boolean;
 
-  constructor(options?: { readonly processorOptions?: { readonly meterOnly?: boolean } }) {
+  constructor(options?: {
+    readonly processorOptions?: { readonly meterOnly?: boolean; readonly frameSamples?: number };
+  }) {
     super();
     this.meterOnly = options?.processorOptions?.meterOnly === true;
+    this.chunk = new Float32Array(options?.processorOptions?.frameSamples ?? 8_000);
     this.port.onmessage = ({ data }) => {
       if (data === "start") this.recording = true;
       if (data === "stop") {

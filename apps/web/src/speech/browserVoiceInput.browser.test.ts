@@ -298,6 +298,8 @@ it.each([
     });
     const transcription = await platform.transcriber.prepare({ signal: abort.signal });
     expect(Boolean(transcription.streaming)).toBe(live);
+    // Small frames let a live cloud recognizer hear each word promptly.
+    expect(transcription.streaming?.frameSamples).toBe(live ? 2_400 : undefined);
     expect(sockets).toEqual(
       live
         ? ["wss://transcription.example.test/ws/voice/cloud/whisper?wsTicket=stream-ticket"]

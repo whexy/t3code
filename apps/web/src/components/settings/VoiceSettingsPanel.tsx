@@ -1274,7 +1274,7 @@ function TranscriptionTest(props: {
                   {speech.preview ? (
                     <>
                       {speech.preview.committed}
-                      <span className="text-muted-foreground">{speech.preview.tentative}</span>
+                      <span className="text-foreground/80">{speech.preview.tentative}</span>
                     </>
                   ) : (
                     transcript || gt("No speech recognized. Try again.")

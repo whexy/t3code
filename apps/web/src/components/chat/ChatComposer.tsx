@@ -3794,7 +3794,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               >
                 <div>
                   <span>{speechInput.preview.committed}</span>
-                  <span className="text-muted-foreground">{speechInput.preview.tentative}</span>
+                  <span className="text-foreground/80">{speechInput.preview.tentative}</span>
                 </div>
               </div>
             ) : null}
