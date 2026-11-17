@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vite-plus/test";
 
-it("meters microphone-only capture like transcription without emitting PCM", async () => {
+it("meters microphone-only capture like transcription without emitting PCM, in the requested frames", async () => {
   using globals = new DisposableStack();
   const setGlobal = (name: string, value: unknown) => {
     const original = Object.getOwnPropertyDescriptor(globalThis, name);
@@ -19,7 +19,9 @@ it("meters microphone-only capture like transcription without emitting PCM", asy
       return true;
     }
   }
-  let Processor!: new (options?: { processorOptions: { meterOnly: boolean } }) => Worklet;
+  let Processor!: new (options?: {
+    processorOptions: { meterOnly?: boolean; frameSamples?: number };
+  }) => Worklet;
   setGlobal("sampleRate", 48_000);
   setGlobal("AudioWorkletProcessor", Worklet);
   setGlobal("registerProcessor", (_name: string, processor: typeof Processor) => {
@@ -28,12 +30,17 @@ it("meters microphone-only capture like transcription without emitting PCM", asy
   await import("./pcmWorklet");
   const transcription = new Processor();
   const microphone = new Processor({ processorOptions: { meterOnly: true } });
-  transcription.port.onmessage?.({ data: "start" });
-  microphone.port.onmessage?.({ data: "start" });
+  const streaming = new Processor({ processorOptions: { frameSamples: 2_400 } });
+  for (const processor of [transcription, microphone, streaming])
+    processor.port.onmessage?.({ data: "start" });
   const feed = (samples: Float32Array) => {
-    transcription.process([[samples]]);
-    microphone.process([[samples]]);
+    for (const processor of [transcription, microphone, streaming]) processor.process([[samples]]);
   };
+  const frames = (processor: Worklet) =>
+    processor.port.postMessage.mock.calls
+      .map(([data]) => data)
+      .filter((data) => data instanceof Float32Array)
+      .map((data) => data.length);
   const levels = (processor: Worklet) =>
     processor.port.postMessage.mock.calls
       .map(([data]) => data)
@@ -61,4 +68,7 @@ it("meters microphone-only capture like transcription without emitting PCM", asy
   );
   microphone.port.onmessage?.({ data: "stop" });
   expect(microphone.port.postMessage).toHaveBeenLastCalledWith("stopped");
+  // 1.1 s at 48 kHz is 17,600 samples at 16 kHz; only full frames are published before stop.
+  expect(frames(transcription)).toEqual([8_000, 8_000]);
+  expect(frames(streaming)).toEqual([2_400, 2_400, 2_400, 2_400, 2_400, 2_400, 2_400]);
 });

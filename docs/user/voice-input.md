@@ -62,8 +62,9 @@ Bearer token. The URL is posted to exactly as entered and must not redirect.
 The endpoint must reply with JSON such as `{"text": "…"}`. Your language, when it isn't
 **Auto**, goes along as `language`, and dictionary terms go along as `prompt`. The
 endpoint handles silence itself. If the service also offers realtime transcription,
-add its `wss://` **Streaming URL**: web and desktop then send audio while you speak, so
-the text is ready soon after you stop. Mobile still sends the finished recording.
+add its `wss://` **Streaming URL**: web and desktop then send audio while you speak, show
+the text as it is recognized, and have it ready soon after you stop. The live text can
+change as the service revises what it heard; only the final text goes into your draft. Mobile still sends the finished recording.
 Clear the Streaming URL to go back to sending finished recordings everywhere.
 Change the URL, model, or key later with the key button
 next to **Transcribe with**, or under **Cloud provider** on mobile; **Remove endpoint** turns
