@@ -122,6 +122,7 @@ import { toastManager } from "../ui/toast";
 import { MicrophoneOrderList } from "./MicrophoneOrderList";
 import { MicrophoneTest } from "./MicrophoneTest";
 import { CloudVoiceConfiguration } from "./CloudVoiceConfiguration";
+import { WhisperVoiceConfiguration } from "./WhisperVoiceConfiguration";
 import { ModelBenchmarks, orderSpeechLanguages } from "./SpeechModelComparison";
 import { languageLabel, SpeechLanguageSelect } from "./SpeechLanguageSelect";
 import { filterSpeechModels, type SpeechModelSort } from "./speechModelBrowser";
@@ -140,6 +141,7 @@ import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings"
 
 const OFF = "off";
 function CloudSpeechLogo({ provider }: { provider: CloudSpeechProvider }) {
+  if (provider === "whisper") return <AudioLinesIcon aria-hidden className="size-4 shrink-0" />;
   if (provider === "openrouter")
     return <ProviderPackageIcon icon={openRouterIcon} aria-hidden className="size-4 shrink-0" />;
   return (
@@ -1282,7 +1284,11 @@ export function VoiceSettingsPanel() {
   );
   // OpenRouter users without settings access still manage their own model choice.
   const manageLabel =
-    destination.cloudProvider === "openrouter" ? "Manage OpenRouter" : "Manage key";
+    destination.cloudProvider === "openrouter"
+      ? "Manage OpenRouter"
+      : destination.cloudProvider === "whisper"
+        ? "Manage endpoint"
+        : "Manage key";
   const chosenEnvironment = environments.find(
     (environment) => environment.environmentId === destination.environmentId,
   );
@@ -1514,7 +1520,18 @@ export function VoiceSettingsPanel() {
             </div>
           }
         />
-        {pendingCloud && cloudEnvironment && (
+        {pendingCloud?.provider === "whisper" && cloudEnvironment ? (
+          <WhisperVoiceConfiguration
+            key={JSON.stringify(pendingCloud)}
+            environment={cloudEnvironment}
+            active={
+              destination.environmentId === pendingCloud.environmentId &&
+              destination.cloudProvider === "whisper"
+            }
+            close={() => setPendingCloud(null)}
+          />
+        ) : null}
+        {pendingCloud && pendingCloud.provider !== "whisper" && cloudEnvironment && (
           <CloudVoiceConfiguration
             key={JSON.stringify(pendingCloud)}
             provider={pendingCloud.provider}
@@ -1565,12 +1582,16 @@ export function VoiceSettingsPanel() {
           description={
             destination.cloudProvider === "openai"
               ? "OpenAI handles silence itself."
-              : "Skip silence and background noise before transcribing."
+              : destination.cloudProvider === "whisper"
+                ? "The endpoint handles silence itself."
+                : "Skip silence and background noise before transcribing."
           }
           control={
             <Switch
               aria-label="Silence filtering"
-              disabled={destination.cloudProvider === "openai"}
+              disabled={
+                destination.cloudProvider === "openai" || destination.cloudProvider === "whisper"
+              }
               checked={settings.speechSilenceFiltering}
               onCheckedChange={(checked) =>
                 void updateClientSettings({ speechSilenceFiltering: checked })
