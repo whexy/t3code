@@ -17,6 +17,10 @@ import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as PullRequestService from "./PullRequestService.ts";
 import {
+  type PullRequestWatchStart,
+  pullRequestWatchStartResult,
+} from "./pullRequestWatchStart.ts";
+import {
   resolveTarget,
   type PullRequestTarget,
   type PullRequestTargetError,
@@ -72,7 +76,10 @@ export class PullRequestWatchService extends Context.Service<
       readonly watching: boolean;
       readonly until?: PullRequestWatchUntil | undefined;
     }) => Effect.Effect<
-      ResolvedTarget & { readonly watching: boolean; readonly wasWatching: boolean },
+      ResolvedTarget & {
+        readonly watching: boolean;
+        readonly wasWatching: boolean;
+      } & PullRequestWatchStart,
       | PullRequestWatchFailedError
       | PullRequestNotOpenError
       | PullRequestWatchFromSubagentError
@@ -126,10 +133,11 @@ const make = Effect.gen(function* () {
     if (watching && before?.snapshot?.state === "merged") {
       return yield* new PullRequestNotOpenError({ state: "merged" });
     }
+    let started: PullRequestWatchStart = {};
     // A pending rollup has no failure yet, so any failure the first read finds is news.
     let checksPendingAtStart: boolean | undefined;
     if (watching && before?.watch === undefined) {
-      checksPendingAtStart = yield* pullRequests
+      const summary = yield* pullRequests
         .summary(
           {
             projectId: thread.projectId,
@@ -141,17 +149,18 @@ const make = Effect.gen(function* () {
           { recoverTransientFailure: false, bypassCache: true },
         )
         .pipe(
-          Effect.flatMap((summary) =>
-            summary.state === "merged"
-              ? Effect.fail(new PullRequestNotOpenError({ state: "merged" }))
-              : Effect.succeed(summary.checksState === "pending"),
+          Effect.filterOrFail(
+            (summary) => summary.state !== "merged",
+            () => new PullRequestNotOpenError({ state: "merged" }),
           ),
           Effect.catchTags({
             // Host and transport errors can recover while the watch is active.
             // A failed read leaves the seed to the link's last sync.
-            PullRequestOperationError: () => Effect.undefined,
+            PullRequestOperationError: () => Effect.succeed(null),
           }),
         );
+      checksPendingAtStart = summary === null ? undefined : summary.checksState === "pending";
+      started = pullRequestWatchStartResult(summary);
     }
     const uuid = yield* random.uuidV4().pipe(Effect.orDie);
     yield* engine
@@ -181,6 +190,7 @@ const make = Effect.gen(function* () {
       ...target,
       watching: watchedLink(after)?.watch !== undefined,
       wasWatching: before?.watch !== undefined,
+      ...started,
     };
   });
 
