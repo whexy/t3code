@@ -50,5 +50,8 @@ export function describeDevUpdates(input: {
       : state.running
         ? null
         : "Dev builds download in the background and apply at the next launch.";
-  return { description: next === null ? running : `${running} ${next}`, offerReload: false };
+  return {
+    description: next === null ? running : `${running} ${next}`,
+    offerReload: state.enabled ? state.pending !== null : state.running !== null,
+  };
 }

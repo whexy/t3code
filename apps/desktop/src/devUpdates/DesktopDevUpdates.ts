@@ -19,14 +19,14 @@ import * as SynchronizedRef from "effect/SynchronizedRef";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
-import type * as Electron from "electron";
+import * as Electron from "electron";
 
 import * as DesktopAppIdentity from "../app/DesktopAppIdentity.ts";
 import * as DesktopAssets from "../app/DesktopAssets.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
-import * as DesktopLifecycle from "../app/DesktopLifecycle.ts";
 import { makeComponentLogger } from "../app/DesktopObservability.ts";
 import * as ElectronApp from "../electron/ElectronApp.ts";
+import * as ElectronProtocol from "../electron/ElectronProtocol.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as DesktopIpc from "../ipc/DesktopIpc.ts";
 import * as Channels from "./channels.ts";
@@ -60,14 +60,14 @@ const DevUpdatesStateSchema = Schema.Struct({
 export class DesktopDevUpdates extends Context.Service<
   DesktopDevUpdates,
   {
-    /** Picks the renderer asset directory for this launch; call once, before any window loads. */
-    readonly launch: (embeddedAssetDirectory: string) => Effect.Effect<string>;
+    /** Call once, before any window loads; the result names the directory to serve right now. */
+    readonly launch: (embeddedAssetDirectory: string) => Effect.Effect<() => string>;
     readonly getState: Effect.Effect<DevUpdatesState>;
     readonly setEnabled: (enabled: boolean) => Effect.Effect<DevUpdatesState>;
   }
 >()("@t3tools/desktop/devUpdates/DesktopDevUpdates") {}
 
-/** The launch's renderer asset directory; the embedded one wherever the lane is not wired. */
+/** The renderer asset directory to serve; the embedded one wherever the lane is not wired. */
 export const assetDirectory = Effect.fn("DesktopDevUpdates.assetDirectory")(function* (
   embeddedAssetDirectory: string,
 ) {
@@ -142,7 +142,9 @@ const make = Effect.gen(function* () {
       }),
     );
     return DesktopDevUpdates.of({
-      launch: Effect.succeed,
+      launch: Effect.fn("DesktopDevUpdates.launch")((embeddedAssetDirectory: string) =>
+        Effect.succeed(() => embeddedAssetDirectory),
+      ),
       getState: unavailable,
       setEnabled: Effect.fn("DesktopDevUpdates.setEnabled")(() => unavailable),
     });
@@ -153,14 +155,15 @@ const make = Effect.gen(function* () {
   const electronApp = yield* ElectronApp.ElectronApp;
   const electronWindow = yield* ElectronWindow.ElectronWindow;
   const httpClient = yield* HttpClient.HttpClient;
-  const lifecycle = yield* DesktopLifecycle.DesktopLifecycle;
-  const lifecycleContext =
-    yield* Effect.context<DesktopLifecycle.DesktopLifecycleRuntimeServices>();
   const layerScope = yield* Scope.Scope;
   const runFork = Effect.runForkWith(yield* Effect.context<never>());
 
   const appVersion = environment.appVersion;
+  const appUrlPrefix = `${ElectronProtocol.getDesktopScheme(false)}:`;
   const directoryRef = yield* Ref.make(Option.none<string>());
+  let embeddedDirectory = "";
+  // Read synchronously by the protocol handler on every request.
+  let servedDirectory = "";
   const stateRef = yield* SynchronizedRef.make(DevState.EMPTY_STATE);
   const runningRef = yield* Ref.make<DevState.StoredBundle | null>(null);
   const phaseRef = yield* Ref.make<BootPhase>("embedded");
@@ -330,6 +333,49 @@ const make = Effect.gen(function* () {
 
   const startCheck = (reason: string) => check(reason).pipe(Effect.forkIn(layerScope));
 
+  const reloadWindows = Effect.sync(() => {
+    for (const window of Electron.BrowserWindow.getAllWindows()) {
+      if (window.isDestroyed() || !window.webContents.getURL().startsWith(appUrlPrefix)) continue;
+      window.webContents.reloadIgnoringCache();
+    }
+  });
+
+  /** Points the protocol at the bundle the state selects; windows pick it up on their next load. */
+  const serveSelected = Effect.fn("DesktopDevUpdates.serveSelected")(function* () {
+    const directory = yield* Ref.get(directoryRef);
+    if (Option.isNone(directory)) return;
+    const state = yield* SynchronizedRef.get(stateRef);
+    const selected = DevState.selectLaunchBundle(state, appVersion);
+    const bundleDirectory =
+      selected === null ? null : path.join(directory.value, selected.updateId);
+    const intact =
+      bundleDirectory !== null &&
+      (yield* fileSystem
+        .exists(path.join(bundleDirectory, BUNDLE_ENTRY))
+        .pipe(Effect.orElseSucceed(() => false)));
+    const running = intact ? selected : null;
+    yield* Ref.set(runningRef, running);
+    // A bundle that cannot be served never becomes servable: drop it before pruning, unless a
+    // check replaced it meanwhile.
+    if (state.ready?.updateId !== running?.updateId) {
+      yield* updateState((current) =>
+        current.ready?.updateId === state.ready?.updateId
+          ? { ...current, ready: running }
+          : current,
+      );
+    }
+    servedDirectory =
+      running === null || bundleDirectory === null ? embeddedDirectory : bundleDirectory;
+    yield* Ref.set(phaseRef, running === null ? "embedded" : "starting");
+    yield* prune(directory.value);
+    if (running !== null) {
+      yield* logInfo("serving the dev bundle", {
+        updateId: running.updateId,
+        commit: running.commit,
+      });
+    }
+  });
+
   const failBoot = Effect.fn("DesktopDevUpdates.failBoot")(function* (reason: string) {
     if (
       (yield* Ref.getAndUpdate(phaseRef, (phase) => (phase === "starting" ? "failed" : phase))) !==
@@ -339,14 +385,15 @@ const make = Effect.gen(function* () {
     }
     const running = yield* Ref.get(runningRef);
     if (running === null) return;
-    yield* logWarning("dev bundle failed to start; relaunching with the embedded bundle", {
+    yield* logWarning("dev bundle failed to start; reloading with the embedded bundle", {
       reason,
       updateId: running.updateId,
     });
     yield* updateState((state) => DevState.markBad(state, running.updateId)).pipe(
       Effect.catch((error) => logWarning("could not mark the dev bundle bad", { error })),
     );
-    yield* lifecycle.relaunch("dev-update-failed").pipe(Effect.provide(lifecycleContext));
+    yield* serveSelected();
+    yield* reloadWindows;
   });
 
   const isMainWindow = (window: Electron.BrowserWindow) =>
@@ -375,44 +422,26 @@ const make = Effect.gen(function* () {
 
   const launch = Effect.fn("DesktopDevUpdates.launch")(
     function* (embeddedAssetDirectory: string) {
-      if (Option.isSome(yield* Ref.get(directoryRef))) return embeddedAssetDirectory;
+      const currentDirectory = () => servedDirectory;
+      if (Option.isSome(yield* Ref.get(directoryRef))) return currentDirectory;
+      embeddedDirectory = servedDirectory = embeddedAssetDirectory;
       const userDataPath = yield* appIdentity.resolveUserDataPath.pipe(Effect.option);
-      if (Option.isNone(userDataPath)) return embeddedAssetDirectory;
+      if (Option.isNone(userDataPath)) return currentDirectory;
       const directory = path.join(userDataPath.value, BUNDLE_DIRECTORY);
       yield* Ref.set(directoryRef, Option.some(directory));
-
       const state = yield* readState(directory);
       yield* SynchronizedRef.set(stateRef, state);
-      const selected = DevState.selectLaunchBundle(state, appVersion);
-      const bundleDirectory = selected === null ? null : path.join(directory, selected.updateId);
-      const intact =
-        bundleDirectory !== null &&
-        (yield* fileSystem
-          .exists(path.join(bundleDirectory, BUNDLE_ENTRY))
-          .pipe(Effect.orElseSucceed(() => false)));
-      const running = intact ? selected : null;
-      yield* Ref.set(runningRef, running);
-      // A bundle this launch cannot serve never becomes servable: drop it before pruning.
-      if (state.ready?.updateId !== running?.updateId) {
-        yield* updateState((current) => ({ ...current, ready: running }));
-      }
-      yield* prune(directory);
-
-      if (state.enabled) yield* startCheck("launch");
-      if (running === null || bundleDirectory === null) return embeddedAssetDirectory;
-      yield* Ref.set(phaseRef, "starting");
+      // A reload can start a dev bundle later, so windows are watched even when this launch has none.
       yield* watchMainWindow.pipe(Scope.provide(layerScope));
-      yield* logInfo("serving the dev bundle", {
-        updateId: running.updateId,
-        commit: running.commit,
-      });
-      return bundleDirectory;
+      yield* serveSelected();
+      if (state.enabled) yield* startCheck("launch");
+      return currentDirectory;
     },
     (effect, embeddedAssetDirectory) =>
       effect.pipe(
         Effect.catchCause((cause) =>
           logWarning("could not choose a dev bundle", { cause }).pipe(
-            Effect.as(embeddedAssetDirectory),
+            Effect.as(() => embeddedAssetDirectory),
           ),
         ),
       ),
@@ -456,6 +485,18 @@ const make = Effect.gen(function* () {
         ) {
           yield* logInfo("dev bundle started");
         }
+      }),
+    }),
+  );
+
+  yield* ipc.handle(
+    DesktopIpc.makeIpcMethod({
+      channel: Channels.DEV_UPDATES_RELOAD_CHANNEL,
+      payload: Schema.Void,
+      result: Schema.Void,
+      handler: Effect.fn("DesktopDevUpdates.reload")(function* () {
+        yield* serveSelected();
+        yield* reloadWindows;
       }),
     }),
   );
