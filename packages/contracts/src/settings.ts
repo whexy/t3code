@@ -57,6 +57,7 @@ import { PullRequestMergeMethod } from "./pullRequest.ts";
 import {
   CloudSpeechModelId,
   CloudSpeechWhisperModel,
+  CloudSpeechWhisperStreamingUrl,
   CloudSpeechWhisperUrl,
   DEFAULT_CLOUD_SPEECH_WHISPER_MODEL,
   SpeechAcceleration,
@@ -1381,6 +1382,7 @@ export const CloudSpeechWhisperEndpoint = Schema.Struct({
   model: CloudSpeechWhisperModel.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_CLOUD_SPEECH_WHISPER_MODEL)),
   ),
+  streamingUrl: CloudSpeechWhisperStreamingUrl.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
 });
 export type CloudSpeechWhisperEndpoint = typeof CloudSpeechWhisperEndpoint.Type;
 
@@ -1426,7 +1428,7 @@ export const ServerSettings = Schema.Struct({
   ),
   cloudSpeechWhisper: CloudSpeechWhisperEndpoint.pipe(
     Schema.withDecodingDefault(
-      Effect.succeed({ url: "", model: DEFAULT_CLOUD_SPEECH_WHISPER_MODEL }),
+      Effect.succeed({ url: "", model: DEFAULT_CLOUD_SPEECH_WHISPER_MODEL, streamingUrl: "" }),
     ),
   ),
   speechModelId: Schema.String.pipe(
@@ -1901,6 +1903,7 @@ export const ServerSettingsPatch = Schema.Struct({
     Schema.Struct({
       url: Schema.optionalKey(CloudSpeechWhisperUrl),
       model: Schema.optionalKey(CloudSpeechWhisperModel),
+      streamingUrl: Schema.optionalKey(CloudSpeechWhisperStreamingUrl),
     }),
   ),
   speechModelId: Schema.optionalKey(Schema.String),

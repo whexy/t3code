@@ -5,9 +5,15 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import { HttpRouter, HttpServer, HttpServerRequest, HttpServerResponse } from "effect/http";
-import { SpeechStreamEvent, DEFAULT_SPEECH_TRANSCRIPTION_OPTIONS } from "@t3tools/contracts";
-import type { SpeechService, SpeechStream } from "./SpeechService.ts";
-import { runSpeechSocket } from "./stream.ts";
+import {
+  CloudSpeechError,
+  SpeechStreamEvent,
+  DEFAULT_SPEECH_TRANSCRIPTION_OPTIONS,
+  type SpeechTranscriptionOptions,
+} from "@t3tools/contracts";
+import type * as Scope from "effect/Scope";
+import type { SpeechStream } from "./SpeechService.ts";
+import { runSpeechSocket, type SocketSpeechStream } from "./stream.ts";
 import type * as NetAddress from "effect/net/NetAddress";
 
 const decodeEvent = Schema.decodeUnknownSync(Schema.fromJsonString(SpeechStreamEvent));
@@ -39,8 +45,10 @@ function client(url: string) {
   };
 }
 
-const withServer = Effect.fn("test.speech.withServer")(function* (
-  startStream: SpeechService["Service"]["startStream"],
+const withServer = Effect.fn("test.speech.withServer")(function* <E>(
+  startStream: (
+    options: SpeechTranscriptionOptions,
+  ) => Effect.Effect<SocketSpeechStream<E>, E, Scope.Scope>,
   run: (url: string) => Promise<void>,
 ) {
   const routes = HttpRouter.add(
@@ -161,6 +169,21 @@ it.live("processes pipelined audio before the finish command", () => {
         expect(await connection.next()).toMatchObject({ type: "update", revision: 1 });
         expect(await connection.next()).toMatchObject({ type: "update", revision: 2 });
         expect(await connection.next()).toEqual({ type: "finished", text: "done" });
+      } finally {
+        connection.socket.close();
+      }
+    },
+  ).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest));
+});
+
+it.live("tells the client why a cloud stream could not start", () => {
+  const error = new CloudSpeechError({ provider: "whisper", reason: "rejected-key" });
+  return withServer(
+    () => Effect.fail(error),
+    async (url) => {
+      const connection = client(url);
+      try {
+        expect(await connection.next()).toEqual({ type: "error", message: error.message });
       } finally {
         connection.socket.close();
       }

@@ -46,9 +46,16 @@ It sends text, never audio, to the text generation model of the draft's
 own environment, because that is where its credentials live.
 
 A cloud destination binds both the forwarding environment and the named provider.
-It uses a separate, batch-only endpoint: changing a server key cannot upgrade
-an environment-local grant, and a cloud recording never uses the streaming
-socket or falls back to another provider or the environment's native model.
+It uses separate endpoints: changing a server key cannot upgrade an
+environment-local grant, and a cloud recording never uses the environment-local
+streaming socket or falls back to another provider or the environment's native
+model. The one cloud stream is the Whisper-compatible provider's own socket,
+[`/ws/voice/cloud/whisper`](../../apps/server/src/speech/whisperStream.ts), used only
+when the grant names that provider and the environment has a streaming URL. It
+speaks the local socket's client protocol, so the client reuses its stream session,
+while the server relays to the endpoint's realtime socket with the saved key. A
+failed stream reports its error; like any streamed recording it keeps no audio to
+retry, and it never retries through the batch endpoint.
 
 OpenRouter routes to many upstreams, so its grant also names the exact model and
 the model travels with every upload as a query parameter. The server accepts only

@@ -2,6 +2,7 @@ import { cloudSpeechLanguages, effectiveSpeechLanguage } from "@t3tools/shared/s
 import {
   requireCloudSpeechKey,
   transcribeCloudPcm,
+  getCloudWhisperSpeechStreamUrl,
   getEnvironmentSpeechStatus,
   getEnvironmentSpeechStreamUrl,
   openSpeechStream,
@@ -90,14 +91,30 @@ export function createBrowserVoiceInputPlatform(input: {
           code: "unavailable",
           message: m(msg("Choose an OpenRouter model in Settings → Voice.")),
         });
-      await runEnvironmentSpeech(
+      const keys = await runEnvironmentSpeech(
         requireCloudSpeechKey(input.prepared, input.cloudProvider),
         options,
       );
       throwIfVoiceTranscriptionAborted(options.signal);
+      const locale = effectiveSpeechLanguage(cloudSpeechLanguages, recordingOptions.speechLanguage);
+      if (input.cloudProvider !== "whisper" || !keys.whisperStreaming)
+        return { locale, transcribe: transcribeRecording };
+      // A failed stream reports its error; it never falls back to batch or another provider.
+      const url = await runEnvironmentSpeech(
+        getCloudWhisperSpeechStreamUrl(input.prepared),
+        options,
+      );
       return {
-        locale: effectiveSpeechLanguage(cloudSpeechLanguages, recordingOptions.speechLanguage),
+        locale,
         transcribe: transcribeRecording,
+        streaming: openSpeechStream({
+          url,
+          canSend: input.hasAudioConsent,
+          options: recordingOptions,
+          signal: options.signal,
+          onText: input.onText,
+          onError: (error) => input.onError(error.message),
+        }),
       };
     }
     const status = await runEnvironmentSpeech(getEnvironmentSpeechStatus(input.prepared), options);
