@@ -24,6 +24,8 @@ export interface DevUpdatesState {
 export interface DevUpdatesBridge {
   readonly getState: () => Promise<DevUpdatesState>;
   readonly setEnabled: (enabled: boolean) => Promise<DevUpdatesState>;
+  /** Reloads every app window into the bundle the next launch would run. Absent in older desktop builds. */
+  readonly reload?: () => Promise<void>;
 }
 
 // The desktop preload exposes the bridge under this global; the hub answers at this path.
