@@ -3,6 +3,10 @@ import {
   secretRequestReference,
 } from "@t3tools/client-runtime/secret-request";
 import {
+  unlockedWhisperEndpointPatch,
+  whisperEndpointLocks,
+} from "@t3tools/client-runtime/voice-input";
+import {
   CloudSpeechApiKey,
   CloudSpeechWhisperModel,
   CloudSpeechWhisperStreamingUrl,
@@ -49,14 +53,17 @@ function enableChoice(commit: () => void) {
 export function WhisperVoiceEditor({
   environment,
   ready,
+  hasKey,
   enable,
   canManage,
   onSaved,
   onBack,
 }: {
   environment: EnvironmentPresentation;
-  /** Whether the environment already has both an endpoint URL and a key. */
+  /** Whether the environment already has an endpoint URL. */
   ready: boolean;
+  /** Whether the environment has a key saved for the endpoint. */
+  hasKey: boolean;
   /** Whether saving should also make this device dictate through the endpoint. */
   enable: boolean;
   canManage: boolean;
@@ -72,6 +79,10 @@ export function WhisperVoiceEditor({
     streamingUrl: "",
   };
   const stored = settings?.cloudSpeechCredentials?.whisper;
+  const locks = whisperEndpointLocks(environment.serverConfig?.managedPolicy);
+  // Under a policy that pins the URL only the key is the user's to remove.
+  const removesEndpoint = locks.url === undefined;
+  const managed = locks.url ?? locks.model ?? locks.streamingUrl;
   const sources =
     Constants.expoConfig?.extra?.secretsFeatureEnabled === true &&
     environment.serverConfig?.secretReferences &&
@@ -114,7 +125,7 @@ export function WhisperVoiceEditor({
   const urlInvalid = nextUrl !== "" && !isUrl(nextUrl);
   const nextStreamingUrl = streamingUrl.trim();
   const streamingUrlInvalid = !isStreamingUrl(nextStreamingUrl);
-  const keyReady = draft.trim() ? credential !== undefined : ready;
+  const keyReady = !draft.trim() || credential !== undefined;
   const changed =
     nextUrl !== endpoint.url ||
     nextModel !== endpoint.model ||
@@ -146,7 +157,11 @@ export function WhisperVoiceEditor({
     if (!canSave) return;
     void write(
       {
-        cloudSpeechWhisper: { url: nextUrl, model: nextModel, streamingUrl: nextStreamingUrl },
+        cloudSpeechWhisper: unlockedWhisperEndpointPatch(locks, {
+          url: nextUrl,
+          model: nextModel,
+          streamingUrl: nextStreamingUrl,
+        }),
         ...(keyChanged ? { cloudSpeechCredentials: { whisper: credential } } : {}),
       },
       enable,
@@ -167,7 +182,9 @@ export function WhisperVoiceEditor({
                 ? "Enter a full http(s) URL without credentials."
                 : streamingUrlInvalid
                   ? "Enter a full wss:// streaming URL without credentials, or leave it empty."
-                  : "Recordings are posted to this exact URL with the model below. An optional wss:// streaming URL lets web and desktop send audio while you speak."
+                  : managed
+                    ? `${managed} Dimmed fields can’t be changed here.`
+                    : "Recordings are posted to this exact URL with the model below. An optional wss:// streaming URL lets web and desktop send audio while you speak."
             }
           >
             <View className="gap-3 px-4 py-3">
@@ -178,12 +195,12 @@ export function WhisperVoiceEditor({
                 autoCapitalize="none"
                 autoCorrect={false}
                 autoComplete="off"
-                editable={!saving}
+                editable={!saving && locks.url === undefined}
                 returnKeyType="done"
                 onSubmitEditing={save}
                 value={url}
                 onChangeText={setUrl}
-                className={FIELD}
+                className={locks.url ? `${FIELD} opacity-50` : FIELD}
               />
               <TextInput
                 accessibilityLabel="Whisper model"
@@ -191,12 +208,12 @@ export function WhisperVoiceEditor({
                 autoCapitalize="none"
                 autoCorrect={false}
                 autoComplete="off"
-                editable={!saving}
+                editable={!saving && locks.model === undefined}
                 returnKeyType="done"
                 onSubmitEditing={save}
                 value={model}
                 onChangeText={setModel}
-                className={FIELD}
+                className={locks.model ? `${FIELD} opacity-50` : FIELD}
               />
               <TextInput
                 accessibilityLabel="Whisper streaming URL"
@@ -205,21 +222,21 @@ export function WhisperVoiceEditor({
                 autoCapitalize="none"
                 autoCorrect={false}
                 autoComplete="off"
-                editable={!saving}
+                editable={!saving && locks.streamingUrl === undefined}
                 returnKeyType="done"
                 onSubmitEditing={save}
                 value={streamingUrl}
                 onChangeText={setStreamingUrl}
-                className={FIELD}
+                className={locks.streamingUrl ? `${FIELD} opacity-50` : FIELD}
               />
             </View>
           </ListSection>
           <ListSection
-            title="API key"
+            title="API key (optional)"
             footer={
               draft && !credential
                 ? (source?.invalidReferenceMessage ?? "Enter a valid API key.")
-                : `Sent as a Bearer token. Anyone with dictation access to ${environment.label} can use it.`
+                : `Only for an endpoint that asks for one. It is sent as a Bearer token, and anyone with dictation access to ${environment.label} can use it.`
             }
           >
             <View className="gap-3 px-4 py-3">
@@ -257,7 +274,7 @@ export function WhisperVoiceEditor({
                 }
                 placeholder={
                   source?.referencePlaceholder ??
-                  (ready ? "Saved key · enter a new one to replace" : "API key")
+                  (hasKey ? "Saved key · enter a new one to replace" : "API key")
                 }
                 secureTextEntry={sourceId === null}
                 autoCapitalize="none"
@@ -281,27 +298,41 @@ export function WhisperVoiceEditor({
               disabled={!canSave}
               onPress={save}
             />
-            {ready ? (
+            {(removesEndpoint ? ready : hasKey) ? (
               <View className="border-t border-border-subtle">
                 <ListActionRow
                   tone="danger"
-                  label="Remove endpoint from environment"
+                  label={removesEndpoint ? "Remove endpoint from environment" : "Remove API key"}
                   disabled={saving}
                   onPress={() =>
-                    Dialog.confirm({
-                      title: `Remove the Whisper-compatible endpoint from ${environment.label}?`,
-                      message: "Everyone using it for dictation will lose access.",
-                      confirmText: "Remove endpoint",
-                      destructive: true,
-                      onConfirm: () =>
-                        void write(
-                          {
-                            cloudSpeechWhisper: { url: "", streamingUrl: "" },
-                            cloudSpeechCredentials: { whisper: "" },
+                    Dialog.confirm(
+                      removesEndpoint
+                        ? {
+                            title: `Remove the Whisper-compatible endpoint from ${environment.label}?`,
+                            message: "Everyone using it for dictation will lose access.",
+                            confirmText: "Remove endpoint",
+                            destructive: true,
+                            onConfirm: () =>
+                              void write(
+                                {
+                                  cloudSpeechWhisper: unlockedWhisperEndpointPatch(locks, {
+                                    url: "",
+                                    streamingUrl: "",
+                                  }),
+                                  cloudSpeechCredentials: { whisper: "" },
+                                },
+                                false,
+                              ),
+                          }
+                        : {
+                            title: `Remove the Whisper endpoint’s API key from ${environment.label}?`,
+                            message: "Dictation will reach the endpoint without a key.",
+                            confirmText: "Remove API key",
+                            destructive: true,
+                            onConfirm: () =>
+                              void write({ cloudSpeechCredentials: { whisper: "" } }, false),
                           },
-                          false,
-                        ),
-                    })
+                    )
                   }
                 />
               </View>
