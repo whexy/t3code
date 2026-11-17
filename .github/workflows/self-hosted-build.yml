@@ -387,7 +387,8 @@ jobs:
     uses: ./.github/workflows/release-desktop.yml
     with:
       label: Linux x64
-      runner: ubuntu-latest
+      # scripts/linux-glibc.ts caps packaged binaries at Ubuntu 24.04's glibc.
+      runner: ubuntu-24.04
       platform: linux
       target: AppImage
       arch: x64
