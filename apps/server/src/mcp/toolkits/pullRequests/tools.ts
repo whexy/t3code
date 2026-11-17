@@ -21,6 +21,7 @@ import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
 import * as PullRequestWatchService from "../../../pullRequest/PullRequestWatchService.ts";
+import { PullRequestWatchStartFields } from "../../../pullRequest/pullRequestWatchStart.ts";
 import {
   PullRequestUrlInvalidError,
   PullRequestTargetIncompleteError,
@@ -204,6 +205,7 @@ export const WatchPullRequestResult = Schema.Struct({
   ...PullRequestIdentity,
   watching: Schema.Boolean,
   wasWatching: Schema.Boolean,
+  ...PullRequestWatchStartFields,
 });
 export type WatchPullRequestResult = typeof WatchPullRequestResult.Type;
 

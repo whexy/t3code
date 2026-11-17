@@ -114,6 +114,7 @@ interface HarnessOptions {
   readonly project?: OrchestrationProjectShell | null;
   readonly readFailure?: PullRequestService.PullRequestError;
   readonly readState?: PullRequestSummary["state"];
+  readonly checksState?: PullRequestSummary["checksState"];
 }
 
 const makeHarness = Effect.fn("makePullRequestWatchHarness")(function* (
@@ -147,6 +148,7 @@ const makeHarness = Effect.fn("makePullRequestWatchHarness")(function* (
               headBranch: "feature",
               baseBranch: "main",
               updatedAt: "2026-08-20T00:00:00.000Z",
+              checksState: options.checksState,
             }),
     }),
     Layer.succeed(SecureRandom.SecureRandom, testCrypto),
@@ -164,20 +166,30 @@ const makeHarness = Effect.fn("makePullRequestWatchHarness")(function* (
 describe("PullRequestWatchService", () => {
   it.effect("links an unlinked watch even while the host has a transient read failure", () =>
     Effect.gen(function* () {
-      for (const options of [
-        {},
-        {
-          readFailure: new PullRequestOperationError({
-            operation: "summary",
-            detail: "The host is temporarily unavailable.",
-          }),
-        },
-      ]) {
+      // Checks that finished before the watch never wake it, so only pending ones go unmentioned.
+      for (const [options, checks, next] of [
+        [{}, undefined, false],
+        [{ checksState: "pending" }, "pending", false],
+        [{ checksState: "passing" }, "passing", true],
+        [{ checksState: "failing" }, "failing", true],
+        [
+          {
+            readFailure: new PullRequestOperationError({
+              operation: "summary",
+              detail: "The host is temporarily unavailable.",
+            }),
+          },
+          "unknown",
+          true,
+        ],
+      ] as const) {
         const harness = yield* makeHarness(options);
         const result = yield* harness.setWatching(true, {
           url: "https://github.com/t3tools/t3code/pull/9",
         });
         expect(result).toMatchObject({ number: 9, wasWatching: false });
+        expect(result.checks).toBe(checks);
+        expect(result.next !== undefined).toBe(next);
         expect(yield* Ref.get(harness.commands)).toMatchObject([
           {
             type: "thread.pull-request.watch",
