@@ -224,6 +224,7 @@ import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import * as ThreadSearch from "./orchestration-v2/ThreadSearch.ts";
 import * as ThreadSettlementService from "./orchestration-v2/ThreadSettlementService.ts";
 import * as IdleCompactionService from "./orchestration-v2/IdleCompactionService.ts";
+import * as CloudflareTimeoutRetryWorker from "./orchestration-v2/CloudflareTimeoutRetryWorker.ts";
 import * as ThreadPullRequestService from "./orchestration-v2/ThreadPullRequestService.ts";
 import * as ThreadIssueService from "./orchestration-v2/ThreadIssueService.ts";
 import * as RunFinalizationService from "./orchestration-v2/RunFinalizationService.ts";
@@ -703,6 +704,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   HeldHooksWaker.layer,
   layerThreadSettlementWorker,
   layerIdleCompactionWorker,
+  CloudflareTimeoutRetryWorker.layer,
   StorageCleanup.layer.pipe(Layer.provide(ProjectionStoreV2.layer)),
   DatabaseStorage.layer.pipe(
     Layer.provide(ProjectionMaintenance.layer),
