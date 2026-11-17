@@ -61,7 +61,11 @@ the model name it expects (`whisper-1` by default), and its API key, which is se
 Bearer token. The URL is posted to exactly as entered and must not redirect.
 The endpoint must reply with JSON such as `{"text": "…"}`. Your language, when it isn't
 **Auto**, goes along as `language`, and dictionary terms go along as `prompt`. The
-endpoint handles silence itself. Change the URL, model, or key later with the key button
+endpoint handles silence itself. If the service also offers realtime transcription,
+add its `wss://` **Streaming URL**: web and desktop then send audio while you speak, so
+the text is ready soon after you stop. Mobile still sends the finished recording.
+Clear the Streaming URL to go back to sending finished recordings everywhere.
+Change the URL, model, or key later with the key button
 next to **Transcribe with**, or under **Cloud provider** on mobile; **Remove endpoint** turns
 it off for everyone on that environment.
 

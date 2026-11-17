@@ -251,7 +251,11 @@ describe("ServerSettings secret providers", () => {
 
 describe("Whisper-compatible dictation endpoint", () => {
   it("defaults to no URL with whisper-1 and accepts only plain http(s) URLs", () => {
-    expect(decodeServerSettings({}).cloudSpeechWhisper).toEqual({ url: "", model: "whisper-1" });
+    expect(decodeServerSettings({}).cloudSpeechWhisper).toEqual({
+      url: "",
+      model: "whisper-1",
+      streamingUrl: "",
+    });
     for (const url of [
       "https://asr.example.com/v1/audio/transcriptions",
       "http://10.0.0.5:8080/v1/audio/transcriptions",
@@ -266,6 +270,18 @@ describe("Whisper-compatible dictation endpoint", () => {
       " https://asr.example.com/v1",
     ])
       expect(() => decodeServerSettingsPatch({ cloudSpeechWhisper: { url } })).toThrow();
+    const streamingUrl = "wss://asr.example.com/v1/realtime?intent=transcription";
+    expect(decodeServerSettingsPatch({ cloudSpeechWhisper: { streamingUrl } })).toEqual({
+      cloudSpeechWhisper: { streamingUrl },
+    });
+    for (const rejected of [
+      "ws://asr.example.com/v1/realtime",
+      "https://asr.example.com/v1/realtime",
+      "wss://user:pass@asr.example.com/v1/realtime",
+    ])
+      expect(() =>
+        decodeServerSettingsPatch({ cloudSpeechWhisper: { streamingUrl: rejected } }),
+      ).toThrow();
   });
 });
 
