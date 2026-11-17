@@ -399,7 +399,11 @@ function CommandPaletteDialog(props: {
             ? gt("Search project contents")
             : gt("Command palette")
       }
-      className={cn("overflow-hidden", props.mode === "content" && "h-105")}
+      className={cn(
+        // Pinned rows take list space, so the popup grows to the panel's own cap.
+        "overflow-hidden has-data-[slot=command-pinned-rows]:max-h-136",
+        props.mode === "content" && "h-105",
+      )}
       data-command-palette="true"
       data-palette-mode={props.mode}
       data-testid="command-palette"
