@@ -11,6 +11,7 @@ import {
   type OrchestrationV2CreationSource,
   type OrchestrationV2DelegatedFrom,
   type OrchestrationV2WorkflowOrigin,
+  type SuperThreadMember,
   type OrchestrationV2LinkOrigin,
   type OrchestrationV2ProviderThreadNativeMetadata,
   type OrchestrationV2ThreadProjection,
@@ -133,6 +134,7 @@ export interface ThreadLaunchInput {
   readonly workflowRun?: OrchestrationV2WorkflowOrigin;
   /** Only a person's launch sets this; MCP launches never do. */
   readonly superThread?: true;
+  readonly superThreadMemberOf?: SuperThreadMember;
 }
 
 type PreparationInput = Pick<
@@ -1589,6 +1591,9 @@ const make = Effect.gen(function* () {
                   : { delegatedFrom: input.delegatedFrom }),
                 ...(input.workflowRun === undefined ? {} : { workflowRun: input.workflowRun }),
                 ...(input.superThread === true ? { superThread: true } : {}),
+                ...(input.superThreadMemberOf === undefined
+                  ? {}
+                  : { superThreadMemberOf: input.superThreadMemberOf }),
                 createdBy: input.createdBy,
                 creationSource: input.creationSource,
                 ...(initialMessage === undefined

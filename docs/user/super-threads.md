@@ -44,6 +44,13 @@ it up on its own. Several that change while the agent is busy reach it together.
 linked machine, the agent hears when a run it started there ends, but not when that thread waits
 for you; the sidebar shows that.
 
+## Notifications
+
+Threads a super thread starts never notify you on the web, desktop or phone; what they do goes to
+the super thread's agent instead. The super thread notifies you when its turn ends and none of its
+threads are still working, or when one of them is waiting for your answer. While its threads work,
+a super thread that has ended its turn still shows as working.
+
 Select the header, or on mobile the super thread's row, to open its conversation, which works like
 any other thread. To see the goal and the task map beside it, select **Super thread** in the header
 or **Task map** in the thread details, or choose **Show goal and task map** in the command palette.
