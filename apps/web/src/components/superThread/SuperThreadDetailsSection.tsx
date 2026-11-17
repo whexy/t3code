@@ -51,7 +51,7 @@ export function SuperThreadDetailsSection(props: {
   const { threadRef } = props;
   const shell = useQuietThreadShell(threadRef);
   const detail = useQuietThreadProjection(threadRef);
-  if (shell?.source.superThread === undefined) return null;
+  if (shell?.source?.superThread === undefined) return null;
   const nodes = detail?.projection.thread.superThread?.map?.nodes ?? [];
   return (
     <ThreadDetailsSection
