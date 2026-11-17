@@ -124,7 +124,14 @@ const SuperThreadHeaderRow = memo(function SuperThreadHeaderRow(props: {
           }
         >
           <NetworkIcon aria-hidden className="size-4 shrink-0 text-icon-muted" />
-          <span className="min-w-0 flex-1 truncate text-sm font-medium text-sidebar-foreground/90">
+          <span
+            className={cn(
+              "min-w-0 flex-1 truncate text-sm font-medium text-sidebar-foreground/90",
+              // An open group has no count under the settle action, so the title makes the room.
+              !settled &&
+                "group-hover/project-folder:pe-5 group-has-[[data-sidebar-action-for]:focus]/project-folder:pe-5 pointer-coarse:pe-5",
+            )}
+          >
             {header.title}
           </span>
           {dot ? (
