@@ -8,6 +8,13 @@ export function cloudSpeechDisclosure(
   environment: string,
   resolve: MFunctionType = mFallback,
 ) {
+  if (provider === "whisper")
+    return resolve(
+      msg(
+        "After you stop, {environment} sends your recording and vocabulary hints, including project names, to the Whisper-compatible endpoint configured on {environment}.",
+        { environment },
+      ),
+    );
   return provider === "openrouter"
     ? resolve(
         msg(

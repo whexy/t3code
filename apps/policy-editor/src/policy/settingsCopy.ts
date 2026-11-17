@@ -48,7 +48,16 @@ export const SETTINGS_COPY: ReadonlyArray<SettingCopy> = [
     group: "Transcription",
     title: "Cloud API keys",
     description:
-      "Keys for transcribing with OpenAI, xAI, or OpenRouter on this environment. Anyone with dictation access to it can bill these keys. Hosts fetch policies from a public URL, so name a secret instead of writing a key here.",
+      "Keys for transcribing with OpenAI, xAI, OpenRouter, or a Whisper-compatible endpoint on this environment. Anyone with dictation access to it can bill these keys. Hosts fetch policies from a public URL, so name a secret instead of writing a key here.",
+    control: "json",
+  },
+  {
+    path: "cloudSpeechWhisper",
+    section: "/settings/voice",
+    group: "Transcription",
+    title: "Whisper-compatible endpoint",
+    description:
+      "The full URL this environment posts recordings to, and the model it names. An empty URL turns the provider off; its key is cloudSpeechCredentials.whisper.",
     control: "json",
   },
   {
