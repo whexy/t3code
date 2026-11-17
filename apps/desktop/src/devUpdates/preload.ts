@@ -15,6 +15,7 @@ if (available) {
   contextBridge.exposeInMainWorld(BRIDGE_GLOBAL, {
     getState: () => ipcRenderer.invoke(Channels.DEV_UPDATES_GET_STATE_CHANNEL),
     setEnabled: (enabled) => ipcRenderer.invoke(Channels.DEV_UPDATES_SET_ENABLED_CHANNEL, enabled),
+    reload: () => ipcRenderer.invoke(Channels.DEV_UPDATES_RELOAD_CHANNEL),
   } satisfies DevUpdatesBridge);
 
   // React replaces #boot-shell when the app mounts; apps/web's showBootError fills it with
