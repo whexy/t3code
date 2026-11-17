@@ -54,6 +54,17 @@ Vocabulary hints are not sent to OpenRouter; dictionary spellings are applied
 after transcription. If OpenRouter stops listing your model, dictation stops
 until you choose another.
 
+**Whisper-compatible** sends recordings to your own transcription service, as long as it
+accepts OpenAI's `POST /v1/audio/transcriptions` request. When you enable it, enter the
+service's full endpoint URL, such as `https://asr.example.com/v1/audio/transcriptions`,
+the model name it expects (`whisper-1` by default), and its API key, which is sent as a
+Bearer token. The URL is posted to exactly as entered and must not redirect.
+The endpoint must reply with JSON such as `{"text": "…"}`. Your language, when it isn't
+**Auto**, goes along as `language`, and dictionary terms go along as `prompt`. The
+endpoint handles silence itself. Change the URL, model, or key later with the key button
+next to **Transcribe with**, or under **Cloud provider** on mobile; **Remove endpoint** turns
+it off for everyone on that environment.
+
 ## Set up a model
 
 In **Settings → Voice → Transcription**, download a model and choose **Use model** if it

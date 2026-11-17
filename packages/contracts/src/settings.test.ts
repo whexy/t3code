@@ -249,6 +249,26 @@ describe("ServerSettings secret providers", () => {
   });
 });
 
+describe("Whisper-compatible dictation endpoint", () => {
+  it("defaults to no URL with whisper-1 and accepts only plain http(s) URLs", () => {
+    expect(decodeServerSettings({}).cloudSpeechWhisper).toEqual({ url: "", model: "whisper-1" });
+    for (const url of [
+      "https://asr.example.com/v1/audio/transcriptions",
+      "http://10.0.0.5:8080/v1/audio/transcriptions",
+    ])
+      expect(decodeServerSettingsPatch({ cloudSpeechWhisper: { url } })).toEqual({
+        cloudSpeechWhisper: { url },
+      });
+    for (const url of [
+      "asr.example.com/v1/audio/transcriptions",
+      "ftp://asr.example.com/upload",
+      "https://user:pass@asr.example.com/v1",
+      " https://asr.example.com/v1",
+    ])
+      expect(() => decodeServerSettingsPatch({ cloudSpeechWhisper: { url } })).toThrow();
+  });
+});
+
 describe("custom model settings", () => {
   const capabilities = {
     optionDescriptors: [
