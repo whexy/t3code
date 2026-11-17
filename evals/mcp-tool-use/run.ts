@@ -66,6 +66,7 @@ import {
   CHILD_PULL_REQUEST_REPORT_NEXT,
   PullRequestsToolkit,
 } from "../../apps/server/src/mcp/toolkits/pullRequests/tools.ts";
+import { pullRequestWatchStartResult } from "../../apps/server/src/pullRequest/pullRequestWatchStart.ts";
 import { SuperThreadToolkit } from "../../apps/server/src/mcp/toolkits/superThread/tools.ts";
 import { ThreadWaitAnyToolkit } from "../../apps/server/src/mcp/toolkits/threadWaitAny/tools.ts";
 import { superThreadRoleContext } from "../../apps/server/src/superThread/superThreadRole.ts";
@@ -1395,6 +1396,14 @@ const unsavedSecretNote = (Contracts as Record<string, unknown>).SECRET_REQUEST_
   | Readonly<Record<string, string>>
   | undefined;
 
+const isChecksState = Schema.is(Contracts.PullRequestChecksState);
+
+/** A watch mock names only the checks it started on; T3's own wording follows from them. */
+const watchStartFields = (checks: unknown) =>
+  checks === undefined
+    ? {}
+    : pullRequestWatchStartResult(isChecksState(checks) ? { checksState: checks } : null);
+
 /** Fields T3 adds to real thread and task results, applied to mocks and defaults alike. */
 const withProductFields = (name: string, value: unknown, child: boolean): unknown => {
   if (!isRecord(value)) return value;
@@ -1440,6 +1449,8 @@ const withProductFields = (name: string, value: unknown, child: boolean): unknow
     case "link_pull_request":
     case "link_pull_requests":
       return child ? { ...value, next: CHILD_PULL_REQUEST_REPORT_NEXT } : value;
+    case "watch_pull_request":
+      return { ...value, ...watchStartFields(value.checks) };
     default:
       return value;
   }

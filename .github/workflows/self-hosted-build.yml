@@ -15,8 +15,10 @@
 #
 # Images get `sha-<12 hex>` and `1.2.<run_number>`, so the version only grows.
 # Retry with workflow_dispatch on the branch head, never "Re-run": a re-run
-# reuses run_number, so the publishing jobs refuse it. Never rename this file:
-# run_number counts per workflow file, and a new name restarts 1.2.N.
+# reuses run_number, so the publishing jobs refuse it. The one exception is a
+# failed ios-testflight: "Re-run failed jobs" uploads it as build
+# <run_number>.<attempt>. Never rename this file: run_number counts per
+# workflow file, and a new name restarts 1.2.N.
 name: self-hosted-build
 
 on:
@@ -640,16 +642,22 @@ jobs:
 
   # The preview app signed for the fork's Apple team (apps/mobile/forkIos.ts),
   # uploaded to TestFlight as 1.2.<run_number>, which is also its OTA runtime
-  # version, so an update reaches only the build it was checked against.
+  # version, so an update reaches only the build it was checked against. A
+  # re-run keeps that version and uploads build <run_number>.<attempt>.
   # Archiving signs with the Development identity and profiles Xcode makes
   # through the API key; the export re-signs with Distribution and the App
   # Store profiles that scripts/self-hosted/ios-profiles.ts installs. Without
   # the signing secrets the job only says so and succeeds. The archive is the
   # run's longest leg, so it starts with the run; only the upload waits for a
   # successful gate.
+  #
+  # The repository variable IOS_RUNNER picks the runner as JSON, such as
+  # ["self-hosted","t3-testflight"] for sheridan (dotfiles'
+  # services.t3codeRunner, which keeps the build's caches); unset is GitHub's
+  # xcode-27.
   ios-testflight:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/self-hosted-nightly'
-    runs-on: xcode-27
+    runs-on: ${{ fromJSON(vars.IOS_RUNNER || '"xcode-27"') }}
     timeout-minutes: 120
     permissions:
       actions: read
@@ -661,7 +669,7 @@ jobs:
       EXPO_NO_GIT_STATUS: "1"
       NODE_OPTIONS: --max-old-space-size=8192
       T3CODE_FORK_IOS: "1"
-      T3CODE_FORK_IOS_BUILD_NUMBER: ${{ github.run_number }}
+      T3CODE_FORK_IOS_BUILD_NUMBER: ${{ github.run_attempt == '1' && github.run_number || format('{0}.{1}', github.run_number, github.run_attempt) }}
       T3CODE_FORK_IOS_RUNTIME_VERSION: 1.2.${{ github.run_number }}
       T3CODE_MOBILE_VERSION: 1.2.${{ github.run_number }}
     steps:
@@ -696,7 +704,18 @@ jobs:
       - name: Install
         if: steps.secrets.outputs.present == 'true'
         run: |
-          sudo xcode-select -s /Applications/Xcode_27.1.app
+          # GitHub's image names it Xcode_27.1.app, Xcodes names it Xcode-27.1.0.app.
+          xcodes=(/Applications/Xcode[_-]27.1*.app)
+          [[ -d "${xcodes[0]}" ]] || { echo "::error::No Xcode 27.1 in /Applications."; exit 1; }
+          echo "DEVELOPER_DIR=${xcodes[0]}/Contents/Developer" >> "$GITHUB_ENV"
+          if [[ "$RUNNER_ENVIRONMENT" == self-hosted ]]; then
+            free="$(df -Pk "$GITHUB_WORKSPACE" | awk 'NR == 2 { print int($4 / 1048576) }')"
+            echo "disk: ${free} GiB free"
+            if ((free < 10)); then
+              echo "::error::Only ${free} GiB free on the runner; the archive needs about 10."
+              exit 1
+            fi
+          fi
           vp install --lockfile-only
           vp install --frozen-lockfile --filter=@t3tools/mobile...
 
@@ -715,8 +734,9 @@ jobs:
           echo "start=$(date +%s)" >> "$GITHUB_OUTPUT"
           echo "xcode=$(xcodebuild -version | tr -s ' \n' '-' | sed 's/-$//')" >> "$GITHUB_OUTPUT"
 
+      # A self-hosted runner keeps ~/.ccache itself.
       - name: Restore ccache
-        if: steps.secrets.outputs.present == 'true'
+        if: steps.secrets.outputs.present == 'true' && runner.environment == 'github-hosted'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.ccache
@@ -748,6 +768,7 @@ jobs:
           printf '%s\n' "$ASC_PRIVATE_KEY" > "$RUNNER_TEMP/AuthKey_$ASC_KEY_ID.p8"
 
       - name: Archive
+        id: archive
         if: steps.secrets.outputs.present == 'true'
         working-directory: apps/mobile
         env:
@@ -768,14 +789,25 @@ jobs:
           ccache --zero-stats > /dev/null
           workspace="$(echo ios/*.xcworkspace)"
           # The share extension's target carries no team of its own.
-          xcodebuild archive -quiet \
-            -workspace "$workspace" -scheme "$(basename "$workspace" .xcworkspace)" \
-            -configuration Release -destination generic/platform=iOS \
-            -archivePath "$RUNNER_TEMP/T3Code.xcarchive" \
-            DEVELOPMENT_TEAM="$team" \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath "$RUNNER_TEMP/AuthKey_$ASC_KEY_ID.p8" \
-            -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+          archive() {
+            xcodebuild archive -quiet \
+              -workspace "$workspace" -scheme "$(basename "$workspace" .xcworkspace)" \
+              -configuration Release -destination generic/platform=iOS \
+              -archivePath "$RUNNER_TEMP/T3Code.xcarchive" \
+              DEVELOPMENT_TEAM="$team" \
+              -allowProvisioningUpdates \
+              -authenticationKeyPath "$RUNNER_TEMP/AuthKey_$ASC_KEY_ID.p8" \
+              -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+              2>&1 | tee "$RUNNER_TEMP/archive.log"
+          }
+          # Provisioning asks Apple before anything compiles, and Apple sometimes
+          # times out; one more try is cheap next to a whole new run.
+          if ! archive; then
+            grep -qE 'The request timed out|unexpected status code: 5' "$RUNNER_TEMP/archive.log" || exit 1
+            echo "::warning::Apple's provisioning service failed; archiving again in 60s."
+            sleep 60
+            archive
+          fi
           built="$(/usr/libexec/PlistBuddy -c 'Print :EXUpdatesRuntimeVersion' "$RUNNER_TEMP"/T3Code.xcarchive/Products/Applications/*.app/Expo.plist)"
           if [[ "$built" != "$T3CODE_FORK_IOS_RUNTIME_VERSION" ]]; then
             echo "::error::The archive's runtime version is $built, not $T3CODE_FORK_IOS_RUNTIME_VERSION; no over-the-air update would reach it."
@@ -801,6 +833,8 @@ jobs:
       - id: current
         if: steps.gate.outputs.passed == 'true'
         uses: ./.github/actions/self-hosted-current
+        with:
+          allow-rerun: "true"
 
       - name: Upload to TestFlight
         id: upload
@@ -811,22 +845,45 @@ jobs:
         run: |
           ASC_KEY_PATH="$RUNNER_TEMP/AuthKey_$ASC_KEY_ID.p8" \
             node scripts/self-hosted/ios-profiles.ts "$RUNNER_TEMP/T3Code.xcarchive" "$RUNNER_TEMP/ExportOptions.plist"
-          xcodebuild -exportArchive \
-            -archivePath "$RUNNER_TEMP/T3Code.xcarchive" \
-            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
-            -exportPath "$RUNNER_TEMP/export" \
-            -authenticationKeyPath "$RUNNER_TEMP/AuthKey_$ASC_KEY_ID.p8" \
-            -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+          # App Store Connect answers 500 now and then, before or during the
+          # upload. Once it has said "Upload succeeded" the build is in, and
+          # sending it again would only be refused as a duplicate.
+          for delay in 30 60 120 0; do
+            rm -rf "$RUNNER_TEMP/export"
+            if xcodebuild -exportArchive \
+              -archivePath "$RUNNER_TEMP/T3Code.xcarchive" \
+              -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+              -exportPath "$RUNNER_TEMP/export" \
+              -authenticationKeyPath "$RUNNER_TEMP/AuthKey_$ASC_KEY_ID.p8" \
+              -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+              2>&1 | tee "$RUNNER_TEMP/export.log"; then
+              break
+            fi
+            grep -q 'Upload succeeded' "$RUNNER_TEMP/export.log" && break
+            ((delay > 0)) || exit 1
+            echo "::warning::The export or upload failed; trying again in ${delay}s."
+            sleep "$delay"
+          done
           echo "fingerprint=$IOS_FINGERPRINT" >> "$GITHUB_OUTPUT"
           echo "testflight: $T3CODE_MOBILE_VERSION ($T3CODE_FORK_IOS_BUILD_NUMBER) fingerprint $IOS_FINGERPRINT" >> "$GITHUB_STEP_SUMMARY"
 
+      # A self-hosted runner outlives the job, so the keychain and key must not.
+      - name: Remove signing credentials
+        if: always() && steps.secrets.outputs.present == 'true'
+        run: |
+          security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true
+          rm -f "$RUNNER_TEMP"/AuthKey_*.p8
+
       # A hit refreshes an entry's mtime, so evicting everything older than this
-      # job keeps exactly what this archive used and the cache never outgrows one build.
+      # job keeps exactly what this archive used and the cache never outgrows one
+      # build. An archive that failed used nothing, so it keeps the cache whole.
       - name: Trim ccache
         if: ${{ !cancelled() && steps.ccache.outcome == 'success' }}
         env:
           START: ${{ steps.ccache.outputs.start }}
+          ARCHIVED: ${{ steps.archive.outcome == 'success' }}
         run: |
+          ccache --show-stats
           {
             echo '<details><summary>ccache</summary>'
             echo
@@ -835,10 +892,12 @@ jobs:
             echo '```'
             echo '</details>'
           } >> "$GITHUB_STEP_SUMMARY"
-          ccache --evict-older-than "$(($(date +%s) - START + 60))s"
+          if [[ "$ARCHIVED" == true ]]; then
+            ccache --evict-older-than "$(($(date +%s) - START + 60))s"
+          fi
 
       - name: Save ccache
-        if: ${{ !cancelled() && steps.ccache.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.ccache.outcome == 'success' && runner.environment == 'github-hosted' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.ccache

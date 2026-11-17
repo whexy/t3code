@@ -263,6 +263,9 @@ function CloudChoices({ environment, active, onClose }: Props & { onClose: () =>
         <WhisperVoiceEditor
           environment={environment}
           ready={AsyncResult.isSuccess(keys) && keys.value?.whisper === true}
+          hasKey={
+            AsyncResult.isSuccess(keys) && (keys.value?.whisperKey ?? keys.value?.whisper) === true
+          }
           enable={editing.enable}
           canManage={canManage}
           onSaved={() => {
@@ -327,16 +330,22 @@ function CloudChoices({ environment, active, onClose }: Props & { onClose: () =>
                     : isActive && routed
                       ? `${activeModel} · Tap to change model${canManage ? " or key" : ""}`
                       : isActive && key && canManage
-                        ? "Tap to manage key"
+                        ? provider === "whisper"
+                          ? "Tap to manage endpoint"
+                          : "Tap to manage key"
                         : key
                           ? routed
                             ? "API key saved · choose a model to use it"
-                            : "API key saved"
+                            : provider === "whisper"
+                              ? "Endpoint set up"
+                              : "API key saved"
                           : canManage
                             ? provider === "whisper"
                               ? "Set up an endpoint to use this provider"
                               : "Add an API key to use this provider"
-                            : "Ask an environment administrator to add an API key"
+                            : provider === "whisper"
+                              ? "Ask an environment administrator to set up an endpoint"
+                              : "Ask an environment administrator to add an API key"
                 }
                 onPress={() => {
                   if (routed) return edit(provider, !isActive);
