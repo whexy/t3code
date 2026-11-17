@@ -60,31 +60,35 @@ describe("describeDevUpdates", () => {
     });
   });
 
-  it.each<[string, DevUpdatesState, string]>([
-    ["off", state({}), "Running release 1.2.80. Turn on to get each build from dev."],
+  it.each<[string, DevUpdatesState, string, boolean]>([
+    ["off", state({}), "Running release 1.2.80. Turn on to get each build from dev.", false],
     [
       "turned off while a dev build runs",
       state({ running: bundle("abc1234def") }),
       "Running dev abc1234 on release 1.2.80. The next launch runs release 1.2.80.",
+      true,
     ],
     [
       "on, waiting for a download",
       state({ enabled: true }),
       "Running release 1.2.80. Dev builds download in the background and apply at the next launch.",
+      false,
     ],
     [
       "on with a newer build downloaded",
       state({ enabled: true, running: bundle("abc1234def"), pending: bundle("fed9876abc") }),
       "Running dev abc1234 on release 1.2.80. The next launch runs dev fed9876.",
+      true,
     ],
     [
       "on and current",
       state({ enabled: true, running: bundle("abc1234def") }),
       "Running dev abc1234 on release 1.2.80.",
+      false,
     ],
-  ])("desktop: %s", (_label, current, description) => {
+  ])("desktop: %s", (_label, current, description, offerReload) => {
     expect(
       describeDevUpdates({ kind: "desktop", state: current, enabledBeforeChange: false }),
-    ).toEqual({ description, offerReload: false });
+    ).toEqual({ description, offerReload });
   });
 });

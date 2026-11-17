@@ -23,6 +23,7 @@ interface DevUpdatesBackend {
   /** null when this server has no dev lane. */
   readonly getState: () => Promise<DevUpdatesState | null>;
   readonly setEnabled: (enabled: boolean) => Promise<DevUpdatesState>;
+  readonly reload: (() => Promise<void>) | undefined;
 }
 
 class DevUpdatesLoadError extends Schema.TaggedError<DevUpdatesLoadError>()("DevUpdatesLoadError", {
@@ -58,13 +59,19 @@ const hubBackend: DevUpdatesBackend = {
     if (state === null) throw new Error("This server has no dev updates.");
     return state;
   },
+  reload: async () => window.location.reload(),
 };
 
 export function resolveDevUpdatesBackend(): DevUpdatesBackend | null {
   if (typeof window === "undefined") return null;
   const desktop = window[DEV_UPDATES_DESKTOP_GLOBAL];
   if (desktop) {
-    return { kind: "desktop", getState: () => desktop.getState(), setEnabled: desktop.setEnabled };
+    return {
+      kind: "desktop",
+      getState: () => desktop.getState(),
+      setEnabled: desktop.setEnabled,
+      reload: desktop.reload,
+    };
   }
   // Only the hub image (scripts/self-hosted) is built with a shared catalog, so other
   // servers' web UIs never probe a path they do not serve.
@@ -95,4 +102,12 @@ export async function setDevUpdatesEnabled(enabled: boolean): Promise<void> {
   if (backend === null) return;
   await backend.setEnabled(enabled);
   appAtomRegistry.refresh(devUpdatesAtom);
+}
+
+export function canReloadDevUpdates(): boolean {
+  return resolveDevUpdatesBackend()?.reload !== undefined;
+}
+
+export async function reloadDevUpdates(): Promise<void> {
+  await resolveDevUpdatesBackend()?.reload?.();
 }
