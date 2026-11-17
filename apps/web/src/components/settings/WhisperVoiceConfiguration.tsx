@@ -176,6 +176,8 @@ export function WhisperVoiceConfiguration({
               <form
                 id={formId}
                 className="grid gap-3"
+                // The fields validate trimmed URLs; native url checks would block a stray space silently.
+                noValidate
                 onSubmit={(event) => {
                   event.preventDefault();
                   save();
