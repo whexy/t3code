@@ -11,13 +11,9 @@ function sharedCatalogError(operation: "load" | "save", detail: string) {
 }
 
 /**
- * Keeps the connection catalog on the serving origin so every browser behind it
- * shares one set of environments. Self-hosted builds opt in by setting
- * `VITE_SHARED_CATALOG_PATH`; see `scripts/self-hosted/server.ts` for the
- * matching endpoint.
- *
- * Writes carry the last ETag this page read. A 412 means another device saved
- * first, and this page must reload rather than overwrite that change.
+ * Keeps the catalog on the serving origin (`VITE_SHARED_CATALOG_PATH`, served by
+ * `scripts/self-hosted/server.ts`) so every browser behind it shares one set.
+ * Writes carry the last ETag read; a 412 means another device saved first.
  */
 export function makeSharedCatalogBackend(
   path: string,
