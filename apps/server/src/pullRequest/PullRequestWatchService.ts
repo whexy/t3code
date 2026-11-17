@@ -16,6 +16,10 @@ import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as PullRequestService from "./PullRequestService.ts";
 import {
+  type PullRequestWatchStart,
+  pullRequestWatchStartResult,
+} from "./pullRequestWatchStart.ts";
+import {
   resolveTarget,
   type PullRequestTarget,
   type PullRequestTargetError,
@@ -70,7 +74,10 @@ export class PullRequestWatchService extends Context.Service<
       readonly target: PullRequestTarget;
       readonly watching: boolean;
     }) => Effect.Effect<
-      ResolvedTarget & { readonly watching: boolean; readonly wasWatching: boolean },
+      ResolvedTarget & {
+        readonly watching: boolean;
+        readonly wasWatching: boolean;
+      } & PullRequestWatchStart,
       | PullRequestWatchFailedError
       | PullRequestNotOpenError
       | PullRequestWatchFromSubagentError
@@ -123,8 +130,9 @@ const make = Effect.gen(function* () {
     if (watching && before?.snapshot?.state === "merged") {
       return yield* new PullRequestNotOpenError({ state: "merged" });
     }
+    let started: PullRequestWatchStart = {};
     if (watching && before?.watch === undefined) {
-      yield* pullRequests
+      const summary = yield* pullRequests
         .summary(
           {
             projectId: thread.projectId,
@@ -136,16 +144,16 @@ const make = Effect.gen(function* () {
           { recoverTransientFailure: false, bypassCache: true },
         )
         .pipe(
-          Effect.flatMap((summary) =>
-            summary.state === "merged"
-              ? Effect.fail(new PullRequestNotOpenError({ state: "merged" }))
-              : Effect.void,
+          Effect.filterOrFail(
+            (summary) => summary.state !== "merged",
+            () => new PullRequestNotOpenError({ state: "merged" }),
           ),
           Effect.catchTags({
             // Host and transport errors can recover while the watch is active.
-            PullRequestOperationError: () => Effect.void,
+            PullRequestOperationError: () => Effect.succeed(null),
           }),
         );
+      started = pullRequestWatchStartResult(summary);
     }
     const uuid = yield* random.uuidV4().pipe(Effect.orDie);
     yield* engine
@@ -171,6 +179,7 @@ const make = Effect.gen(function* () {
       ...target,
       watching: watchedLink(after)?.watch !== undefined,
       wasWatching: before?.watch !== undefined,
+      ...started,
     };
   });
 
