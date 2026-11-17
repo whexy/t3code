@@ -32,6 +32,7 @@ import * as ThreadManagementService from "../../../orchestration-v2/ThreadManage
 import * as GitManager from "../../../git/GitManager.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
 import * as PullRequestWatchService from "../../../pullRequest/PullRequestWatchService.ts";
+import { PullRequestWatchStartFields } from "../../../pullRequest/pullRequestWatchStart.ts";
 import {
   PullRequestUrlInvalidError,
   PullRequestTargetIncompleteError,
@@ -263,6 +264,7 @@ export const WatchPullRequestResult = Schema.Struct({
     }),
   ),
   next: Schema.optional(Schema.String),
+  ...PullRequestWatchStartFields,
 });
 export type WatchPullRequestResult = typeof WatchPullRequestResult.Type;
 
