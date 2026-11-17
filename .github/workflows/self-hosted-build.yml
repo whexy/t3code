@@ -650,9 +650,14 @@ jobs:
   # the signing secrets the job only says so and succeeds. The archive is the
   # run's longest leg, so it starts with the run; only the upload waits for a
   # successful gate.
+  #
+  # The repository variable IOS_RUNNER picks the runner as JSON, such as
+  # ["self-hosted","t3-testflight"] for sheridan (dotfiles'
+  # services.t3codeRunner, which keeps the build's caches); unset is GitHub's
+  # xcode-27.
   ios-testflight:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/self-hosted-nightly'
-    runs-on: xcode-27
+    runs-on: ${{ fromJSON(vars.IOS_RUNNER || '"xcode-27"') }}
     timeout-minutes: 120
     permissions:
       actions: read
@@ -699,7 +704,18 @@ jobs:
       - name: Install
         if: steps.secrets.outputs.present == 'true'
         run: |
-          sudo xcode-select -s /Applications/Xcode_27.1.app
+          # GitHub's image names it Xcode_27.1.app, Xcodes names it Xcode-27.1.0.app.
+          xcodes=(/Applications/Xcode[_-]27.1*.app)
+          [[ -d "${xcodes[0]}" ]] || { echo "::error::No Xcode 27.1 in /Applications."; exit 1; }
+          echo "DEVELOPER_DIR=${xcodes[0]}/Contents/Developer" >> "$GITHUB_ENV"
+          if [[ "$RUNNER_ENVIRONMENT" == self-hosted ]]; then
+            free="$(df -Pk "$GITHUB_WORKSPACE" | awk 'NR == 2 { print int($4 / 1048576) }')"
+            echo "disk: ${free} GiB free"
+            if ((free < 10)); then
+              echo "::error::Only ${free} GiB free on the runner; the archive needs about 10."
+              exit 1
+            fi
+          fi
           vp install --lockfile-only
           vp install --frozen-lockfile --filter=@t3tools/mobile...
 
@@ -718,8 +734,9 @@ jobs:
           echo "start=$(date +%s)" >> "$GITHUB_OUTPUT"
           echo "xcode=$(xcodebuild -version | tr -s ' \n' '-' | sed 's/-$//')" >> "$GITHUB_OUTPUT"
 
+      # A self-hosted runner keeps ~/.ccache itself.
       - name: Restore ccache
-        if: steps.secrets.outputs.present == 'true'
+        if: steps.secrets.outputs.present == 'true' && runner.environment == 'github-hosted'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.ccache
@@ -751,6 +768,7 @@ jobs:
           printf '%s\n' "$ASC_PRIVATE_KEY" > "$RUNNER_TEMP/AuthKey_$ASC_KEY_ID.p8"
 
       - name: Archive
+        id: archive
         if: steps.secrets.outputs.present == 'true'
         working-directory: apps/mobile
         env:
@@ -849,13 +867,23 @@ jobs:
           echo "fingerprint=$IOS_FINGERPRINT" >> "$GITHUB_OUTPUT"
           echo "testflight: $T3CODE_MOBILE_VERSION ($T3CODE_FORK_IOS_BUILD_NUMBER) fingerprint $IOS_FINGERPRINT" >> "$GITHUB_STEP_SUMMARY"
 
+      # A self-hosted runner outlives the job, so the keychain and key must not.
+      - name: Remove signing credentials
+        if: always() && steps.secrets.outputs.present == 'true'
+        run: |
+          security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true
+          rm -f "$RUNNER_TEMP"/AuthKey_*.p8
+
       # A hit refreshes an entry's mtime, so evicting everything older than this
-      # job keeps exactly what this archive used and the cache never outgrows one build.
+      # job keeps exactly what this archive used and the cache never outgrows one
+      # build. An archive that failed used nothing, so it keeps the cache whole.
       - name: Trim ccache
         if: ${{ !cancelled() && steps.ccache.outcome == 'success' }}
         env:
           START: ${{ steps.ccache.outputs.start }}
+          ARCHIVED: ${{ steps.archive.outcome == 'success' }}
         run: |
+          ccache --show-stats
           {
             echo '<details><summary>ccache</summary>'
             echo
@@ -864,10 +892,12 @@ jobs:
             echo '```'
             echo '</details>'
           } >> "$GITHUB_STEP_SUMMARY"
-          ccache --evict-older-than "$(($(date +%s) - START + 60))s"
+          if [[ "$ARCHIVED" == true ]]; then
+            ccache --evict-older-than "$(($(date +%s) - START + 60))s"
+          fi
 
       - name: Save ccache
-        if: ${{ !cancelled() && steps.ccache.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.ccache.outcome == 'success' && runner.environment == 'github-hosted' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.ccache
