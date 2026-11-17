@@ -5,20 +5,56 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 
+import { FleetPairing } from "@t3tools/client-runtime/connection";
+
 import { check, pair } from "./access.ts";
 import { adminCss } from "./adminCss.ts";
+import { mintDevicePairing, redeemPairingLinks, type RedeemResult } from "./devicePairing.ts";
 import { renderPage, serverPath, type View } from "./adminView.ts";
-import {
-  addServer,
-  Registry,
-  removeServer,
-  repairServer,
-  setPublicUrl,
-  updateServer,
-} from "./registry.ts";
+import { Registry, removeServer, repairServer, setPublicUrl, updateServer } from "./registry.ts";
 
-const back = (path: string, message: { readonly notice: string } | { readonly error: string }) =>
-  HttpServerResponse.redirect(`${path}?${new URLSearchParams(message)}`, { status: 303 });
+const back = (path: string, message: { readonly notice?: string; readonly error?: string }) => {
+  const query = new URLSearchParams();
+  if (message.notice !== undefined) query.set("notice", message.notice);
+  if (message.error !== undefined) query.set("error", message.error);
+  return HttpServerResponse.redirect(`${path}?${query}`, { status: 303 });
+};
+
+class PairFormError extends Schema.TaggedError<PairFormError>()("PairFormError", {
+  message: Schema.String,
+}) {}
+
+/** One pairing link, or a `t3code://pair` bundle from T3 Code's "Pair a device". */
+function pairOutcome(results: ReadonlyArray<RedeemResult>) {
+  const done = results.flatMap((result) => (result._tag === "Failed" ? [] : [result]));
+  const failed = results.flatMap((result) => (result._tag === "Failed" ? [result] : []));
+  const only = results.length === 1 ? done[0] : undefined;
+  const added = done
+    .filter((result) => result._tag === "Added")
+    .map((result) => `${result.name} as "${result.id}"`);
+  const refreshed = done
+    .filter((result) => result._tag === "Refreshed")
+    .map((result) => `"${result.id}"`);
+  const notice =
+    only !== undefined
+      ? only._tag === "Added"
+        ? `Paired ${only.name} as "${only.id}".`
+        : `Refreshed the token for "${only.id}".`
+      : [
+          added.length === 0 ? "" : `Paired ${added.join(", ")}.`,
+          refreshed.length === 0 ? "" : `Refreshed the tokens for ${refreshed.join(", ")}.`,
+        ]
+          .filter((text) => text !== "")
+          .join(" ");
+  const error = failed.map((result) => `${result.name}: ${result.detail}`).join(" ");
+  return {
+    ...(done.length === 0 ? {} : { notice }),
+    ...(failed.length === 0
+      ? {}
+      : { error: results.length === 1 ? failed[0]!.detail : `Could not pair ${error}` }),
+    to: done.length === 0 ? "/pair" : only !== undefined ? serverPath(only.id) : "/",
+  };
+}
 
 /**
  * Runs one admin form submission and reports its outcome on a page: the
@@ -123,23 +159,38 @@ const routes = (mcpListen: string, css: string) => {
     HttpRouter.add(
       "POST",
       "/servers/pair",
-      submit(
+      HttpServerRequest.schemaBodyUrlParams(
         Schema.Struct({ link: Schema.String, id: Schema.optional(Schema.String) }),
-        () => "/pair",
-        (input) =>
+      ).pipe(
+        Effect.flatMap((input) =>
           Effect.gen(function* () {
-            const pairing = yield* pair(input.link);
-            const state = yield* (yield* Registry).update((current) =>
-              addServer(current, pairing, input.id?.trim() || undefined),
-            );
-            const added = state.servers.find(
-              (server) => server.environmentId === pairing.environmentId,
-            );
-            return {
-              notice: `Paired ${pairing.name} as "${added?.id}".`,
-              to: added === undefined ? "/" : serverPath(added.id),
-            };
+            const links = FleetPairing.readPairingBundle(input.link) ?? [input.link.trim()];
+            const id = input.id?.trim() || undefined;
+            if (id !== undefined && links.length > 1) {
+              return yield* new PairFormError({
+                message: "A server id applies only to a link for one server.",
+              });
+            }
+            const { to, ...message } = pairOutcome(yield* redeemPairingLinks(links, id));
+            return back(to, message);
           }),
+        ),
+        Effect.catch((error) =>
+          Effect.succeed(
+            back("/pair", {
+              error: error._tag === "PairFormError" ? error.message : "The form was incomplete.",
+            }),
+          ),
+        ),
+      ),
+    ),
+    HttpRouter.add("GET", "/devices", page(Effect.succeed({ kind: "device" } as const))),
+    // Rendered in place rather than redirected, so the links never sit in a URL or history.
+    HttpRouter.add(
+      "POST",
+      "/devices/pair",
+      page(
+        mintDevicePairing().pipe(Effect.map((pairing) => ({ kind: "device", pairing }) as const)),
       ),
     ),
     HttpRouter.add(

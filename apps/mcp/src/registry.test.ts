@@ -12,6 +12,7 @@ import {
   layer,
   removeServer,
   repairServer,
+  upsertServer,
   setPublicUrl,
   updateServer,
 } from "./registry.ts";
@@ -41,6 +42,17 @@ describe("server registry", () => {
     expect(ok(addServer(empty, pairing("env-a", "Mac Studio"), "studio")).servers[0]?.id).toBe(
       "studio",
     );
+    const twins = ok(
+      addServer(
+        ok(addServer(state, pairing("env-b", "Mac Studio"))),
+        pairing("env-c", "Mac Studio"),
+      ),
+    );
+    expect(twins.servers.map((server) => server.id)).toEqual([
+      "mac-studio",
+      "mac-studio-2",
+      "mac-studio-3",
+    ]);
   });
 
   it("refuses a second pairing of the same server or a taken id", () => {
@@ -69,6 +81,10 @@ describe("server registry", () => {
     expect(refreshed.servers).toEqual([
       expect.objectContaining({ id: "studio", token: "token-2", enabled: false }),
     ]);
+    expect(ok(upsertServer(disabled, pairing("env-a", "Studio", "token-2"), "other"))).toEqual(
+      refreshed,
+    );
+    expect(ok(upsertServer(disabled, pairing("env-b", "Laptop"))).servers[1]?.id).toBe("laptop");
   });
 
   it("renames, disables, and removes servers", () => {

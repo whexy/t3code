@@ -1,6 +1,8 @@
 import { AUTH_SCOPE_OPTIONS } from "@t3tools/shared/authScopeOptions";
+import { QrCode } from "@t3tools/shared/qrCode";
 
 import type { ServerHealth } from "./access.ts";
+import type { DevicePairing } from "./devicePairing.ts";
 import type { BridgeState, ServerRecord } from "./registry.ts";
 
 const DAY_MS = 86_400_000;
@@ -16,6 +18,7 @@ export type View =
   | { readonly kind: "server"; readonly server: ServerRecord; readonly health: ServerHealth }
   | { readonly kind: "missing"; readonly id: string }
   | { readonly kind: "pair" }
+  | { readonly kind: "device"; readonly pairing?: DevicePairing }
   | { readonly kind: "endpoint"; readonly mcpListen: string };
 
 export interface Shell {
@@ -163,6 +166,10 @@ function nav(state: BridgeState, view: View) {
       ${servers}
       ${navLink("/pair", "Pair a server", view.kind === "pair")}
     </ul>
+    <p class="${NAV_GROUP}">Devices</p>
+    <ul class="${NAV_LIST}">
+      ${navLink("/devices", "Pair a device", view.kind === "device")}
+    </ul>
     <p class="${NAV_GROUP}">Connection</p>
     <ul class="${NAV_LIST}">
       ${navLink("/endpoint", "MCP endpoint", view.kind === "endpoint")}
@@ -235,12 +242,93 @@ ${card(`<form method="post" action="/servers/update" class="space-y-3">
 const pairView = () => `${heading("Pair a server")}
 ${card(`<form method="post" action="/servers/pair" class="space-y-3">
     <div class="grid gap-3 sm:grid-cols-3">
-      <label class="${LABEL} sm:col-span-2">Pairing link <input class="${INPUT}" name="link" required placeholder="https://…/pair#token=…"></label>
+      <label class="${LABEL} sm:col-span-2">Pairing link <input class="${INPUT}" name="link" required placeholder="https://…/pair#token=… or t3code://pair?…"></label>
       <label class="${LABEL}">Server id (optional) <input class="${INPUT}" name="id" pattern="[a-z0-9][a-z0-9_-]*" placeholder="from the server's name"></label>
     </div>
-    <p class="${HINT}">In T3 Code, open Settings → Connections on that server and create a pairing link. Links work once and expire after a few minutes. The bridge asks only to view and operate tasks, read usage, and change source control, and tokens last 30 days.</p>
+    <p class="${HINT}">In T3 Code, create a pairing link under Settings → Connections on that server, or choose Pair a device under Settings → Environments for a link to every server at once. Links work once and expire after a few minutes. A server paired before gets the new token. Tokens last 30 days.</p>
+    <p class="${HINT}">The bridge takes every permission the link grants, so it can pair other devices. Its tools use only viewing and operating tasks, usage, and source control.</p>
     <div><button class="btn-solid">Pair</button></div>
   </form>`)}`;
+
+/** QR modules as one SVG path in the text color, on the white a camera needs. */
+function qrSvg(value: string, title: string) {
+  const qr = QrCode.encodeText(value, QrCode.Ecc.LOW);
+  const margin = 1;
+  let path = "";
+  for (let y = 0; y < qr.size; y++) {
+    for (let x = 0; x < qr.size; x++) {
+      if (qr.getModule(x, y)) path += `M${x + margin} ${y + margin}h1v1h-1z`;
+    }
+  }
+  const size = qr.size + margin * 2;
+  return `<svg role="img" viewBox="0 0 ${size} ${size}" class="h-auto w-full max-w-64 rounded-xl bg-white text-ink" shape-rendering="crispEdges"><title>${escape(title)}</title><path fill="currentColor" d="${path}"/></svg>`;
+}
+
+const SHOW_CODE =
+  "const all=[...document.querySelectorAll('[data-code]')];const i=all.findIndex(c=>!c.hidden)+Number(this.value);if(all[i]){all.forEach((c,j)=>c.hidden=j!==i)}";
+
+function devicePairing(pairing: DevicePairing, nowMs: number) {
+  const included = pairing.hosts.filter((host) => host._tag === "Minted");
+  const leftOut = pairing.hosts.flatMap((host) => (host._tag === "Unavailable" ? [host] : []));
+  const codes = pairing.codes;
+  const minutes =
+    pairing.expiresAtEpochMs === null
+      ? 0
+      : Math.max(1, Math.round((pairing.expiresAtEpochMs - nowMs) / 60_000));
+  const shown =
+    pairing.link === null
+      ? `<p class="font-semibold text-ink">No server could make a pairing link.</p>`
+      : `<div class="flex flex-col items-center gap-3">
+    ${codes.length > 1 ? `<p class="${HINT}">Scan each code in turn to add every server.</p>` : ""}
+    ${codes
+      .map(
+        (
+          code,
+          index,
+        ) => `<figure data-code ${index === 0 ? "" : "hidden"} class="flex w-full flex-col items-center gap-2">
+      ${qrSvg(code, codes.length > 1 ? `Pairing code ${index + 1} of ${codes.length}` : "Pairing code for every server listed")}
+      ${codes.length > 1 ? `<figcaption class="font-medium text-ink-glass">Code ${index + 1} of ${codes.length}</figcaption>` : ""}
+    </figure>`,
+      )
+      .join("")}
+    ${codes.length > 1 ? `<div class="flex gap-2"><button type="button" class="btn-glass" value="-1" onclick="${SHOW_CODE}">Previous</button><button type="button" class="btn-glass" value="1" onclick="${SHOW_CODE}">Next</button></div>` : ""}
+    <p class="text-center ${HINT}">Single use. Expires in ${minutes} minute${minutes === 1 ? "" : "s"}. Anyone with it can use every server listed.</p>
+    <div class="flex w-full gap-2">
+      <input id="device-link" readonly value="${escape(pairing.link)}" aria-label="Pairing link" class="${FIELD} font-mono">
+      <button type="button" class="btn-solid shrink-0 whitespace-nowrap" onclick="navigator.clipboard.writeText(document.getElementById('device-link').value).then(()=>{this.textContent='Copied';setTimeout(()=>{this.textContent='Copy link'},1500)})">Copy link</button>
+    </div>
+  </div>`;
+  const group = (title: string, rows: ReadonlyArray<string>) =>
+    rows.length === 0
+      ? ""
+      : `<div class="space-y-1.5 border-t border-black/5 pt-5">
+    <h2 class="${H2}">${title} <span class="font-sans text-sm font-normal text-ink-muted">· ${rows.length}</span></h2>
+    <ul class="space-y-1">${rows.join("")}</ul>
+  </div>`;
+  return `${shown}
+  ${group(
+    "Included",
+    included.map((host) => `<li>${serverName(host.server)}</li>`),
+  )}
+  ${group(
+    "Left out",
+    leftOut.map(
+      (host) =>
+        `<li>${serverName(host.server)} <span class="text-ink-muted">· ${escape(host.detail)}</span></li>`,
+    ),
+  )}`;
+}
+
+function serverName(server: ServerRecord) {
+  return `<span class="font-title font-medium text-ink-glass">${escape(server.name)}</span> <code class="font-mono text-xs text-ink-muted">${escape(server.id)}</code>`;
+}
+
+function deviceView(shell: Shell, pairing: DevicePairing | undefined) {
+  return `${heading("Pair a device")}
+${card(`<p class="${HINT}">Make one pairing link for every enabled server. Scan it with the T3 Code app on iPhone or iPad, or paste it into Add environment in T3 Code on another computer. The new device gets the permissions the bridge holds on each server.</p>
+  ${pairing === undefined ? "" : devicePairing(pairing, shell.nowMs)}
+  <form method="post" action="/devices/pair"><button class="${pairing === undefined ? "btn-solid" : "btn-glass"}">${pairing === undefined ? "Make pairing link" : "New link"}</button></form>`)}`;
+}
 
 function endpointView(shell: Shell, mcpListen: string) {
   const { state } = shell;
@@ -276,6 +364,8 @@ function content(shell: Shell, view: View) {
       return { title: "No such server", body: missingView(view.id) };
     case "pair":
       return { title: "Pair a server", body: pairView() };
+    case "device":
+      return { title: "Pair a device", body: deviceView(shell, view.pairing) };
     case "endpoint":
       return { title: "MCP endpoint", body: endpointView(shell, view.mcpListen) };
   }
