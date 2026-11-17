@@ -6,6 +6,7 @@ import { isDuoDevice } from "../../../lib/device-type";
 import { useDeviceType } from "../../../native/native-layout-metrics";
 import { createNativeHeaderMenu } from "../../../components/ui/nativeHeaderMenu.ios";
 import { useSettingsEnvironmentMenu } from "../../settings/components/SettingsEnvironmentFilterHeader";
+import { openSuperThread, useOpenSuperThreadKey } from "../../super-threads/superThreadLevel";
 import type { SearchBarCommands } from "react-native-screens";
 
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../../native/native-glass";
@@ -44,6 +45,7 @@ export function WorkspaceToolbar(props: {
     !workspace.settingsOpen &&
     workspace.state.selectedTab === "threads" &&
     activeNewTask === null;
+  const openSuperThreadKey = useOpenSuperThreadKey();
   const tabActive = use(NativeWorkspaceTabActivityContext)?.active ?? true;
   const focused = useIsFocused();
   const { layout, togglePrimarySidebar } = useAdaptiveWorkspaceLayout();
@@ -132,6 +134,22 @@ export function WorkspaceToolbar(props: {
       separateBackground
     />
   ) : null;
+  // The folded Duo's list has no room above it; its way out of a super thread is in the bar.
+  // A search lists matches flat, without the super thread, so it has nothing to leave.
+  const superThreadBack =
+    foldedSearch &&
+    !workspace.settingsOpen &&
+    workspace.state.selectedTab === "threads" &&
+    openSuperThreadKey !== null &&
+    tab.query.trim().length === 0 ? (
+      <Toolbar.Button
+        identifier="workspace-super-thread-back"
+        accessibilityLabel="Back to super threads"
+        icon="chevron.left"
+        onPress={() => openSuperThread(null)}
+        separateBackground
+      />
+    ) : null;
   const searchButton = foldedSearch ? (
     <Toolbar.Button
       identifier="workspace-search"
@@ -197,6 +215,8 @@ export function WorkspaceToolbar(props: {
           {searchButton}
           {nativeToolbarCompose && foldedSearch ? <Toolbar.Spacer width={8} /> : null}
           {composeButton}
+          {superThreadBack ? <Toolbar.Spacer width={8} /> : null}
+          {superThreadBack}
           {selectedTab !== "threads" ||
           isDuoDevice(deviceType) ||
           (deviceType === "pad" && layout.usesSplitView) ||
