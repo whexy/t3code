@@ -13,6 +13,7 @@ import {
   backgroundWorkHoldsCompletion,
   monitorHoldsWakeCompletion,
 } from "./orchestrationV2PendingBackgroundWork.ts";
+import { isSuperThreadMember } from "./superThreadAwareness.ts";
 
 export type AgentAwarenessPhase =
   | "starting"
@@ -96,20 +97,24 @@ export interface ProjectThreadAwarenessV2Input {
     | "pendingRuntimeRequest"
     | "settledOverride"
     | "status"
+    | "superThreadMemberOf"
     | "title"
     | "updatedAt"
   >;
   /** What a live subagent below this thread is waiting on the user for. */
   readonly pendingSubagentRequest?: SubagentRequestAwareness | null;
+  /** A super thread's members still work, so its completion is a pause (`superThreadMembersHoldCompletion`). */
+  readonly superThreadMembersHold?: boolean;
 }
 
 export function projectThreadAwarenessV2(
   input: ProjectThreadAwarenessV2Input,
 ): AgentAwarenessState | null {
   const { environmentId, project, thread } = input;
-  if (!isListedThreadLineage(thread.lineage)) return null;
+  if (!isListedThreadLineage(thread.lineage) || isSuperThreadMember(thread)) return null;
   const subagentRequest = input.pendingSubagentRequest ?? null;
-  const phase = resolveThreadAwarenessPhaseV2(thread, subagentRequest);
+  const resolved = resolveThreadAwarenessPhaseV2(thread, subagentRequest);
+  const phase = resolved === "completed" && input.superThreadMembersHold ? "running" : resolved;
   if (phase === null) {
     return null;
   }

@@ -54,6 +54,8 @@ export interface McpClientCaller {
   readonly narrowedTo?: ClientModes | undefined;
   /** A linked environment's thread this request is made for (`T3-Sender-Thread`). */
   readonly senderThread?: OrchestrationV2LinkedSender | undefined;
+  /** `senderThread` is a super thread there (`T3-Sender-Super-Thread`). */
+  readonly senderSuperThread?: boolean | undefined;
   /** An outside client's thread links go through this hosted app, as Copy thread's do. */
   readonly hostedAppUrl?: string | undefined;
 }
@@ -78,6 +80,12 @@ export const LINK_EXPIRES_AT_HEADER = "t3-link-expires-at";
  * it. Read only from a linked client.
  */
 export const SENDER_THREAD_HEADER = "t3-sender-thread";
+
+/**
+ * `T3-Sender-Super-Thread: 1` marks the sender thread as a super thread, so a thread it launches
+ * here is recorded as its member and stays quiet. A separate header, so older peers ignore it.
+ */
+export const SENDER_SUPER_THREAD_HEADER = "t3-sender-super-thread";
 
 export interface ClientModes {
   readonly runtimeMode: RuntimeMode;

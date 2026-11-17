@@ -16,6 +16,13 @@ export const SuperThreadMember = Schema.Struct({
 });
 export type SuperThreadMember = typeof SuperThreadMember.Type;
 
+/**
+ * On a thread a super thread launched, possibly from a linked environment: that super thread.
+ * The super thread is woken for each of the member's outcomes, so the member never alerts the
+ * user itself.
+ */
+export const SuperThreadMemberOf = SuperThreadMember;
+
 /** One run of a member. */
 export const SuperThreadMemberRun = Schema.Struct({
   ...SuperThreadMember.fields,

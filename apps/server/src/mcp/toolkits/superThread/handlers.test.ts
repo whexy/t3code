@@ -13,6 +13,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   RunId,
+  type SuperThreadMember,
   ThreadId,
 } from "@t3tools/contracts";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
@@ -74,17 +75,21 @@ const scopeOf = (threadId: ThreadId): McpInvocationContext.McpInvocationScope =>
 
 type Step =
   | { readonly kind: "dispatch"; readonly command: OrchestrationV2ServerCommand }
-  | { readonly kind: "launch"; readonly threadId: ThreadId | undefined }
+  | {
+      readonly kind: "launch";
+      readonly threadId: ThreadId | undefined;
+      readonly superThreadMemberOf?: SuperThreadMember | undefined;
+    }
   | {
       readonly kind: "forward";
       readonly environmentId: EnvironmentId;
       readonly clientRequestId?: string | undefined;
     };
 
-const toolHarness = (caller: ThreadId, linkedFails = false) => {
+const toolHarness = (caller: ThreadId, linkedFails = false, scope = scopeOf(caller)) => {
   const steps: Array<Step> = [];
   const dependencies = Layer.mergeAll(
-    Layer.succeed(McpInvocationContext.McpInvocationContext, scopeOf(caller)),
+    Layer.succeed(McpInvocationContext.McpInvocationContext, scope),
     Layer.mock(ThreadManagement.ThreadManagementService)({
       getThreadShell: (threadId) =>
         Effect.succeed(threadId === caller ? callerShell(caller) : null),
@@ -97,7 +102,13 @@ const toolHarness = (caller: ThreadId, linkedFails = false) => {
     Layer.mock(ThreadLaunch.ThreadLaunchService)({
       checkWorktreeBase: () => Effect.void,
       launch: (launch) => {
-        steps.push({ kind: "launch", threadId: launch.threadId });
+        steps.push({
+          kind: "launch",
+          threadId: launch.threadId,
+          ...(launch.superThreadMemberOf === undefined
+            ? {}
+            : { superThreadMemberOf: launch.superThreadMemberOf }),
+        });
         return Effect.succeed({
           threadId: launch.threadId,
           projection: {
@@ -155,6 +166,7 @@ const toolHarness = (caller: ThreadId, linkedFails = false) => {
   const launch = (params: {
     readonly clientRequestId?: string;
     readonly environmentId?: EnvironmentId;
+    readonly modelSelection?: { readonly instanceId: ProviderInstanceId; readonly model: string };
   }) =>
     Effect.flatMap(ProjectToolkit, (toolkit) =>
       toolkit
@@ -187,11 +199,17 @@ it.effect("a super thread records a thread it launches here before the launch st
     yield* launch({ clientRequestId: "child-1" });
     yield* launch({ clientRequestId: "child-1" });
     const childId = steps.flatMap((step) => (step.kind === "launch" ? [step.threadId!] : []))[0]!;
+    // The member is stamped with its super thread, so it never alerts the user itself.
+    const launched = {
+      kind: "launch",
+      threadId: childId,
+      superThreadMemberOf: { environmentId: here, threadId: superThreadId },
+    };
     expect(steps).toEqual([
       recorded(superThreadId, here, childId),
-      { kind: "launch", threadId: childId },
+      launched,
       recorded(superThreadId, here, childId),
-      { kind: "launch", threadId: childId },
+      launched,
     ]);
     // The retry sends the same record, which the orchestrator replays from its receipt.
     const records = steps.flatMap((step) => (step.kind === "dispatch" ? [step.command] : []));
@@ -260,8 +278,46 @@ it.effect("an ordinary thread's launches, here or linked, record nothing", () =>
     const { steps, launch } = toolHarness(ordinaryThreadId);
     yield* launch({});
     yield* launch({ environmentId: box });
-    expect(steps.map((step) => step.kind)).toEqual(["launch", "forward"]);
+    expect(steps).toEqual([
+      { kind: "launch", threadId: expect.any(String) },
+      expect.objectContaining({ kind: "forward" }),
+    ]);
   }),
+);
+
+it.effect(
+  "a thread a linked environment's super thread launches here is that super thread's member",
+  () =>
+    Effect.gen(function* () {
+      const sender = { environmentId: box, threadId: superThreadId, title: "Coordinator" };
+      const linkedScope = (
+        senderSuperThread: boolean,
+      ): McpInvocationContext.McpInvocationScope => ({
+        ...scopeOf(ordinaryThreadId),
+        thread: undefined,
+        client: {
+          sessionId: "link:a",
+          label: "A",
+          access: "full-access",
+          linked: true,
+          senderThread: sender,
+          ...(senderSuperThread ? { senderSuperThread: true } : {}),
+        },
+      });
+      const modelSelection = { instanceId: codex, model: "gpt-5" };
+      const fromSuper = toolHarness(ordinaryThreadId, false, linkedScope(true));
+      yield* fromSuper.launch({ modelSelection });
+      expect(fromSuper.steps).toEqual([
+        {
+          kind: "launch",
+          threadId: expect.any(String),
+          superThreadMemberOf: { environmentId: box, threadId: superThreadId },
+        },
+      ]);
+      const fromOrdinary = toolHarness(ordinaryThreadId, false, linkedScope(false));
+      yield* fromOrdinary.launch({ modelSelection });
+      expect(fromOrdinary.steps).toEqual([{ kind: "launch", threadId: expect.any(String) }]);
+    }),
 );
 
 it.effect("only a super thread can update its task map", () =>
@@ -411,6 +467,14 @@ it.effect("create_threads records each thread before creating it, and delegate_t
         return record !== -1 && record < create;
       });
       expect(recordedBeforeCreate).toEqual([true, true]);
+      expect(
+        dispatched.flatMap((command) =>
+          command.type === "thread.create" ? [command.superThreadMemberOf] : [],
+        ),
+      ).toEqual([
+        { environmentId: here, threadId: superThreadId },
+        { environmentId: here, threadId: superThreadId },
+      ]);
 
       dispatched.length = 0;
       yield* service
