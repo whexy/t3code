@@ -3120,6 +3120,14 @@ const make = Effect.gen(function* () {
                   ...(parent.thread.linkOrigin === undefined
                     ? {}
                     : { linkOrigin: parent.thread.linkOrigin }),
+                  ...(parent.thread.superThread === undefined
+                    ? {}
+                    : {
+                        superThreadMemberOf: {
+                          environmentId: scope.environmentId,
+                          threadId: parent.thread.id,
+                        },
+                      }),
                   ...(initialMessage === undefined ? {} : { initialMessage }),
                 })
                 .pipe(

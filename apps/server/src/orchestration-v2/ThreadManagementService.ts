@@ -89,6 +89,7 @@ export function withCreationProvenance(
       const {
         linkOrigin: _linkOrigin,
         delegatedFrom: _delegatedFrom,
+        superThreadMemberOf: _superThreadMemberOf,
         initialMessage: _initialMessage,
         ...rest
       } = command;

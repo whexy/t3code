@@ -7,7 +7,29 @@ import {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 
+import type * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
 import type * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+
+/**
+ * The super thread a launch makes a member for: the calling thread here, or the sender a linked
+ * environment marked as one. A delegated task is that parent's subagent, not a member.
+ */
+export const launchingSuperThread = (
+  scope: Pick<McpInvocationContext.McpInvocationScope, "environmentId" | "client">,
+  caller: { readonly id: ThreadId; readonly superThread?: unknown } | undefined,
+  delegated = false,
+): SuperThreadMember | undefined => {
+  if (delegated) return undefined;
+  if (caller !== undefined) {
+    return caller.superThread === undefined
+      ? undefined
+      : { environmentId: scope.environmentId, threadId: caller.id };
+  }
+  const sender = scope.client?.senderThread;
+  return sender !== undefined && scope.client?.senderSuperThread === true
+    ? { environmentId: sender.environmentId, threadId: sender.threadId }
+    : undefined;
+};
 
 /**
  * Adds a thread the caller launched to its group when the caller is a super thread; any other
