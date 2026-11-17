@@ -3,7 +3,7 @@ import { useLegendListRef } from "~/hooks/useLegendListRef";
 import { type ResolvedKeybindingsConfig } from "@t3tools/contracts";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
 import { ChevronRightIcon } from "lucide-react";
-import { type ReactNode, type RefObject, useState } from "react";
+import { Fragment, type ReactNode, type RefObject, useState } from "react";
 import { T } from "gt-react";
 import { cn } from "~/lib/utils";
 import { textDirection } from "~/textDirection";
@@ -99,6 +99,7 @@ export function scrollCommandPaletteRowIntoView(
 
 interface CommandPaletteVirtualizedResultsProps extends Omit<CommandPaletteResultsProps, "groups"> {
   rows: ReadonlyArray<CommandPaletteRow>;
+  footerRows: ReadonlyArray<CommandPaletteRow>;
   listRef: RefObject<LegendListRef | null>;
 }
 
@@ -118,49 +119,59 @@ export function CommandPaletteVirtualizedResults(props: CommandPaletteVirtualize
   };
   const scrollRef = useLegendListRef(listRef, updateScrollFade);
 
-  if (props.rows.length === 0) {
+  if (props.rows.length === 0 && props.footerRows.length === 0) {
     return <CommandPaletteEmptyState {...props} />;
   }
 
+  const renderRow = (row: CommandPaletteRow) =>
+    row.kind === "label" ? (
+      <div className={row.first ? undefined : "pt-1.5"}>
+        <CommandListHeading>{row.label}</CommandListHeading>
+      </div>
+    ) : row.itemIndex === null ? (
+      <DisabledCommandPaletteResultRow item={row.item} />
+    ) : (
+      <CommandPaletteResultRow
+        index={row.itemIndex}
+        item={row.item}
+        keybindings={props.keybindings}
+        isActive={props.highlightedItemValue === row.item.value}
+        onExecuteItem={props.onExecuteItem}
+      />
+    );
+
   return (
     <CommandListVirtualized>
-      <LegendList<CommandPaletteRow>
-        ref={scrollRef}
-        data={props.rows}
-        initialScrollOffset={0}
-        keyExtractor={(row) => row.key}
-        getItemType={(row) => row.kind}
-        extraData={props.highlightedItemValue}
-        renderItem={({ item: row }) =>
-          row.kind === "label" ? (
-            <div className={row.first ? undefined : "pt-1.5"}>
-              <CommandListHeading>{row.label}</CommandListHeading>
-            </div>
-          ) : row.itemIndex === null ? (
-            <DisabledCommandPaletteResultRow item={row.item} />
-          ) : (
-            <CommandPaletteResultRow
-              index={row.itemIndex}
-              item={row.item}
-              keybindings={props.keybindings}
-              isActive={props.highlightedItemValue === row.item.value}
-              onExecuteItem={props.onExecuteItem}
-            />
-          )
-        }
-        estimatedItemSize={40}
-        drawDistance={400}
-        onLayout={updateScrollFade}
-        onScroll={updateScrollFade}
-        onReady={updateScrollFade}
-        // Legend counts style padding (not class padding) in its size, end state and row positions.
-        style={{ paddingTop: 8, paddingBottom: 8 }}
-        contentContainerClassName="px-2"
-        className={cn(
-          "min-h-0 scroll-py-6 overflow-x-hidden overscroll-y-contain [&::-webkit-scrollbar-track]:my-2",
-          getVirtualizedScrollFadeClassName(scrollFade),
-        )}
-      />
+      {props.rows.length > 0 ? (
+        <LegendList<CommandPaletteRow>
+          ref={scrollRef}
+          data={props.rows}
+          initialScrollOffset={0}
+          keyExtractor={(row) => row.key}
+          getItemType={(row) => row.kind}
+          extraData={props.highlightedItemValue}
+          renderItem={({ item: row }) => renderRow(row)}
+          estimatedItemSize={40}
+          drawDistance={400}
+          onLayout={updateScrollFade}
+          onScroll={updateScrollFade}
+          onReady={updateScrollFade}
+          // Legend counts style padding (not class padding) in its size, end state and row positions.
+          style={{ paddingTop: 8, paddingBottom: 8 }}
+          contentContainerClassName="px-2"
+          className={cn(
+            "min-h-0 scroll-py-6 overflow-x-hidden overscroll-y-contain [&::-webkit-scrollbar-track]:my-2",
+            getVirtualizedScrollFadeClassName(scrollFade),
+          )}
+        />
+      ) : null}
+      {props.footerRows.length > 0 ? (
+        <div className={cn("shrink-0 p-2", props.rows.length > 0 && "border-t border-border/70")}>
+          {props.footerRows.map((row) => (
+            <Fragment key={row.key}>{renderRow(row)}</Fragment>
+          ))}
+        </div>
+      ) : null}
     </CommandListVirtualized>
   );
 }
