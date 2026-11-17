@@ -70,17 +70,6 @@ function openFailure(error: Socket.SocketError) {
   );
 }
 
-/** Chunk transcripts arrive without separators; Latin words need a space between chunks. */
-function joinChunks(chunks: ReadonlyArray<string>) {
-  return chunks.reduce(
-    (text, chunk) =>
-      text && /[A-Za-z0-9]$/.test(text) && /^[A-Za-z0-9]/.test(chunk)
-        ? `${text} ${chunk}`
-        : text + chunk,
-    "",
-  );
-}
-
 function pcm16Base64(bytes: Uint8Array) {
   const samples = decodeSpeechPcm(bytes);
   const pcm = Buffer.alloc(samples.length * 2);
@@ -196,7 +185,8 @@ export const makeWhisperSpeechStream = Effect.fn("WhisperSpeechStream.start")(fu
       });
       byteLength += bytes.byteLength;
       yield* sendEvent({ type: "input_audio_buffer.append", audio });
-      const preview = applySpeechAliases(joinChunks(chunks), options.speechCustomWords);
+      // Deltas carry their own spacing; joined in order they are the transcript so far.
+      const preview = applySpeechAliases(chunks.join(""), options.speechCustomWords);
       const text: SpeechStreamText | null = preview ? { committed: preview, tentative: "" } : null;
       return { revision: chunks.length, text };
     }),
