@@ -350,3 +350,60 @@ it.each([
     );
   },
 );
+
+it.each([
+  { provider: "whisper", streamingUrl: true, live: true },
+  { provider: "whisper", streamingUrl: false, live: false },
+  { provider: "openai", streamingUrl: true, live: false },
+] as const)(
+  "streams cloud audio only for a Whisper grant, on its own socket: %j",
+  async ({ provider, streamingUrl, live }) => {
+    const sockets: string[] = [];
+    using _socket = stubGlobal(
+      "WebSocket",
+      class extends EventTarget {
+        constructor(url: string) {
+          super();
+          sockets.push(url);
+        }
+        close() {}
+      },
+    );
+    using _network = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const request = new Request(input, init);
+      if (request.url.endsWith("/api/voice/cloud/keys"))
+        return Response.json({
+          openai: true,
+          xai: false,
+          openrouter: false,
+          whisper: true,
+          whisperStreaming: streamingUrl,
+        });
+      if (request.url.includes("/api/auth/websocket-ticket/"))
+        return Response.json({ ticket: "stream-ticket", expiresAt: "2030-01-01T00:00:00.000Z" });
+      throw new Error(`Unexpected request: ${request.url}`);
+    });
+    const abort = new AbortController();
+    using _abort = { [Symbol.dispose]: () => abort.abort() };
+    const platform = createBrowserVoiceInputPlatform({
+      prepared,
+      cloudProvider: provider,
+      hasAudioConsent: () => true,
+      // The local models' streaming preference does not apply to cloud streaming.
+      getStreamingEnabled: () => false,
+      getTranscriptionOptions: () => DEFAULT_SPEECH_TRANSCRIPTION_OPTIONS,
+      getMicrophoneId: () => "",
+      onLevel() {},
+      onDurationLimit() {},
+      onText() {},
+      onError() {},
+    });
+    const transcription = await platform.transcriber.prepare({ signal: abort.signal });
+    expect(Boolean(transcription.streaming)).toBe(live);
+    expect(sockets).toEqual(
+      live
+        ? ["wss://transcription.example.test/ws/voice/cloud/whisper?wsTicket=stream-ticket"]
+        : [],
+    );
+  },
+);
