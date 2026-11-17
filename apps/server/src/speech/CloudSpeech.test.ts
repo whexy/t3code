@@ -54,6 +54,7 @@ it.effect.each(["openai", "xai"] as const)("sends only to %s using its own saved
       xai: true,
       openrouter: false,
       whisper: false,
+      whisperStreaming: false,
     });
     yield* Effect.flip(transcribe(new Uint8Array(3)));
     expect(upstream).not.toHaveBeenCalled();

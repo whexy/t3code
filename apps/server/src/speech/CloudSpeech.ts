@@ -139,6 +139,10 @@ export const layer = Layer.effect(
         xai: Boolean(xai),
         openrouter: Boolean(openrouter),
         whisper: Boolean(whisper) && Boolean(value.cloudSpeechWhisper.url),
+        whisperStreaming:
+          Boolean(whisper) &&
+          Boolean(value.cloudSpeechWhisper.url) &&
+          Boolean(value.cloudSpeechWhisper.streamingUrl),
       })),
     );
     const execute = (request: HttpClientRequest.HttpClientRequest) =>
