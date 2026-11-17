@@ -137,6 +137,7 @@ import { useScratchProject } from "../hooks/useScratchProject";
 import { useWorkflowEnvironmentIds } from "./workflows/useWorkflowEnvironmentIds";
 import {
   newSuperThreadPaletteAction,
+  superThreadPickerPaletteAction,
   superThreadPanelPaletteActions,
 } from "./superThread/superThreadPaletteAction";
 import { useStartTriage } from "../hooks/useStartTriage";
@@ -214,7 +215,6 @@ import {
   buildLinkedThreadActionItems,
   buildCommandPaletteRows,
   enumerateCommandPaletteItems,
-  newThreadNoProjectIndex,
   findHighlightedCommandPaletteItem,
   type CommandPaletteActionItem,
   type CommandPaletteOpenIntent,
@@ -336,7 +336,7 @@ function openIntentView(
   }
 }
 
-const NEW_THREAD_NO_PROJECT_VALUE = "new-thread-in:no-project";
+const NEW_THREAD_IN_PINNED_GROUP = "new-thread-in:pinned";
 
 export function CommandPalette({ children }: { children: ReactNode }) {
   useCommandPaletteMount();
@@ -925,77 +925,67 @@ function OpenCommandPaletteDialog(props: {
     true,
   );
 
+  const isScratch = (project: CommandPaletteProject) =>
+    isScratchProject(project, scratchWorkspaceRootFor(project.environmentId));
+  const currentEntry =
+    currentProjectId === null ? undefined : projectPickerEntries.find((entry) => entry.isPreferred);
   const openingOrderThreadItems = useOrderWhileOpen(
-    (() => {
-      const isScratch = (project: CommandPaletteProject) =>
-        isScratchProject(project, scratchWorkspaceRootFor(project.environmentId));
-      const currentEntry =
-        currentProjectId === null
-          ? undefined
-          : projectPickerEntries.find((entry) => entry.isPreferred);
-      const projectItems = buildNewThreadInProjectItems({
-        projects: pickerProjects.filter((project) => !isScratch(project)),
-        currentProjectKey: currentEntry
-          ? `${currentEntry.targetProject.environmentId}:${currentEntry.targetProject.id}`
-          : null,
-        projectGroupByTargetKey,
-        locationByEnvironmentId: projectEnvironmentLocationById,
-        pin: projectPin,
-        runProject: async (project) => {
-          const group = projectGroupByTargetKey.get(`${project.environmentId}:${project.id}`);
-          const contextualProjectIsEligible =
-            contextualProjectRef !== null &&
-            group?.memberProjects.some(
-              (member) =>
-                member.environmentId === contextualProjectRef.environmentId &&
-                member.id === contextualProjectRef.projectId &&
-                isPickableProjectMember(member),
-            );
-          await handleNewThread(
-            contextualProjectIsEligible
-              ? contextualProjectRef
-              : scopeProjectRef(project.environmentId, project.id),
+    buildNewThreadInProjectItems({
+      projects: pickerProjects.filter((project) => !isScratch(project)),
+      currentProjectKey: currentEntry
+        ? `${currentEntry.targetProject.environmentId}:${currentEntry.targetProject.id}`
+        : null,
+      projectGroupByTargetKey,
+      locationByEnvironmentId: projectEnvironmentLocationById,
+      pin: projectPin,
+      runProject: async (project) => {
+        const group = projectGroupByTargetKey.get(`${project.environmentId}:${project.id}`);
+        const contextualProjectIsEligible =
+          contextualProjectRef !== null &&
+          group?.memberProjects.some(
+            (member) =>
+              member.environmentId === contextualProjectRef.environmentId &&
+              member.id === contextualProjectRef.projectId &&
+              isPickableProjectMember(member),
           );
-        },
-      });
-      if (scratchTargetEnvironmentId === null) return projectItems;
-
-      const noProjectIndex = newThreadNoProjectIndex(
-        projectPickerEntries.map(({ group, targetProject, isPreferred }) => ({
-          isScratch: isScratchProject(
-            targetProject,
-            scratchWorkspaceRootFor(targetProject.environmentId),
-          ),
-          pinned: group.pinned,
-          isPreferred,
-        })),
-      );
-      return [
-        ...projectItems.slice(0, noProjectIndex),
-        {
-          kind: "action" as const,
-          value: NEW_THREAD_NO_PROJECT_VALUE,
-          searchTerms: ["no project", "without project", "none"],
-          title: gt("No project"),
-          icon: <MessageSquareDashedIcon className={ITEM_ICON_CLASS} />,
-          shortcutCommand: "chat.newWithoutProject" as const,
-          run: () => startScratchThread(scratchTargetEnvironmentId),
-        },
-        ...projectItems.slice(noProjectIndex),
-      ];
-    })(),
+        await handleNewThread(
+          contextualProjectIsEligible
+            ? contextualProjectRef
+            : scopeProjectRef(project.environmentId, project.id),
+        );
+      },
+    }),
     rowOrderKey("new-thread-in"),
     true,
   );
   // Root search suggestions copy these numbers; the picker renumbers its shown rows below.
-  const projectJumpItems = new Map(
-    enumerateCommandPaletteItems(
-      openingOrderThreadItems.filter((item) => item.value !== NEW_THREAD_NO_PROJECT_VALUE),
-    ).map((item) => [item.value, item] as const),
-  );
-  const projectThreadItems = openingOrderThreadItems.map(
-    (item) => projectJumpItems.get(item.value) ?? item,
-  );
+  const projectThreadItems = enumerateCommandPaletteItems(openingOrderThreadItems);
+  const newThreadInPinnedItems: CommandPaletteActionItem[] =
+    scratchTargetEnvironmentId === null
+      ? []
+      : [
+          {
+            kind: "action",
+            value: "new-thread-in:no-project",
+            searchTerms: ["no project", "without project", "none"],
+            title: gt("No project"),
+            icon: <MessageSquareDashedIcon className={ITEM_ICON_CLASS} />,
+            shortcutCommand: "chat.newWithoutProject",
+            run: () => startScratchThread(scratchTargetEnvironmentId),
+          },
+          superThreadPickerPaletteAction(scratchTargetEnvironmentId, handleNewThread),
+        ];
+  const newThreadInGroups = (
+    extraPinnedItems: ReadonlyArray<CommandPaletteActionItem>,
+  ): CommandPaletteGroup[] => [
+    { value: NEW_THREAD_IN_GROUP, label: gt("Projects"), items: projectThreadItems },
+    {
+      value: NEW_THREAD_IN_PINNED_GROUP,
+      label: "",
+      pinnedToBottom: true,
+      items: [...newThreadInPinnedItems, ...extraPinnedItems],
+    },
+  ];
 
   const {
     threadItems: allThreadItems,
@@ -1418,7 +1408,7 @@ function OpenCommandPaletteDialog(props: {
       title: gt("New thread in..."),
       icon: <SquarePenIcon className={ITEM_ICON_CLASS} />,
       addonIcon: <SquarePenIcon className={ADDON_ICON_CLASS} />,
-      groups: [{ value: NEW_THREAD_IN_GROUP, label: gt("Projects"), items: projectThreadItems }],
+      groups: newThreadInGroups([]),
     });
   }
 
@@ -1916,14 +1906,8 @@ function OpenCommandPaletteDialog(props: {
       : currentView?.groups[0]?.value === ADD_PROJECT_ENTRY_GROUP
         ? addProjectEntryGroups()
         : currentView?.groups[0]?.value === NEW_THREAD_IN_GROUP
-          ? [
-              {
-                value: NEW_THREAD_IN_GROUP,
-                label: gt("Projects"),
-                // Every project archived and no "No project" home leaves only adding one.
-                items: projectThreadItems.length > 0 ? projectThreadItems : [addProjectAction],
-              },
-            ]
+          ? // Add project stays out of the submenu's groups, which root search lists as "New thread in" rows.
+            newThreadInGroups([addProjectAction])
           : currentView?.groups[0]?.value.startsWith(PORT_FORWARD_GROUP_PREFIX) && portForwardItem
             ? portForwardItem.groups
             : currentView?.groups[0]?.value === "themes"
@@ -1983,12 +1967,7 @@ function OpenCommandPaletteDialog(props: {
     if (group.value !== NEW_THREAD_IN_GROUP) return group;
     const jumpItems = new Map(
       enumerateCommandPaletteItems(
-        group.items.filter(
-          (item): item is CommandPaletteActionItem =>
-            item.kind === "action" &&
-            item.value !== NEW_THREAD_NO_PROJECT_VALUE &&
-            item.value !== addProjectAction.value,
-        ),
+        group.items.filter((item): item is CommandPaletteActionItem => item.kind === "action"),
       ).map((item) => [item.value, item] as const),
     );
     return { ...group, items: group.items.map((item) => jumpItems.get(item.value) ?? item) };
@@ -3201,6 +3180,7 @@ function OpenCommandPaletteDialog(props: {
       <CommandPaletteThreadQueryContext value={threadSearchQuery}>
         <CommandPaletteVirtualizedResults
           rows={resultRows.rows}
+          footerRows={resultRows.footerRows}
           listRef={resultListRef}
           highlightedItemValue={highlightedItemValue}
           isActionsOnly={isActionsOnly}
