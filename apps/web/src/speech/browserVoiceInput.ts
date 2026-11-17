@@ -20,6 +20,8 @@ import { createBrowserPcmCapture } from "./browserPcmCapture";
 import { runEnvironmentSpeech } from "./runEnvironmentSpeech";
 
 const isVoiceTranscriptionError = Schema.is(VoiceTranscriptionError);
+// 150 ms: the cloud recognizer revises its live text about 0.7 s after each word.
+const CLOUD_STREAM_FRAME_SAMPLES = 2_400;
 
 export function createBrowserVoiceInputPlatform(input: {
   readonly prepared: PreparedConnection;
@@ -97,14 +99,17 @@ export function createBrowserVoiceInputPlatform(input: {
       return {
         locale,
         transcribe: transcribeRecording,
-        streaming: openSpeechStream({
-          url,
-          canSend: input.hasAudioConsent,
-          options: recordingOptions,
-          signal: options.signal,
-          onText: input.onText,
-          onError: (error) => input.onError(error.message),
-        }),
+        streaming: {
+          ...openSpeechStream({
+            url,
+            canSend: input.hasAudioConsent,
+            options: recordingOptions,
+            signal: options.signal,
+            onText: input.onText,
+            onError: (error) => input.onError(error.message),
+          }),
+          frameSamples: CLOUD_STREAM_FRAME_SAMPLES,
+        },
       };
     }
     const status = await runEnvironmentSpeech(getEnvironmentSpeechStatus(input.prepared), options);

@@ -9,7 +9,12 @@ import type * as NetAddress from "effect/net/NetAddress";
 import * as Socket from "effect/socket/Socket";
 import { expect } from "vite-plus/test";
 import * as ServerSettings from "../serverSettings.ts";
-import { makeWhisperSpeechStream } from "./whisperStream.ts";
+import {
+  applyUpstreamPreview,
+  EMPTY_WHISPER_PREVIEW,
+  makeWhisperSpeechStream,
+  whisperPreviewText,
+} from "./whisperStream.ts";
 
 type Upstream = {
   /** Events the endpoint received, in order. */
@@ -127,6 +132,7 @@ it.live("relays captured audio as PCM16 and corrects the final transcript like b
         session: {
           input_audio_format: "pcm16",
           input_audio_sample_rate: 16_000,
+          include_partials: true,
           language: "en",
           prompt: "Wenxuan",
         },
@@ -172,3 +178,43 @@ it.live("maps a refused key and an upstream rate limit, and needs a streaming UR
     expect(yield* Effect.flip(stream.finish)).toMatchObject({ reason: "rate-limit" });
   }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
 );
+
+it("previews partials in place of earlier text and falls back to deltas without them", () => {
+  const words = [{ term: "Wenxuan", aliases: ["when shuan"] }];
+  const partial = (text: string) => ({
+    type: "conversation.item.input_audio_transcription.partial",
+    text,
+  });
+  const delta = (text: string) => ({
+    type: "conversation.item.input_audio_transcription.delta",
+    delta: text,
+  });
+  const steps: ReadonlyArray<
+    [Parameters<typeof applyUpstreamPreview>[1], { committed: string; tentative: string } | null]
+  > = [
+    [{ type: "transcription_session.created" }, null],
+    [partial("hello when"), { committed: "", tentative: "hello when" }],
+    [partial("hello when shuan"), { committed: "", tentative: "hello Wenxuan" }],
+    // A revision may shorten the text; it still replaces the previous preview.
+    [partial("hello"), { committed: "", tentative: "hello" }],
+    [delta("hello world."), { committed: "hello world.", tentative: "" }],
+    [partial("hello world. next"), { committed: "hello world.", tentative: " next" }],
+    [partial("hallo world. next"), { committed: "", tentative: "hallo world. next" }],
+  ];
+  let preview = EMPTY_WHISPER_PREVIEW;
+  for (const [event, expected] of steps) {
+    const before = preview.revision;
+    preview = applyUpstreamPreview(preview, event);
+    expect(whisperPreviewText(preview, words)).toEqual(expected);
+    expect(preview.revision).toBeGreaterThanOrEqual(before);
+  }
+
+  let deltasOnly = EMPTY_WHISPER_PREVIEW;
+  for (const text of ["好，那我们", "现在开始", " and then"])
+    deltasOnly = applyUpstreamPreview(deltasOnly, delta(text));
+  expect(whisperPreviewText(deltasOnly, [])).toEqual({
+    committed: "好，那我们现在开始 and then",
+    tentative: "",
+  });
+  expect(deltasOnly.revision).toBe(3);
+});
