@@ -4,6 +4,7 @@ import {
   AuthSettingsWriteScope,
   CloudSpeechApiKey,
   CloudSpeechWhisperModel,
+  CloudSpeechWhisperStreamingUrl,
   CloudSpeechWhisperUrl,
   isSecretReference,
   type SecretReference,
@@ -38,6 +39,7 @@ import { SecretSourceInput, useSecretSources } from "./SecretSourceInput";
 
 const isApiKey = Schema.is(CloudSpeechApiKey);
 const isUrl = Schema.is(CloudSpeechWhisperUrl);
+const isStreamingUrl = Schema.is(CloudSpeechWhisperStreamingUrl);
 const isModel = Schema.is(CloudSpeechWhisperModel);
 const sameReference = (a: SettingsSecretValue, b: SettingsSecretValue) =>
   isSecretReference(a) &&
@@ -73,6 +75,7 @@ export function WhisperVoiceConfiguration({
   });
   const [url, setUrl] = useState(endpoint.url);
   const [model, setModel] = useState(endpoint.model);
+  const [streamingUrl, setStreamingUrl] = useState(endpoint.streamingUrl);
   const [key, setKey] = useState<string | SecretReference>(
     isSecretReference(storedKey) ? storedKey : "",
   );
@@ -85,19 +88,25 @@ export function WhisperVoiceConfiguration({
   const ready = AsyncResult.isSuccess(presence) ? presence.value?.whisper : undefined;
   const nextUrl = url.trim();
   const nextModel = model.trim();
+  const nextStreamingUrl = streamingUrl.trim();
+  const streamingUrlInvalid = !isStreamingUrl(nextStreamingUrl);
   const credential = typeof key === "string" ? key.trim() || undefined : key;
   const keyChanged = credential !== undefined && !sameReference(credential, storedKey);
   const keyReady =
     credential === undefined
       ? Boolean(ready)
       : keyValid && (typeof credential !== "string" || isApiKey(credential));
-  const endpointChanged = nextUrl !== endpoint.url || nextModel !== endpoint.model;
+  const endpointChanged =
+    nextUrl !== endpoint.url ||
+    nextModel !== endpoint.model ||
+    nextStreamingUrl !== endpoint.streamingUrl;
   const urlInvalid = nextUrl !== "" && !isUrl(nextUrl);
   const canSave =
     connected &&
     canManage &&
     nextUrl !== "" &&
     !urlInvalid &&
+    !streamingUrlInvalid &&
     isModel(nextModel) &&
     keyReady &&
     (!active || endpointChanged || keyChanged);
@@ -120,7 +129,7 @@ export function WhisperVoiceConfiguration({
     if (!canSave) return;
     void write(
       {
-        cloudSpeechWhisper: { url: nextUrl, model: nextModel },
+        cloudSpeechWhisper: { url: nextUrl, model: nextModel, streamingUrl: nextStreamingUrl },
         ...(keyChanged ? { cloudSpeechCredentials: { whisper: credential } } : {}),
       },
       !active,
@@ -201,6 +210,24 @@ export function WhisperVoiceConfiguration({
                     />
                   </div>
                   <div className="grid gap-1.5">
+                    <Label htmlFor={`${formId}-streaming-url`}>Streaming URL (optional)</Label>
+                    <Input
+                      id={`${formId}-streaming-url`}
+                      type="url"
+                      autoComplete="off"
+                      spellCheck={false}
+                      placeholder="wss://example.com/v1/realtime?intent=transcription"
+                      aria-invalid={streamingUrlInvalid}
+                      value={streamingUrl}
+                      onChange={(event) => setStreamingUrl(event.target.value)}
+                    />
+                    <p className="text-sm text-muted-foreground">
+                      {streamingUrlInvalid
+                        ? "Enter a full wss:// URL without credentials."
+                        : "When set, audio streams while you speak, so text is ready soon after you stop."}
+                    </p>
+                  </div>
+                  <div className="grid gap-1.5">
                     <Label htmlFor={`${formId}-key`}>{ready ? "Replace API key" : "API key"}</Label>
                     <SecretSourceInput
                       id={`${formId}-key`}
@@ -266,7 +293,10 @@ export function WhisperVoiceConfiguration({
                 disabled={busy}
                 onClick={() =>
                   void write(
-                    { cloudSpeechWhisper: { url: "" }, cloudSpeechCredentials: { whisper: "" } },
+                    {
+                      cloudSpeechWhisper: { url: "", streamingUrl: "" },
+                      cloudSpeechCredentials: { whisper: "" },
+                    },
                     false,
                   )
                 }
