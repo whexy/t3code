@@ -19,7 +19,8 @@ import {
 type Upstream = {
   /** Events the endpoint received, in order. */
   readonly received: Array<Record<string, unknown>>;
-  connections: number;
+  /** The Authorization header of each upgrade request. */
+  readonly upgrades: Array<string | undefined>;
 };
 
 /** A realtime transcription endpoint that answers like the WeType-backed service. */
@@ -39,8 +40,10 @@ const serveUpstream = Effect.fn("test.whisperStream.serveUpstream")(function* (
     "/v1/realtime",
     Effect.gen(function* () {
       const request = yield* HttpServerRequest.HttpServerRequest;
-      upstream.connections++;
-      if (request.headers.authorization !== "Bearer good-key")
+      const authorization = request.headers.authorization;
+      upstream.upgrades.push(authorization);
+      // An open endpoint accepts requests without a key, but refuses a wrong one.
+      if (authorization !== undefined && authorization !== "Bearer good-key")
         return HttpServerResponse.empty({ status: 401 });
       const socket = yield* request.upgrade;
       yield* Effect.scoped(
@@ -105,7 +108,7 @@ const pcm = (...samples: number[]) => new Uint8Array(new Float32Array(samples).b
 
 it.live("relays captured audio as PCM16 and corrects the final transcript like batch", () =>
   Effect.gen(function* () {
-    const upstream: Upstream = { received: [], connections: 0 };
+    const upstream: Upstream = { received: [], upgrades: [] };
     const url = yield* serveUpstream(upstream, (event) =>
       event.type === "transcription_session.update"
         ? [{ type: "transcription_session.created" }]
@@ -150,33 +153,37 @@ it.live("relays captured audio as PCM16 and corrects the final transcript like b
   }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
 );
 
-it.live("maps a refused key and an upstream rate limit, and needs a streaming URL", () =>
-  Effect.gen(function* () {
-    const upstream: Upstream = { received: [], connections: 0 };
-    const url = yield* serveUpstream(upstream, (event) =>
-      event.type === "transcription_session.update"
-        ? [{ type: "transcription_session.created" }]
-        : event.type === "input_audio_buffer.append"
-          ? [{ type: "error", error: { code: "rate_limited", message: "slow down" } }]
-          : [],
-    );
-    expect(yield* Effect.flip(startStream("", "good-key"))).toMatchObject({
-      reason: "missing-key",
-    });
-    expect(upstream.connections).toBe(0);
-    expect(yield* Effect.flip(startStream(url, "wrong-key"))).toMatchObject({
-      reason: "rejected-key",
-    });
-    // The key travels on the upgrade, so a redirect must not take it anywhere.
-    const before = upstream.connections;
-    expect(
-      yield* Effect.flip(startStream(url.replace("/v1/realtime", "/v1/moved"), "good-key")),
-    ).toMatchObject({ reason: "unavailable" });
-    expect(upstream.connections).toBe(before);
-    const stream = yield* startStream(url, "good-key");
-    yield* stream.feed(pcm(0.25));
-    expect(yield* Effect.flip(stream.finish)).toMatchObject({ reason: "rate-limit" });
-  }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+it.live(
+  "maps a refused key and a rate limit, sends no key when none is saved, and needs a streaming URL",
+  () =>
+    Effect.gen(function* () {
+      const upstream: Upstream = { received: [], upgrades: [] };
+      const url = yield* serveUpstream(upstream, (event) =>
+        event.type === "transcription_session.update"
+          ? [{ type: "transcription_session.created" }]
+          : event.type === "input_audio_buffer.append"
+            ? [{ type: "error", error: { code: "rate_limited", message: "slow down" } }]
+            : [],
+      );
+      expect(yield* Effect.flip(startStream("", "good-key"))).toMatchObject({
+        reason: "missing-key",
+      });
+      expect(upstream.upgrades).toEqual([]);
+      expect(yield* Effect.flip(startStream(url, "wrong-key"))).toMatchObject({
+        reason: "rejected-key",
+      });
+      // The key travels on the upgrade, so a redirect must not take it anywhere.
+      const before = upstream.upgrades.length;
+      expect(
+        yield* Effect.flip(startStream(url.replace("/v1/realtime", "/v1/moved"), "good-key")),
+      ).toMatchObject({ reason: "unavailable" });
+      expect(upstream.upgrades.length).toBe(before);
+      yield* startStream(url, "");
+      const stream = yield* startStream(url, "good-key");
+      expect(upstream.upgrades.slice(-2)).toEqual([undefined, "Bearer good-key"]);
+      yield* stream.feed(pcm(0.25));
+      expect(yield* Effect.flip(stream.finish)).toMatchObject({ reason: "rate-limit" });
+    }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
 );
 
 it("previews partials in place of earlier text and falls back to deltas without them", () => {

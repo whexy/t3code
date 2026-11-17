@@ -138,11 +138,10 @@ export const layer = Layer.effect(
         openai: Boolean(openai),
         xai: Boolean(xai),
         openrouter: Boolean(openrouter),
-        whisper: Boolean(whisper) && Boolean(value.cloudSpeechWhisper.url),
+        whisper: Boolean(value.cloudSpeechWhisper.url),
+        whisperKey: Boolean(whisper),
         whisperStreaming:
-          Boolean(whisper) &&
-          Boolean(value.cloudSpeechWhisper.url) &&
-          Boolean(value.cloudSpeechWhisper.streamingUrl),
+          Boolean(value.cloudSpeechWhisper.url) && Boolean(value.cloudSpeechWhisper.streamingUrl),
       })),
     );
     const execute = (request: HttpClientRequest.HttpClientRequest) =>
@@ -195,9 +194,9 @@ export const layer = Layer.effect(
         model?: string,
       ) {
         const source = (yield* credentials)[provider];
-        if (!source) return yield* new CloudSpeechError({ provider, reason: "missing-key" });
         const whisper = provider === "whisper" ? yield* whisperEndpoint : undefined;
-        if (whisper && !whisper.url)
+        // A Whisper endpoint may be open (a tailnet service, say), so only its URL is required.
+        if (whisper ? !whisper.url : !source)
           return yield* new CloudSpeechError({ provider, reason: "missing-key" });
         if (provider === "openrouter" && (!model || !isModelId(model)))
           return yield* new CloudSpeechError({ provider, reason: "model-unavailable" });
@@ -215,10 +214,10 @@ export const layer = Layer.effect(
         // A vault that locked since the last recording must not authorize a new upload.
         if (isSecretReference(source)) yield* resolver.invalidate([source]);
         const unreadable = () => new CloudSpeechError({ provider, reason: "unreadable-key" });
-        const key = yield* requireSettingsSecret(resolver, source).pipe(
-          Effect.mapError(unreadable),
-        );
-        if (!isApiKey(key)) return yield* unreadable();
+        const key = source
+          ? yield* requireSettingsSecret(resolver, source).pipe(Effect.mapError(unreadable))
+          : undefined;
+        if (key !== undefined && !isApiKey(key)) return yield* unreadable();
         const audio = wave(samples);
         const request = (
           provider === "whisper"
@@ -228,15 +227,17 @@ export const layer = Layer.effect(
                   ? openRouterBody(model!, audio, language)
                   : audioBody(provider, audio, language, options),
               )
-        ).pipe(HttpClientRequest.bearerToken(Redacted.make(key)));
+        ).pipe((request) =>
+          key === undefined ? request : HttpClientRequest.bearerToken(request, Redacted.make(key)),
+        );
         const unavailable = () => new CloudSpeechError({ provider, reason: "unavailable" });
         // A catalog fetch or vault lookup may have outlived the credential or endpoint it started with.
         const current = (yield* credentials)[provider];
         const moved = whisper !== undefined && (yield* whisperEndpoint).url !== whisper.url;
-        if (!current || !sameCredential(source, current) || moved)
+        if ((source ? !current || !sameCredential(source, current) : Boolean(current)) || moved)
           return yield* new CloudSpeechError({
             provider,
-            reason: current ? "key-changed" : "missing-key",
+            reason: current || whisper ? "key-changed" : "missing-key",
           });
         const response = yield* execute(request).pipe(Effect.mapError(unavailable));
         if (response.status < 200 || response.status >= 300)

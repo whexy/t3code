@@ -27,8 +27,10 @@ export const CloudSpeechKeys = Schema.Struct({
   openai: Schema.Boolean,
   xai: Schema.Boolean,
   openrouter: Schema.optionalKey(Schema.Boolean),
-  /** True only when both the endpoint URL and its key are saved. */
+  /** True when the endpoint URL is saved; its key is optional. */
   whisper: Schema.optionalKey(Schema.Boolean),
+  /** True when a key for the Whisper endpoint is saved. */
+  whisperKey: Schema.optionalKey(Schema.Boolean),
   /** True when the Whisper endpoint is ready and also has a streaming URL. */
   whisperStreaming: Schema.optionalKey(Schema.Boolean),
 });
