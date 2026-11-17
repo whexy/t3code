@@ -4,6 +4,7 @@ import {
   CloudSpeechError,
   isSecretReference,
   SPEECH_CLOUD_WHISPER_STREAM_PATH,
+  type SpeechCustomWords,
   type SpeechStreamText,
   type SpeechTranscriptionOptions,
 } from "@t3tools/contracts";
@@ -30,6 +31,7 @@ const isApiKey = Schema.is(CloudSpeechApiKey);
 const UpstreamEvent = Schema.Struct({
   type: Schema.String,
   delta: Schema.optionalKey(Schema.String),
+  text: Schema.optionalKey(Schema.String),
   transcript: Schema.optionalKey(Schema.String),
   error: Schema.optionalKey(
     Schema.Struct({
@@ -53,6 +55,49 @@ const upstreamWebSocketConstructor = Layer.effect(
     };
   }),
 ).pipe(Layer.provide(NodeWS.layerWebSocketConstructor));
+
+/** What the endpoint has said so far: appended deltas, and its latest full-text partial if any. */
+export type WhisperPreview = {
+  readonly revision: number;
+  readonly deltas: ReadonlyArray<string>;
+  readonly partial: string | null;
+};
+export const EMPTY_WHISPER_PREVIEW: WhisperPreview = { revision: 0, deltas: [], partial: null };
+
+export function applyUpstreamPreview(
+  preview: WhisperPreview,
+  event: { readonly type: string; readonly delta?: string; readonly text?: string },
+): WhisperPreview {
+  if (event.type === "conversation.item.input_audio_transcription.delta" && event.delta) {
+    const deltas = [...preview.deltas, event.delta];
+    // A partial sent before this delta settled may not include it yet.
+    const partial = preview.partial?.startsWith(deltas.join("")) ? preview.partial : null;
+    return { revision: preview.revision + 1, deltas, partial };
+  }
+  // A partial is the full text so far and may revise or shorten the previous one.
+  if (
+    event.type === "conversation.item.input_audio_transcription.partial" &&
+    event.text !== undefined
+  )
+    return { ...preview, revision: preview.revision + 1, partial: event.text };
+  return preview;
+}
+
+/** Deltas are settled text; the rest of a partial is the recognizer's current guess. */
+export function whisperPreviewText(
+  preview: WhisperPreview,
+  words: SpeechCustomWords,
+): SpeechStreamText | null {
+  const settled = preview.deltas.join("");
+  const partial = preview.partial ?? settled;
+  const committed = partial.startsWith(settled) ? settled : "";
+  const tentative = partial.slice(committed.length);
+  if (!committed && !tentative) return null;
+  return {
+    committed: applySpeechAliases(committed, words),
+    tentative: applySpeechAliases(tentative, words),
+  };
+}
 
 const failure = (reason: CloudSpeechError["reason"]) =>
   new CloudSpeechError({ provider: "whisper", reason });
@@ -110,7 +155,7 @@ export const makeWhisperSpeechStream = Effect.fn("WhisperSpeechStream.start")(fu
   const reader = yield* upstream.reader.pipe(Effect.mapError(openFailure));
   const created = yield* Deferred.make<void, CloudSpeechError>();
   const completed = yield* Deferred.make<string, CloudSpeechError>();
-  const chunks: string[] = [];
+  let preview = EMPTY_WHISPER_PREVIEW;
   const stop = (error: CloudSpeechError) =>
     Effect.all([Deferred.fail(created, error), Deferred.fail(completed, error)], {
       discard: true,
@@ -124,7 +169,8 @@ export const makeWhisperSpeechStream = Effect.fn("WhisperSpeechStream.start")(fu
       case "transcription_session.created":
         return Deferred.succeed(created, undefined);
       case "conversation.item.input_audio_transcription.delta":
-        if (event.value.delta) chunks.push(event.value.delta);
+      case "conversation.item.input_audio_transcription.partial":
+        preview = applyUpstreamPreview(preview, event.value);
         return Effect.void;
       case "conversation.item.input_audio_transcription.completed":
         return Deferred.succeed(completed, event.value.transcript ?? "");
@@ -151,6 +197,7 @@ export const makeWhisperSpeechStream = Effect.fn("WhisperSpeechStream.start")(fu
     session: {
       input_audio_format: "pcm16",
       input_audio_sample_rate: 16_000,
+      include_partials: true,
       ...(language !== "auto" ? { language } : {}),
       ...(terms.length > 0 ? { prompt: terms.join(", ") } : {}),
     },
@@ -163,6 +210,7 @@ export const makeWhisperSpeechStream = Effect.fn("WhisperSpeechStream.start")(fu
   );
 
   let byteLength = 0;
+  let shownRevision = 0;
   // An upstream error during capture ends the recording now instead of at finish.
   const upstreamFailure = Deferred.poll(completed).pipe(
     Effect.flatMap((done) => (Option.isSome(done) ? done.value.pipe(Effect.asVoid) : Effect.void)),
@@ -185,10 +233,19 @@ export const makeWhisperSpeechStream = Effect.fn("WhisperSpeechStream.start")(fu
       });
       byteLength += bytes.byteLength;
       yield* sendEvent({ type: "input_audio_buffer.append", audio });
-      // Deltas carry their own spacing; joined in order they are the transcript so far.
-      const preview = applySpeechAliases(chunks.join(""), options.speechCustomWords);
-      const text: SpeechStreamText | null = preview ? { committed: preview, tentative: "" } : null;
-      return { revision: chunks.length, text };
+      // The client renders each update in place of the last, so a revised partial replaces it.
+      // An unchanged preview is not resent; the client keeps showing the last one.
+      const changed = preview.revision !== shownRevision;
+      shownRevision = preview.revision;
+      return {
+        revision: preview.revision,
+        text: changed
+          ? (whisperPreviewText(preview, options.speechCustomWords) ?? {
+              committed: "",
+              tentative: "",
+            })
+          : null,
+      };
     }),
     finish: Effect.gen(function* () {
       yield* sendEvent({ type: "input_audio_buffer.commit" });
