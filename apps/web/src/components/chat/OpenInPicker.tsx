@@ -21,7 +21,9 @@ import {
   useRemoteOpenState,
 } from "../../remoteOpen";
 import { useEnvironment } from "../../state/environments";
-import { RexOpenInItem } from "../../rex/RexOpenInItem";
+import { REX_PRIMARY, RexOpenInItem } from "../../rex/RexOpenInItem";
+import { rexLeads } from "../../rex/rexEntry.logic";
+import { useRexOpenIn } from "../../rex/useRexOpenIn";
 import { ChevronDownIcon, FolderClosedIcon, SquareArrowOutUpRightIcon } from "lucide-react";
 
 import { Group, GroupSeparator } from "../ui/group";
@@ -254,6 +256,8 @@ export const OpenInPicker = memo(function OpenInPicker({
   // Remote editors run on the viewing machine; only desktop can probe that PATH.
   const effectiveEditors = remote.mode === "local-exec" ? availableEditors : remoteCapableEditors;
   const [preferredEditor, setPreferredEditor] = usePreferredEditor(effectiveEditors);
+  const rex = useRexOpenIn(environmentId, openInCwdIsFile ? null : openInCwd);
+  const rexIsPrimary = rexLeads(rex);
 
   const openInEditor = async (editorId: EditorId | null): Promise<boolean> => {
     if (!openInCwd) return false;
@@ -296,7 +300,9 @@ export const OpenInPicker = memo(function OpenInPicker({
 
   const backgroundThread = use(BackgroundThreadContext);
   const options = resolveOpenInOptions(navigator.platform, effectiveEditors, messages);
-  const primaryOption = options.find(({ value }) => value === preferredEditor) ?? null;
+  const primaryOption = rexIsPrimary
+    ? REX_PRIMARY
+    : (options.find(({ value }) => value === preferredEditor) ?? null);
   const primaryLabel = isPanel
     ? primaryOption
       ? gt("Open in {editor}", { editor: primaryOption.label })
@@ -333,6 +339,7 @@ export const OpenInPicker = memo(function OpenInPicker({
               disabled={!openInCwd || !canOpenEditor}
               key={value}
               onClick={() => {
+                rex.setPreferred(false);
                 if (presentation === "menu") {
                   void openInEditor(value);
                 } else {
@@ -342,7 +349,7 @@ export const OpenInPicker = memo(function OpenInPicker({
             >
               <Icon aria-hidden="true" className={getOpenInIconClass(kind)} />
               <MenuItemLabel>{label}</MenuItemLabel>
-              {value === preferredEditor && openFavoriteEditorShortcutLabel && (
+              {value === preferredEditor && !rexIsPrimary && openFavoriteEditorShortcutLabel && (
                 <MenuShortcut>{openFavoriteEditorShortcutLabel}</MenuShortcut>
               )}
             </MenuItem>
@@ -359,9 +366,9 @@ export const OpenInPicker = memo(function OpenInPicker({
         </>
       )}
       <RexOpenInItem
-        environmentId={environmentId}
-        cwd={openInCwdIsFile ? null : openInCwd}
-        density={presentation === "menu" ? "touch" : "default"}
+        rex={rex}
+        presentation={presentation}
+        shortcutLabel={rexIsPrimary ? openFavoriteEditorShortcutLabel : null}
       />
     </>
   );
@@ -372,8 +379,8 @@ export const OpenInPicker = memo(function OpenInPicker({
           <MenuItem
             density={presentation === "menu" ? "touch" : "default"}
 
-            disabled={!openInCwd || !canOpenEditor}
-            onClick={() => openInEditor(preferredEditor)}
+            disabled={!openInCwd || (!rexIsPrimary && !canOpenEditor)}
+            onClick={() => (rexIsPrimary ? rex.open() : openInEditor(preferredEditor))}
           >
             <primaryOption.Icon className={cn("size-4", getOpenInIconClass(primaryOption.kind))} />
             <MenuItemLabel>
@@ -409,9 +416,15 @@ export const OpenInPicker = memo(function OpenInPicker({
       variant={isPanel ? "ghost" : "outline"}
       part="primary"
       panel={isPanel}
-      disabled={!preferredEditor || !openInCwd || !canOpenEditor}
+      disabled={rexIsPrimary ? !openInCwd : !preferredEditor || !openInCwd || !canOpenEditor}
       {...(enableShortcut && !backgroundThread ? { [OPEN_FAVORITE_EDITOR_ATTRIBUTE]: "" } : {})}
       onClick={() => {
+        if (rexIsPrimary) {
+          void rex.open().then((opened) => {
+            if (opened) announce(gt("Opened in {editor}", { editor: "Rex" }));
+          });
+          return;
+        }
         if (!preferredEditor) return;
         const label = editorLabelForPlatform(preferredEditor, navigator.platform);
         void openInEditor(preferredEditor).then((opened) => {
