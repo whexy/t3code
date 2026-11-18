@@ -5,6 +5,7 @@ import {
   getEnvironmentSpeechStatus,
   postProcessEnvironmentTranscript,
   selectEnvironmentSpeechModel,
+  transcriptCleanupContext,
   VoiceInputController,
   voiceInputBlocksSubmission,
   type VoiceDraftSnapshot,
@@ -72,18 +73,6 @@ type DraftInput = {
   readonly text: string;
   readonly selection: { readonly start: number; readonly end: number };
 };
-
-function cleanupContext({ text, selection }: DraftInput): DraftInput {
-  const limit = 1_024;
-  const start = Math.max(0, Math.min(selection.start, text.length));
-  const end = Math.max(start, Math.min(selection.end, text.length));
-  const before = text.slice(Math.max(0, start - limit), start);
-  const selected = text.slice(start, Math.min(end, start + limit));
-  return {
-    text: before + selected + text.slice(end, end + limit),
-    selection: { start: before.length, end: before.length + selected.length },
-  };
-}
 
 type HookInput = {
   /** The draft's own environment. Optional transcript cleanup runs there, never on the audio destination. */
@@ -304,7 +293,7 @@ export function useEnvironmentSpeechInput(input: HookInput) {
         postProcessEnvironmentTranscript(
           target,
           transcript,
-          cleanupContext(options.draft),
+          transcriptCleanupContext(options.draft),
           preferences.cleanup,
           () => hasAudioConsent() && preferences.cleanupGrant === readCleanupGrant(),
         ),

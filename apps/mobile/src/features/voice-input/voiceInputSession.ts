@@ -7,6 +7,7 @@ import {
   type VoiceInputPhase,
   type VoiceInputState,
 } from "@t3tools/client-runtime/voice-input";
+import type { EnvironmentId } from "@t3tools/contracts";
 
 import { normalizeVoiceInputDecibels, VOICE_WAVEFORM_SAMPLE_COUNT } from "./voiceInputMetering";
 
@@ -16,6 +17,8 @@ const SILENT_LEVELS: ReadonlyArray<number> = Array<number>(VOICE_WAVEFORM_SAMPLE
 
 export type VoiceInputTarget = {
   readonly ownerKey: string;
+  /** The draft's environment, where transcript cleanup runs. */
+  readonly environmentId: EnvironmentId | null;
   readonly label?: string;
   readonly readDraft: () => VoiceDraftSnapshot | null;
   readonly commitDraft: VoiceInputControllerDependencies["commitDraft"];
@@ -36,8 +39,17 @@ export type VoiceRecordingSample = {
 
 export type VoiceInputSessionDependencies = Omit<
   VoiceInputControllerDependencies,
-  "readDraft" | "commitDraft" | "onStateChange"
+  "readDraft" | "commitDraft" | "onStateChange" | "postProcess"
 > & {
+  /** Returns null when cleanup is off for this transcript. */
+  readonly cleanUpTranscript?: (
+    transcript: string,
+    options: {
+      readonly signal: AbortSignal;
+      readonly draft: VoiceDraftSnapshot;
+      readonly environmentId: EnvironmentId;
+    },
+  ) => Promise<string> | null;
   /** Reads the live recorder, or null when it is not capturing. */
   readonly sampleRecording: () => VoiceRecordingSample | null;
   /** Levels change every metering tick, so they bypass React state. */
@@ -51,9 +63,11 @@ export function createVoiceInputTarget(
   readText: () => string | null,
   commitDraft: VoiceInputTarget["commitDraft"],
   selection: VoiceDraftSnapshot["selection"],
+  environmentId: EnvironmentId | null = null,
 ): VoiceInputTarget {
   return {
     ownerKey,
+    environmentId,
     readDraft: () => {
       const text = readText();
       return text === null ? null : { ownerKey, text, selection };
@@ -94,6 +108,12 @@ export class VoiceInputSession {
         return draft?.text === this.startText ? draft : null;
       },
       commitDraft: (text, selection) => this.target?.commitDraft(text, selection),
+      postProcess: (transcript, options) => {
+        const environmentId = this.target?.environmentId;
+        return environmentId && this.target?.ownerKey === options.draft.ownerKey
+          ? (dependencies.cleanUpTranscript?.(transcript, { ...options, environmentId }) ?? null)
+          : null;
+      },
     });
   }
 
@@ -118,6 +138,13 @@ export class VoiceInputSession {
     if (focused) focusedOwners.add(ownerKey);
     else focusedOwners.delete(ownerKey);
     this.publish({ ...this.snapshot, focusedOwners });
+  }
+
+  /** Finishes the recording, or keeps the raw transcript while cleanup runs. */
+  finish(): Promise<void> {
+    if (this.controller.currentState.phase !== "post-processing") return this.controller.stop();
+    this.controller.skipPostProcessing();
+    return Promise.resolve();
   }
 
   cancel(ownerKey: string | null): void {
