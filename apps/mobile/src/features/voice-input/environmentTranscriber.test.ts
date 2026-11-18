@@ -8,7 +8,7 @@ it("never uploads a recording whose grant changed while the phone decoded it", a
   const upload = vi.fn(async () => "hello");
   const transcriber = createEnvironmentTranscriber({
     canSend: () => grant === 1,
-    prepare: async () => "en",
+    prepare: async () => ({ locale: "en" }),
     decode: () => decoded.promise,
     upload,
   });
@@ -28,7 +28,7 @@ it("uploads normalized mono samples only after the recording is finished", async
   });
   const transcriber = createEnvironmentTranscriber({
     canSend: () => true,
-    prepare: async () => "en",
+    prepare: async () => ({ locale: "en" }),
     decode: async () => new Uint8Array([255, 0, 128, 0, 64, 255]).subarray(1, 5),
     upload,
   });
@@ -56,7 +56,7 @@ it("trims at most one second of recorder padding and rejects longer recordings",
   const options = { signal: new AbortController().signal };
   const recording = await createEnvironmentTranscriber({
     canSend: () => true,
-    prepare: async () => "en",
+    prepare: async () => ({ locale: "en" }),
     decode: async () => bytes,
     upload,
   }).prepare(options);
