@@ -120,6 +120,7 @@ import {
   ComposerDictationCancelAction,
   ComposerDictationDraftContent,
   ComposerDictationError,
+  ComposerDictationPreview,
   ComposerDictationPrimaryAction,
   ComposerDictationStartAction,
   ComposerDictationStatus,
@@ -997,6 +998,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
             error={voiceInput.state.phase === "error" ? voiceInput.state.error : null}
             onDismiss={voiceInput.cancel}
           />
+          <ComposerDictationPreview preview={voiceInput.preview} />
           {isExpanded ? editingAttachments : null}
           <View
             onLayout={(event) => {

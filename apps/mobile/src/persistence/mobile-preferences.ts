@@ -127,6 +127,8 @@ export interface Preferences {
   readonly microphones?: ReadonlyArray<MicrophoneEntry>;
   /** Unset means off: the transcript goes to the draft environment's cleanup model only when on. */
   readonly transcriptCleanup?: boolean;
+  /** Unset means on, like web; only a natively streaming local model reads it. */
+  readonly speechStreaming?: boolean;
   readonly projectGroupingEnabled?: boolean;
   readonly projectGroupingMode?: SidebarProjectGroupingMode;
   readonly toolCallVisibility?: ToolCallVisibility;
@@ -215,6 +217,7 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     language?: string;
     microphones?: ReadonlyArray<MicrophoneEntry>;
     transcriptCleanup?: boolean;
+    speechStreaming?: boolean;
     projectGroupingEnabled?: boolean;
     projectGroupingMode?: SidebarProjectGroupingMode;
     toolCallVisibility?: ToolCallVisibility;
@@ -334,6 +337,9 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   }
   if (typeof parsed.transcriptCleanup === "boolean") {
     preferences.transcriptCleanup = parsed.transcriptCleanup;
+  }
+  if (typeof parsed.speechStreaming === "boolean") {
+    preferences.speechStreaming = parsed.speechStreaming;
   }
   if (typeof parsed.projectGroupingEnabled === "boolean") {
     preferences.projectGroupingEnabled = parsed.projectGroupingEnabled;

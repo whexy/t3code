@@ -7,7 +7,7 @@ import {
   type VoiceInputPhase,
   type VoiceInputState,
 } from "@t3tools/client-runtime/voice-input";
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId, SpeechStreamText } from "@t3tools/contracts";
 
 import { normalizeVoiceInputDecibels, VOICE_WAVEFORM_SAMPLE_COUNT } from "./voiceInputMetering";
 
@@ -30,6 +30,8 @@ export type VoiceInputSnapshot = {
   readonly label: string | null;
   readonly elapsedSeconds: number;
   readonly focusedOwners: ReadonlySet<string>;
+  /** Live text from a streaming transcription, until the transcript is inserted. */
+  readonly preview: SpeechStreamText | null;
 };
 
 export type VoiceRecordingSample = {
@@ -91,6 +93,7 @@ export class VoiceInputSession {
     label: null,
     elapsedSeconds: 0,
     focusedOwners: new Set(),
+    preview: null,
   };
   private readonly listeners = new Set<() => void>();
   private audioLevels = SILENT_LEVELS;
@@ -147,6 +150,10 @@ export class VoiceInputSession {
     return Promise.resolve();
   }
 
+  showPreview(preview: SpeechStreamText): void {
+    if (showsPreview(this.snapshot.state.phase)) this.publish({ ...this.snapshot, preview });
+  }
+
   cancel(ownerKey: string | null): void {
     if (ownerKey !== null && this.ownerKey === ownerKey) this.controller.cancel();
   }
@@ -184,6 +191,7 @@ export class VoiceInputSession {
       ownerKey: this.ownerKey,
       label: this.label,
       elapsedSeconds,
+      preview: showsPreview(state.phase) ? this.snapshot.preview : null,
     });
     if (state.phase === "recording" && previousPhase !== "recording") {
       this.startRecordingActivity();
@@ -231,6 +239,10 @@ export class VoiceInputSession {
     this.snapshot = snapshot;
     for (const listener of this.listeners) listener();
   }
+}
+
+function showsPreview(phase: VoiceInputPhase): boolean {
+  return phase === "recording" || phase === "transcribing";
 }
 
 function capturesAudio(phase: VoiceInputPhase): boolean {
