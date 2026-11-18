@@ -693,7 +693,8 @@ export function HomeScreen(props: HomeScreenProps) {
   const v2ListHeader = (
     <>
       {listHeader}
-      {Platform.OS === "ios" && workspace ? (
+      {/* One super thread's threads are its level, not a filtered list. */}
+      {Platform.OS === "ios" && workspace && superThreadList.open === null ? (
         <ThreadListFilters
           gutter={sidebarSurface ? 8 : 0}
           environments={props.environments}
@@ -717,6 +718,7 @@ export function HomeScreen(props: HomeScreenProps) {
       <SuperThreadListSections
         list={superThreadList}
         pane={sidebarSurface ? "sidebar" : "screen"}
+        headerInBar={Platform.OS === "ios" && workspace !== null}
         selectedThreadKey={selectedThreadKey}
         onSelectThread={selectThread}
         memberRowHost={{
