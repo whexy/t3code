@@ -25,7 +25,7 @@ import { createLazyVoiceRecorder } from "./lazyVoiceRecorder";
 import { VOICE_WAVEFORM_SAMPLE_COUNT } from "./voiceInputMetering";
 import { VoiceInputSession } from "./voiceInputSession";
 import { createVoiceRecordingPermission } from "./voiceRecordingPermission";
-import { voiceRouteAtom } from "./voiceDestination";
+import { cleanUpVoiceTranscript, voiceRouteAtom } from "./voiceDestination";
 import { makePermissionStatusAtom } from "../../lib/permissionStatusAtom";
 import {
   acquireAudioSession,
@@ -142,6 +142,15 @@ const voiceInputAtom = Atom.make((get) => {
       audioToken = null;
     },
     deleteRecording: (uri) => new File(uri).delete(),
+    cleanUpTranscript: (transcript, { signal, draft, environmentId }) => {
+      const cleanupEnabled = () => {
+        const preferences = registry.get(mobilePreferencesAtom);
+        return AsyncResult.isSuccess(preferences) && preferences.value.transcriptCleanup === true;
+      };
+      return cleanupEnabled()
+        ? cleanUpVoiceTranscript(environmentId, transcript, draft, signal, cleanupEnabled)
+        : null;
+    },
     sampleRecording: () => {
       const status = recorder.getStatus();
       return status?.isRecording
@@ -170,7 +179,7 @@ export function useGlobalVoiceInput() {
     audioLevels,
     isBusy: voiceInputBlocksSubmission(snapshot.state),
     session,
-    stop: () => session.controller.stop(),
+    stop: () => session.finish(),
     cancel: () => session.controller.cancel(),
   };
 }

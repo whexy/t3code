@@ -38,6 +38,7 @@ import { ListActionRow as SettingsActionRow } from "../../components/ui/ListActi
 import { SettingsDragHandle } from "./components/SettingsDragHandle";
 import { SettingsScreen } from "./components/SettingsScreen";
 import { SettingsSection } from "./components/SettingsSection";
+import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
 import {
   deviceMicrophoneOrder,
   localVoiceTranscriberAtom,
@@ -323,6 +324,19 @@ export function SettingsVoiceRouteScreen() {
         {!grant && transcriber === null ? (
           <Text className="px-2 text-sm text-foreground-muted">{UNAVAILABLE_EXPLANATION}</Text>
         ) : null}
+        <SettingsSection title="Cleanup">
+          <SettingsSwitchRow
+            icon="text.alignleft"
+            label="Clean up transcripts"
+            disabled={!ready}
+            value={ready && preferencesResult.value.transcriptCleanup === true}
+            onValueChange={(transcriptCleanup) => savePreferences({ transcriptCleanup })}
+          />
+        </SettingsSection>
+        <Text className="px-2 text-sm text-foreground-muted">
+          Sends the transcript and nearby draft text, never audio, to the cleanup model of the
+          draft’s environment. Choose that model in the environment’s Voice settings.
+        </Text>
         {permission === "ask" || permission === "denied" ? (
           <>
             <SettingsSection title="Microphone access">

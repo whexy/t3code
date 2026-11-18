@@ -30,6 +30,7 @@ export {
   updateEnvironmentSpeechAcceleration,
   updateEnvironmentSpeechModelUnloadTimeout,
 } from "./environment.ts";
+export { transcriptCleanupContext } from "./cleanup.ts";
 export { openSpeechStream } from "./stream.ts";
 export {
   VoiceTranscriptionError,
