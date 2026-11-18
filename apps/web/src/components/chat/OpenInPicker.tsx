@@ -22,6 +22,7 @@ import {
   useRemoteOpenState,
 } from "../../remoteOpen";
 import { useEnvironment } from "../../state/environments";
+import { RexOpenInItem } from "../../rex/RexOpenInItem";
 import { ChevronDownIcon, SquareArrowOutUpRightIcon } from "lucide-react";
 
 import { Group, GroupSeparator } from "../ui/group";
@@ -222,6 +223,11 @@ export const OpenInPicker = memo(function OpenInPicker({
           )}
         </>
       )}
+      <RexOpenInItem
+        environmentId={environmentId}
+        cwd={openInCwdIsFile ? null : openInCwd}
+        density={presentation === "menu" ? "touch" : "default"}
+      />
     </>
   );
   if (presentation === "menu") {
