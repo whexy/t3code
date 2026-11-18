@@ -73,6 +73,7 @@ import * as DesktopRendererHistory from "./telemetry/DesktopRendererHistory.ts";
 import * as DesktopUpdatePolicy from "./updates/DesktopUpdatePolicy.ts";
 import * as DesktopUpdates from "./updates/DesktopUpdates.ts";
 import * as DesktopDevUpdates from "./devUpdates/DesktopDevUpdates.ts";
+import * as DesktopRex from "./rex/DesktopRex.ts";
 import * as BrowserImport from "./preview/BrowserImport/BrowserImport.ts";
 import * as LinuxBrowserSecret from "./preview/BrowserImport/LinuxBrowserSecret.ts";
 import * as BrowserSession from "./preview/BrowserSession.ts";
@@ -266,6 +267,10 @@ const layerDesktopRuntime = layerDesktopClerk.pipe(
 );
 
 DesktopApp.program.pipe(
-  Effect.provide(DesktopDevUpdates.layer.pipe(Layer.provideMerge(layerDesktopRuntime))),
+  Effect.provide(
+    Layer.mergeAll(DesktopDevUpdates.layer, DesktopRex.layer).pipe(
+      Layer.provideMerge(layerDesktopRuntime),
+    ),
+  ),
   NodeRuntime.runMain,
 );
