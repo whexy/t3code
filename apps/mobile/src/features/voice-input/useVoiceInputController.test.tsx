@@ -23,6 +23,7 @@ import { VoiceInputSession } from "./voiceInputSession";
 function Composer(props: { readonly hidden: boolean }) {
   useVoiceInputController({
     ownerKey: "thread-1",
+    environmentId: null,
     label: "Thread",
     readDraftMessage: () => "",
     selection: { start: 0, end: 0 },

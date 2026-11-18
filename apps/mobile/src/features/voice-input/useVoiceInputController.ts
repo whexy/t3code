@@ -5,6 +5,8 @@ import {
   type VoiceInputState,
 } from "@t3tools/client-runtime/voice-input";
 
+import type { EnvironmentId } from "@t3tools/contracts";
+
 import type { ComposerEditorSelection } from "../../components/ComposerEditor";
 import { useGlobalVoiceInput } from "./VoiceInputProvider";
 import { createVoiceInputTarget } from "./voiceInputSession";
@@ -13,6 +15,8 @@ const IDLE_STATE: VoiceInputState = { phase: "idle", error: null, errorAction: n
 
 export function useVoiceInputController(input: {
   readonly ownerKey: string | null;
+  /** The draft's environment; transcript cleanup runs there. */
+  readonly environmentId: EnvironmentId | null;
   readonly label: string;
   readonly readDraftMessage: () => string | null;
   readonly selection: ComposerEditorSelection;
@@ -58,6 +62,7 @@ export function useVoiceInputController(input: {
           }
         },
         captured.selection,
+        captured.environmentId,
       ),
       label: captured.label,
     });
