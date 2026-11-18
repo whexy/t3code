@@ -19,6 +19,8 @@ export const RexRecord = Schema.Union([
     st: Schema.Literal("pending"),
     sessionId: Schema.String,
     holders: Schema.Array(Schema.String),
+    // An app has owned the session's size; an owner can drop it again when its Mac sleeps.
+    saw: Schema.Boolean,
   }),
   Schema.Struct({ st: Schema.Literal("confirmed"), sessionId: Schema.String }),
 ]);

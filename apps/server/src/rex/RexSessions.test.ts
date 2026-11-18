@@ -132,6 +132,51 @@ it.effect("a lease that ends without a report kills the session unless an app ow
   }).pipe(Effect.provide(layer));
 });
 
+it.effect("an app that owned the size once keeps the session after its Mac drops off", () => {
+  const { rex, layer } = setup();
+  return Effect.gen(function* () {
+    const rexSessions = yield* RexSessions.RexSessions;
+    // The confirm is lost: no report ever arrives.
+    const opened = yield* rexSessions.open(CWD);
+    rex.sessions.get(opened.sessionId)!.takenOver = true;
+    yield* TestClock.adjust("1 second");
+    // The Mac sleeps and its app disconnects, which drops the owner.
+    rex.sessions.get(opened.sessionId)!.takenOver = false;
+    yield* TestClock.adjust("30 seconds");
+    assert.deepStrictEqual(rex.killed, []);
+    assert.deepStrictEqual(yield* record(), { st: "confirmed", sessionId: opened.sessionId });
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("the latch survives a restart", () => {
+  const before = setup();
+  return Effect.gen(function* () {
+    const [opened, persisted] = yield* Effect.gen(function* () {
+      const rexSessions = yield* RexSessions.RexSessions;
+      const opened = yield* rexSessions.open(CWD);
+      before.rex.sessions.get(opened.sessionId)!.takenOver = true;
+      yield* TestClock.adjust("1 second");
+      return [opened, yield* record()] as const;
+    }).pipe(Effect.provide(before.layer));
+    assert.deepStrictEqual(persisted, {
+      st: "pending",
+      sessionId: opened.sessionId,
+      holders: [opened.clickId],
+      saw: true,
+    });
+
+    // The restarted server finds the record as it was persisted, with the owner gone.
+    const after = setup(new Map([[CWD, persisted!]]));
+    after.rex.sessions.set(opened.sessionId, { label: "t3code", takenOver: false });
+    yield* Effect.gen(function* () {
+      yield* RexSessions.RexSessions;
+      yield* TestClock.adjust("30 seconds");
+      assert.deepStrictEqual(after.rex.killed, []);
+      assert.deepStrictEqual(yield* record(), { st: "confirmed", sessionId: opened.sessionId });
+    }).pipe(Effect.provide(after.layer));
+  });
+});
+
 it.effect("a session the user closed is replaced, not handed out", () => {
   const { rex, layer } = setup();
   return Effect.gen(function* () {
@@ -208,7 +253,7 @@ it.effect("a path that isn't a folder on the host fails the click before Rex run
 
 it.effect("startup gives each pending holder a fresh lease instead of killing", () => {
   const { rex, layer } = setup(
-    new Map([[CWD, { st: "pending", sessionId: "session:9", holders: ["click-a"] }]]),
+    new Map([[CWD, { st: "pending", sessionId: "session:9", holders: ["click-a"], saw: false }]]),
   );
   rex.sessions.set("session:9", { label: "t3code t3-click-a", takenOver: false });
   return Effect.gen(function* () {
@@ -254,12 +299,18 @@ it.effect("startup turns an intent's session into an unheld pending one and size
 it.effect("the record survives a restart through its file", () =>
   Effect.gen(function* () {
     const first = yield* RexSessionStore.make();
-    yield* first.set(CWD, { st: "pending", sessionId: "session:1", holders: ["click-a"] });
+    yield* first.set(CWD, {
+      st: "pending",
+      sessionId: "session:1",
+      holders: ["click-a"],
+      saw: true,
+    });
     const second = yield* RexSessionStore.make();
     assert.deepStrictEqual(yield* second.get(CWD), {
       st: "pending",
       sessionId: "session:1",
       holders: ["click-a"],
+      saw: true,
     });
   }).pipe(
     Effect.provide(
