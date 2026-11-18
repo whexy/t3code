@@ -212,12 +212,13 @@ sent until you choose one. See [Voice input](./voice-input.md).
 
 Use the composer's microphone to record, then confirm to transcribe. Text is
 inserted where your selection was when recording started, ready for you to review
-and edit before sending.
+and edit before sending. When the chosen environment transcribes live, the text
+appears in the composer while you speak.
 
 By default, audio stays on the phone. Local transcription needs a supported iPhone
 with iOS 26 or later, or Android 12 or later with compatible Google speech services.
 To use a paired environment instead, open **Settings → Voice → Transcribe on**,
-choose the environment, and confirm. Finished recordings go only to that environment,
+choose the environment, and confirm. Audio goes only to that environment,
 even when a draft belongs to another one. This also works on phones without local
 speech recognition. If the chosen environment disconnects, dictation stops; it never
 switches hosts. Choose **This device** to revoke access and discard pending audio.
@@ -243,7 +244,8 @@ with, listed by name. Drag to rank them together:
 for example, put **Other Bluetooth** above your AirPods so a new headset is preferred
 while the AirPods microphone stays low. By default, CarPlay comes after the built-in
 microphone on iOS. Swipe a device left to forget it. Android may use another input
-when the preferred microphone cannot be routed. Devices with the same name may share
+when the preferred microphone cannot be routed. While a recording streams live to an
+environment, the phone uses its built-in or wired microphone instead of this order. Devices with the same name may share
 a saved preference, but simultaneous same-name inputs remain separately selectable.
 
 T3 Code deletes the temporary recording from your phone after transcription or

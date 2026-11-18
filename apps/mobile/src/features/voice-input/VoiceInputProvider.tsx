@@ -16,6 +16,7 @@ import {
 } from "../../lib/microphonePriority";
 import { getLocalVoiceTranscriber } from "../../native/voiceTranscription";
 import { createVoiceRecorder } from "../../native/voiceRecorder";
+import type { Preferences as MobilePreferences } from "../../persistence/mobile-preferences";
 import { mobilePreferencesAtom, saveMobilePreferences } from "../../state/preferences";
 import { getNativeShowcaseScene } from "../showcase/nativeShowcaseScene";
 import {
@@ -26,7 +27,8 @@ import { createLazyVoiceRecorder } from "./lazyVoiceRecorder";
 import { VOICE_WAVEFORM_SAMPLE_COUNT } from "./voiceInputMetering";
 import { VoiceInputSession } from "./voiceInputSession";
 import { createVoiceRecordingPermission } from "./voiceRecordingPermission";
-import { cleanUpVoiceTranscript, voiceRouteAtom } from "./voiceDestination";
+import { cleanUpVoiceTranscript, listenToVoiceStreams, voiceRouteAtom } from "./voiceDestination";
+import { createPcmStreamCapture } from "./pcmStreamCapture";
 import { makePermissionStatusAtom } from "../../lib/permissionStatusAtom";
 import {
   acquireAudioSession,
@@ -118,13 +120,29 @@ const voiceInputAtom = Atom.make((get) => {
       return preferredMicrophoneInput(inputs, order);
     },
   });
+  const capture = createPcmStreamCapture({
+    fileRecorder: recorder,
+    createStream: () =>
+      new AudioModule.AudioStream({ sampleRate: 16_000, channels: 1, encoding: "float32" }),
+    onDurationLimit: () => void session.controller.stop(),
+    onError: (message) => void session.controller.interruptRecording(message),
+  });
+  const readPreference = <A,>(read: (preferences: MobilePreferences) => A, fallback: A) => {
+    const preferences = registry.get(mobilePreferencesAtom);
+    return AsyncResult.isSuccess(preferences) ? read(preferences.value) : fallback;
+  };
+  listenToVoiceStreams({
+    streamingEnabled: () =>
+      readPreference((preferences) => preferences.speechStreaming, true) !== false,
+    onText: (text) => session.showPreview(text),
+    onError: (message) => void session.controller.interruptRecording(message),
+  });
   const session: VoiceInputSession = new VoiceInputSession({
-    recorder,
+    recorder: capture.recorder,
     getTranscriber: () => {
       const route = registry.get(voiceRouteAtom);
-      if (route) return route.transcriber;
-      const transcriber = registry.get(localVoiceTranscriberAtom);
-      return transcriber === "checking" ? null : transcriber;
+      const transcriber = route ? route.transcriber : registry.get(localVoiceTranscriberAtom);
+      return transcriber && transcriber !== "checking" ? capture.transcriber(transcriber) : null;
     },
     requestPermission: permission.requestPermission,
     configureRecording: async () => {
@@ -143,16 +161,14 @@ const voiceInputAtom = Atom.make((get) => {
     },
     deleteRecording: (uri) => new File(uri).delete(),
     cleanUpTranscript: (transcript, { signal, draft, environmentId }) => {
-      const cleanupEnabled = () => {
-        const preferences = registry.get(mobilePreferencesAtom);
-        return AsyncResult.isSuccess(preferences) && preferences.value.transcriptCleanup === true;
-      };
+      const cleanupEnabled = () =>
+        readPreference((preferences) => preferences.transcriptCleanup, false) === true;
       return cleanupEnabled()
         ? cleanUpVoiceTranscript(environmentId, transcript, draft, signal, cleanupEnabled)
         : null;
     },
     sampleRecording: () => {
-      const status = recorder.getStatus();
+      const status = capture.recorder.getStatus();
       return status?.isRecording
         ? { durationMillis: status.durationMillis, metering: status.metering }
         : null;
@@ -164,7 +180,7 @@ const voiceInputAtom = Atom.make((get) => {
   get.addFinalizer(() => {
     permission.dispose();
     session.dispose();
-    recorder.release();
+    capture.recorder.release();
   });
   return { session, audioLevels };
 }).pipe(Atom.keepAlive, Atom.withLabel("mobile:voice-input"));
