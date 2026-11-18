@@ -18,7 +18,7 @@ import {
   type StatusLabel,
 } from "../threads/thread-list-v2-items";
 import { SuperThreadMemberRows, type SuperThreadMemberRowHost } from "./SuperThreadMemberRows";
-import { openSuperThread } from "./superThreadLevel";
+import { openSuperThread, useReportOpenSuperThreadTitle } from "./superThreadLevel";
 import { resolveSuperThreadRollup, type SuperThreadRollup } from "./superThreadList";
 
 const DONE: StatusLabel = {
@@ -61,6 +61,8 @@ export function SuperThreadListSections(props: {
     readonly hasOwnRows: boolean;
   };
   readonly pane: "screen" | "sidebar";
+  /** The screen's native bar names the open super thread and leads back, so the list doesn't. */
+  readonly headerInBar?: boolean;
   readonly selectedThreadKey: string | null;
   readonly onSelectThread: (thread: EnvironmentThreadShell) => void;
   readonly memberRowHost: SuperThreadMemberRowHost;
@@ -69,6 +71,8 @@ export function SuperThreadListSections(props: {
   const { savedConnectionsById } = useSavedRemoteConnections();
   // The folded Duo's workspace bar carries this back button instead.
   const backInBar = useDeviceType() === "duo-folded";
+  const open = props.list.open;
+  useReportOpenSuperThreadTitle(props.headerInBar && open !== null ? open.header.title : null);
   if (props.list.sections.length === 0) return null;
   const sidebar = props.pane === "sidebar";
   const projectByKey = new Map(
@@ -86,55 +90,81 @@ export function SuperThreadListSections(props: {
     const showEnvironment = rows.some((row) => row.environmentId !== header.environmentId);
     return (
       <View className="pb-2">
-        <View className={cn("gap-0.5 pt-1 pb-3", sidebar ? "px-4" : "px-5")}>
-          {backInBar ? null : (
+        {props.headerInBar ? (
+          // The bar only names the level, so the super thread stays a row to open it from.
+          <>
+            <SuperThreadMemberRows
+              {...rowProps}
+              rows={[header]}
+              hints={new Map([[scopedThreadKey(header.environmentId, header.id), summary(rows)]])}
+              showEnvironment={false}
+              statusOverrides={
+                new Map([
+                  [
+                    scopedThreadKey(header.environmentId, header.id),
+                    rollupLabel(resolveSuperThreadRollup(header, rows)),
+                  ],
+                ])
+              }
+              onSelectThread={props.onSelectThread}
+            />
+            {rows.length > 0 ? (
+              <View className={sidebar ? "px-2" : undefined}>
+                <ThreadListV2Section label="Threads" pane={props.pane} />
+              </View>
+            ) : null}
+          </>
+        ) : (
+          <View className={cn("gap-0.5 pt-1 pb-3", sidebar ? "px-4" : "px-5")}>
+            {backInBar ? null : (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Back to super threads"
+                hitSlop={8}
+                onPress={() => openSuperThread(null)}
+                className="min-h-8 flex-row items-center gap-1 self-start"
+                style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
+              >
+                <SymbolView name="chevron.left" size={14} tintColorClassName="accent-primary" />
+                <Text className="text-base text-primary">Super threads</Text>
+              </Pressable>
+            )}
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="Back to super threads"
-              hitSlop={8}
-              onPress={() => openSuperThread(null)}
-              className="min-h-8 flex-row items-center gap-1 self-start"
+              accessibilityLabel={`Open ${header.title}`}
+              onPress={() => props.onSelectThread(header)}
+              className="flex-row items-center gap-2"
               style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
             >
-              <SymbolView name="chevron.left" size={14} tintColorClassName="accent-primary" />
-              <Text className="text-base text-primary">Super threads</Text>
+              <View className="flex-1 gap-0.5">
+                <Text
+                  numberOfLines={2}
+                  className={cn(
+                    "text-lg font-t3-bold leading-snug",
+                    sidebar ? "text-drawer-foreground" : "text-foreground",
+                  )}
+                >
+                  {header.title}
+                </Text>
+                <Text
+                  className={cn(
+                    "text-xs",
+                    sidebar ? "text-drawer-foreground-muted" : "text-foreground-muted",
+                  )}
+                >
+                  {summary(rows)}
+                </Text>
+              </View>
+              <SymbolView
+                name="chevron.right"
+                size={13}
+                tintColorClassName={
+                  sidebar ? "accent-drawer-foreground-muted" : "accent-foreground-muted"
+                }
+              />
             </Pressable>
-          )}
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={`Open ${header.title}`}
-            onPress={() => props.onSelectThread(header)}
-            className="flex-row items-center gap-2"
-            style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
-          >
-            <View className="flex-1 gap-0.5">
-              <Text
-                numberOfLines={2}
-                className={cn(
-                  "text-lg font-t3-bold leading-snug",
-                  sidebar ? "text-drawer-foreground" : "text-foreground",
-                )}
-              >
-                {header.title}
-              </Text>
-              <Text
-                className={cn(
-                  "text-xs",
-                  sidebar ? "text-drawer-foreground-muted" : "text-foreground-muted",
-                )}
-              >
-                {summary(rows)}
-              </Text>
-            </View>
-            <SymbolView
-              name="chevron.right"
-              size={13}
-              tintColorClassName={
-                sidebar ? "accent-drawer-foreground-muted" : "accent-foreground-muted"
-              }
-            />
-          </Pressable>
-        </View>
+          </View>
+        )}
         {rows.length > 0 ? (
           <SuperThreadMemberRows
             {...rowProps}
