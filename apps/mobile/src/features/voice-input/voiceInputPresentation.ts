@@ -10,6 +10,7 @@ export type VoiceComposerPresentation = {
   readonly statusKind: "active" | "error" | null;
   readonly statusLabel: string | null;
   readonly confirmationEnabled: boolean;
+  readonly confirmationLabel: string;
 };
 
 export function resolveVoiceComposerPresentation(
@@ -26,6 +27,7 @@ export function resolveVoiceComposerPresentation(
         statusKind: null,
         statusLabel: null,
         confirmationEnabled: false,
+        confirmationLabel: resolve(msg("Finish dictation")),
       };
     case "error":
       return {
@@ -35,6 +37,7 @@ export function resolveVoiceComposerPresentation(
         statusKind: "error",
         statusLabel: state.error,
         confirmationEnabled: false,
+        confirmationLabel: resolve(msg("Finish dictation")),
       };
     case "preparing":
       return {
@@ -44,6 +47,7 @@ export function resolveVoiceComposerPresentation(
         statusKind: "active",
         statusLabel: resolve(msg("Preparing", { $context: "voice input status" })),
         confirmationEnabled: false,
+        confirmationLabel: resolve(msg("Finish dictation")),
       };
     case "recording": {
       const seconds = Math.max(0, Math.floor(elapsedSeconds));
@@ -58,10 +62,10 @@ export function resolveVoiceComposerPresentation(
           }),
         ),
         confirmationEnabled: true,
+        confirmationLabel: resolve(msg("Finish dictation")),
       };
     }
     case "transcribing":
-    case "post-processing":
       return {
         leadingAction: "cancel",
         trailingAction: "confirm",
@@ -69,6 +73,17 @@ export function resolveVoiceComposerPresentation(
         statusKind: "active",
         statusLabel: resolve(msg("Transcribing", { $context: "voice input status" })),
         confirmationEnabled: false,
+        confirmationLabel: resolve(msg("Finish dictation")),
+      };
+    case "post-processing":
+      return {
+        leadingAction: "cancel",
+        trailingAction: "confirm",
+        showsSend: false,
+        statusKind: "active",
+        statusLabel: resolve(msg("Cleaning up", { $context: "voice input status" })),
+        confirmationEnabled: true,
+        confirmationLabel: resolve(msg("Skip cleanup")),
       };
   }
 }

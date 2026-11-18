@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type { PreparedVoiceTranscription } from "@t3tools/client-runtime/voice-input";
+import { EnvironmentId } from "@t3tools/contracts";
 import { resetVoiceInputGlobalsForTests } from "../../../../../packages/client-runtime/src/voice-input/controller";
 import {
   acquireAudioSession,
@@ -29,7 +30,7 @@ function createSession(
   overrides?: Partial<
     Pick<
       VoiceInputSessionDependencies,
-      "configureRecording" | "releaseRecording" | "sampleRecording"
+      "configureRecording" | "releaseRecording" | "sampleRecording" | "cleanUpTranscript"
     >
   >,
 ) {
@@ -184,6 +185,45 @@ describe("global voice input", () => {
 
     expect(drafts.get("first")).toBe("original prompt spoken text");
     expect(drafts.get(visibleDraft)).toBe("other prompt");
+    expect(session.controller.currentState.phase).toBe("idle");
+  });
+
+  it.each([
+    { outcome: "cleaned", expected: "Spoken text." },
+    { outcome: "skipped", expected: "spoken text" },
+  ])("cleans up on the draft's environment, and finishing $outcome", async (row) => {
+    const cleanup = Promise.withResolvers<string>();
+    const cleanupEntered = Promise.withResolvers<void>();
+    const cleanUpTranscript = vi.fn((): Promise<string> | null => {
+      cleanupEntered.resolve();
+      return cleanup.promise;
+    });
+    const { session } = createSession({ cleanUpTranscript });
+    const commit = vi.fn();
+    const draftEnvironment = EnvironmentId.make("draft-environment");
+
+    await session.start(createVoiceInputTarget("first", () => "", commit, { start: 0, end: 0 }));
+    await session.controller.stop();
+    expect(cleanUpTranscript).not.toHaveBeenCalled();
+    expect(commit).toHaveBeenLastCalledWith("spoken text", { start: 11, end: 11 });
+
+    await session.start(
+      createVoiceInputTarget("first", () => "", commit, { start: 0, end: 0 }, draftEnvironment),
+    );
+    const stopping = session.controller.stop();
+    await cleanupEntered.promise;
+    expect(cleanUpTranscript).toHaveBeenCalledWith(
+      "spoken text",
+      expect.objectContaining({ environmentId: draftEnvironment }),
+    );
+    expect(session.controller.currentState.phase).toBe("post-processing");
+    if (row.outcome === "cleaned") cleanup.resolve("Spoken text.");
+    else await session.finish();
+    await stopping;
+    expect(commit).toHaveBeenLastCalledWith(row.expected, {
+      start: row.expected.length,
+      end: row.expected.length,
+    });
     expect(session.controller.currentState.phase).toBe("idle");
   });
 
