@@ -8,6 +8,7 @@ import {
   type EnvironmentId,
   DEFAULT_SPEECH_TRANSCRIPTION_OPTIONS,
   type SpeechPostProcessingOptions,
+  type SpeechStreamText,
   type VoiceTranscriptionDestination,
 } from "@t3tools/contracts";
 import {
@@ -16,12 +17,18 @@ import {
   getCloudSpeechModels,
   requireCloudSpeechKey,
   transcribeCloudPcm,
+  getCloudWhisperSpeechStreamUrl,
   getEnvironmentSpeechStatus,
+  getEnvironmentSpeechStreamUrl,
+  openSpeechStream,
   postProcessEnvironmentTranscript,
+  streamsCloudSpeech,
+  streamsEnvironmentSpeech,
   transcribeEnvironmentPcm,
   transcriptCleanupContext,
   VoiceTranscriptionError,
   type VoiceDraftSnapshot,
+  type VoiceStreamingSession,
 } from "@t3tools/client-runtime/voice-input";
 import { FetchHttpClient, type HttpClient } from "effect/http";
 import type { PreparedConnection } from "@t3tools/client-runtime/connection";
@@ -188,6 +195,23 @@ export function runSpeech<A, E>(
     { signal },
   );
 }
+type VoiceStreamListeners = {
+  readonly streamingEnabled: () => boolean;
+  readonly onText: (text: SpeechStreamText) => void;
+  readonly onError: (message: string) => void;
+};
+
+let streamListeners: VoiceStreamListeners = {
+  streamingEnabled: () => true,
+  onText: () => {},
+  onError: () => {},
+};
+
+/** The app has one dictation at a time; its session receives every live stream's text and failure. */
+export function listenToVoiceStreams(listeners: VoiceStreamListeners) {
+  streamListeners = listeners;
+}
+
 function environmentTranscriber(
   prepared: PreparedConnection,
   canSend: () => boolean,
@@ -195,12 +219,31 @@ function environmentTranscriber(
 ) {
   const provider = cloud?.provider;
   const model = cloud?.provider === "openrouter" ? cloud.model : undefined;
+  // A failed stream reports its error; it never falls back to batch or another provider.
+  const openStream = async <E>(
+    url: Effect.Effect<string, E, HttpClient.HttpClient>,
+    signal: AbortSignal,
+  ): Promise<VoiceStreamingSession> => {
+    const listeners = streamListeners;
+    return openSpeechStream({
+      url: await runSpeech(url, signal, canSend),
+      options: DEFAULT_SPEECH_TRANSCRIPTION_OPTIONS,
+      signal,
+      canSend,
+      onText: listeners.onText,
+      onError: (error) => listeners.onError(error.message),
+    });
+  };
   return createEnvironmentTranscriber({
     canSend,
     prepare: async (signal) => {
       if (provider) {
-        await runSpeech(requireCloudSpeechKey(prepared, provider), signal, canSend);
-        return "auto";
+        const keys = await runSpeech(requireCloudSpeechKey(prepared, provider), signal, canSend);
+        if (!streamsCloudSpeech(provider, keys)) return { locale: "auto" };
+        return {
+          locale: "auto",
+          streaming: await openStream(getCloudWhisperSpeechStreamUrl(prepared), signal),
+        };
       }
       const status = await runSpeech(getEnvironmentSpeechStatus(prepared), signal, canSend);
       if (!status.supported)
@@ -214,7 +257,7 @@ function environmentTranscriber(
             ),
           ),
         });
-      return status.languages
+      const locale = status.languages
         ? effectiveSpeechLanguage(
             {
               languages: status.languages,
@@ -223,6 +266,11 @@ function environmentTranscriber(
             "auto",
           )
         : "auto";
+      if (!streamsEnvironmentSpeech(status, streamListeners.streamingEnabled())) return { locale };
+      return {
+        locale,
+        streaming: await openStream(getEnvironmentSpeechStreamUrl(prepared), signal),
+      };
     },
     decode: (uri) => {
       if (!native?.decodeRecording)
