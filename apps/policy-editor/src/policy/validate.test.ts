@@ -139,6 +139,19 @@ const FIXTURES: ReadonlyArray<readonly [name: string, document: unknown, expect:
     valid,
   ],
   [
+    "a Whisper endpoint locked field by field, as the Settings page locks it",
+    policy({
+      settings: {
+        "cloudSpeechWhisper.url": {
+          value: "https://asr.example.com/v1/audio/transcriptions",
+          locked: true,
+        },
+        "cloudSpeechWhisper.model": { value: "whisper-1", locked: true },
+      },
+    }),
+    valid,
+  ],
+  [
     "a worktree rule locked without worktreeCleanup",
     lock("storageCleanup.worktreeAfterDays", 3),
     atSetting("storageCleanup.worktreeAfterDays"),
