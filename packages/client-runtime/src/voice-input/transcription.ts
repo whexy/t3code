@@ -8,6 +8,8 @@ export type VoiceTranscriptionOptions = {
 };
 
 export type VoiceStreamingSession = {
+  /** Takes the microphone's 16 kHz mono samples while recording. */
+  readonly feed?: (pcm: Float32Array) => void;
   readonly finish: (options: VoiceTranscriptionOptions) => Promise<string>;
 };
 

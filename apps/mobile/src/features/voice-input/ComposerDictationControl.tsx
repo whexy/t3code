@@ -1,4 +1,5 @@
 import type { VoiceInputPhase, VoiceInputState } from "@t3tools/client-runtime/voice-input";
+import type { SpeechStreamText } from "@t3tools/contracts";
 import { useGT } from "gt-react-native";
 import { memo, useState, type ReactNode } from "react";
 import { Linking, Pressable, Text as SystemText, View, type LayoutChangeEvent } from "react-native";
@@ -345,6 +346,28 @@ export function ComposerDictationError(props: {
           type="monochrome"
         />
       </Pressable>
+    </View>
+  );
+}
+
+// The newest words matter while speaking; a long dictation keeps only its tail on screen.
+const PREVIEW_TAIL_CHARACTERS = 280;
+
+export function ComposerDictationPreview(props: { readonly preview: SpeechStreamText | null }) {
+  if (!props.preview) return null;
+  const { committed, tentative } = props.preview;
+  const overflow = committed.length + tentative.length - PREVIEW_TAIL_CHARACTERS;
+  const shownCommitted =
+    overflow > 0 ? committed.slice(Math.min(overflow, committed.length)) : committed;
+  const shownTentative =
+    overflow > committed.length ? tentative.slice(overflow - committed.length) : tentative;
+  return (
+    <View accessibilityLabel="Live transcription" className="min-w-0 px-4 py-2">
+      <Text className="text-sm text-foreground" numberOfLines={4}>
+        {overflow > 0 ? "…" : null}
+        {shownCommitted}
+        <Text className="text-sm text-foreground-muted">{shownTentative}</Text>
+      </Text>
     </View>
   );
 }

@@ -31,7 +31,7 @@ vi.mock("../../state/preferences", async () => {
 });
 vi.mock("./voiceDestination", async () => {
   const { Atom } = await import("effect/reactivity");
-  return { voiceRouteAtom: Atom.make(null) };
+  return { voiceRouteAtom: Atom.make(null), listenToVoiceStreams: () => {} };
 });
 
 import { setAudioModeAsync } from "expo-audio";
