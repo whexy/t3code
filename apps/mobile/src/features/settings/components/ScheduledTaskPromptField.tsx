@@ -6,6 +6,7 @@ import type { ComposerEditorSelection } from "../../../components/ComposerEditor
 import {
   ComposerDictationCancelAction,
   ComposerDictationError,
+  ComposerDictationPreview,
   ComposerDictationPrimaryAction,
   ComposerDictationStartAction,
   ComposerDictationStatus,
@@ -63,6 +64,7 @@ export function ScheduledTaskPromptField(props: {
         error={voice.state.phase === "error" ? voice.state.error : null}
         onDismiss={voice.cancel}
       />
+      <ComposerDictationPreview preview={voice.preview} />
       {showsDictation ? (
         <ComposerDictationToolbar showsDictation>
           <View className="h-11 flex-row items-center">

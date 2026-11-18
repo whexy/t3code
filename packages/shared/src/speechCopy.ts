@@ -11,7 +11,7 @@ export function cloudSpeechDisclosure(
   if (provider === "whisper")
     return resolve(
       msg(
-        "After you stop, {environment} sends your recording and vocabulary hints, including project names, to the Whisper-compatible endpoint configured on {environment}.",
+        "{environment} sends your audio and vocabulary hints, including project names, to the Whisper-compatible endpoint configured on {environment}: while you speak when it has a streaming URL, otherwise after you stop.",
         { environment },
       ),
     );

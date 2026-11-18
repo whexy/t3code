@@ -6,6 +6,8 @@ import {
   getEnvironmentSpeechStatus,
   getEnvironmentSpeechStreamUrl,
   openSpeechStream,
+  streamsCloudSpeech,
+  streamsEnvironmentSpeech,
   throwIfVoiceTranscriptionAborted,
   transcribeEnvironmentPcm,
   type VoiceInputErrorCode,
@@ -99,7 +101,7 @@ export function createBrowserVoiceInputPlatform(input: {
       );
       throwIfVoiceTranscriptionAborted(options.signal);
       const locale = effectiveSpeechLanguage(cloudSpeechLanguages, recordingOptions.speechLanguage);
-      if (input.cloudProvider !== "whisper" || !keys.whisperStreaming)
+      if (!streamsCloudSpeech(input.cloudProvider, keys))
         return { locale, transcribe: transcribeRecording };
       // A failed stream reports its error; it never falls back to batch or another provider.
       const url = await runEnvironmentSpeech(
@@ -146,10 +148,7 @@ export function createBrowserVoiceInputPlatform(input: {
     const batchLocale =
       status.supportsTranslation && recordingOptions.speechTranslateToEnglish ? "en" : language;
     const batch = { locale: batchLocale, transcribe: transcribeRecording };
-    if (
-      !canStream() ||
-      (status.supportsStreaming ? !nativeStreaming : !status.supportsBufferedStreaming)
-    ) {
+    if (!canStream() || !streamsEnvironmentSpeech(status, streamingEnabled)) {
       return batch;
     }
     const url = await runEnvironmentSpeech(getEnvironmentSpeechStreamUrl(input.prepared), options);

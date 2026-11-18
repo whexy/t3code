@@ -35,6 +35,7 @@ export {
 } from "./environment.ts";
 export { transcriptCleanupContext } from "./cleanup.ts";
 export { openSpeechStream } from "./stream.ts";
+export { streamsCloudSpeech, streamsEnvironmentSpeech } from "./streaming.ts";
 export {
   VoiceTranscriptionError,
   throwIfVoiceTranscriptionAborted,
