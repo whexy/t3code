@@ -1,5 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import * as Atom from "effect/reactivity/Atom";
+import { useLayoutEffect } from "react";
 
 import { appAtomRegistry } from "../../state/atom-registry";
 
@@ -18,6 +19,29 @@ export function useOpenSuperThreadKey(): string | null {
 
 export function openSuperThread(threadKey: string | null): void {
   appAtomRegistry.set(openSuperThreadAtom, threadKey);
+}
+
+const openSuperThreadTitleAtom = Atom.make<string | null>(null).pipe(
+  Atom.keepAlive,
+  Atom.withLabel("mobile:open-super-thread-title"),
+);
+
+/** The title of the super thread the list shows one level down, for the bar above the list. */
+export function useOpenSuperThreadTitle(): string | null {
+  return useAtomValue(openSuperThreadTitleAtom);
+}
+
+/**
+ * Hands the open super thread's title to the screen's bar. Only the list knows which one it
+ * shows: a super thread it can no longer find closes by derivation, without clearing the open key.
+ */
+export function useReportOpenSuperThreadTitle(title: string | null): void {
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- the native bar is drawn by the screen above the list, which cannot derive which super thread the list shows
+  useLayoutEffect(() => {
+    if (title === null) return;
+    appAtomRegistry.set(openSuperThreadTitleAtom, title);
+    return () => appAtomRegistry.set(openSuperThreadTitleAtom, null);
+  }, [title]);
 }
 
 const NO_ITEMS: ReadonlyArray<never> = [];
