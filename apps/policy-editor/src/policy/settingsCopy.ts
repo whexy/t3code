@@ -52,13 +52,30 @@ export const SETTINGS_COPY: ReadonlyArray<SettingCopy> = [
     control: "json",
   },
   {
-    path: "cloudSpeechWhisper",
+    path: "cloudSpeechWhisper.url",
     section: "/settings/voice",
     group: "Transcription",
-    title: "Whisper-compatible endpoint",
+    title: "Whisper endpoint URL",
     description:
-      "The full URL this environment posts recordings to, and the model it names. An empty URL turns the provider off; its key is cloudSpeechCredentials.whisper.",
-    control: "json",
+      "Recordings are posted to this exact URL. An empty URL turns the provider off; its key is cloudSpeechCredentials.whisper.",
+    control: "text",
+  },
+  {
+    path: "cloudSpeechWhisper.model",
+    section: "/settings/voice",
+    group: "Transcription",
+    title: "Whisper endpoint model",
+    description: "The model named in each request to the Whisper-compatible endpoint.",
+    control: "text",
+  },
+  {
+    path: "cloudSpeechWhisper.streamingUrl",
+    section: "/settings/voice",
+    group: "Transcription",
+    title: "Whisper streaming URL",
+    description:
+      "When set, audio streams while you speak, so text is ready soon after you stop. Empty sends each recording when it ends.",
+    control: "text",
   },
   {
     path: "speechModelId",
