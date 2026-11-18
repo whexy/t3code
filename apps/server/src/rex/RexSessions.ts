@@ -43,6 +43,9 @@ const LeaseDuration = Context.Reference<Duration.Duration>("t3/rex/RexSessions/L
   defaultValue: () => Duration.seconds(30),
 });
 
+/** How often a pending session's size owner is read for the latch. */
+const OWNER_POLL = Duration.seconds(1);
+
 type CheckResult =
   | { readonly _tag: "reuse"; readonly sessionId: string }
   | { readonly _tag: "create" };
@@ -85,13 +88,16 @@ export const make = Effect.fn("RexSessions.make")(function* () {
   const after = (effect: Effect.Effect<void>) =>
     Effect.sleep(lease).pipe(Effect.andThen(effect), Effect.forkIn(scope), Effect.asVoid);
 
-  /** Reap and KillSession: kill a pending session nobody holds, unless an app took it over. */
+  /**
+   * Reap and KillSession: kill a pending session nobody holds, unless an app owns its size now or
+   * once did (the latch).
+   */
   const reapOnce = Effect.fn("RexSessions.reap")(function* (cwd: string) {
     const rec = yield* store.get(cwd);
     if (rec?.st !== "pending" || rec.holders.length > 0) return;
     const outcome = yield* Effect.gen(function* () {
       if (!(yield* isAlive(rec.sessionId))) return undefined;
-      if (yield* cli.takenOver(rec.sessionId)) {
+      if (rec.saw || (yield* cli.takenOver(rec.sessionId))) {
         return { st: "confirmed", sessionId: rec.sessionId } as const;
       }
       yield* cli.kill(rec.sessionId);
@@ -111,6 +117,43 @@ export const make = Effect.fn("RexSessions.make")(function* () {
     );
 
   /**
+   * LatchOwner: the first time an app owns a pending session's size, persist that, so the reap
+   * still counts it after the app disconnects or the server restarts. Answers whether to keep
+   * watching.
+   */
+  const latchOwner = Effect.fn("RexSessions.latchOwner")(function* (
+    cwd: string,
+    sessionId: string,
+  ) {
+    const rec = yield* store.get(cwd);
+    if (rec?.st !== "pending" || rec.sessionId !== sessionId || rec.saw) return false;
+    if (!(yield* cli.takenOver(sessionId))) return true;
+    yield* store.set(cwd, { ...rec, saw: true });
+    return false;
+  });
+
+  const watching = new Set<string>();
+  const watchOwner = (cwd: string, sessionId: string) => {
+    const key = `${cwd}\0${sessionId}`;
+    if (watching.has(key)) return Effect.void;
+    watching.add(key);
+    const tick: Effect.Effect<void> = Effect.sleep(OWNER_POLL).pipe(
+      Effect.andThen(
+        withLock(cwd)(latchOwner(cwd, sessionId)).pipe(
+          // A failed read is not an owner; look again on the next tick.
+          Effect.orElseSucceed(() => true),
+        ),
+      ),
+      Effect.flatMap((again) => (again ? tick : Effect.void)),
+    );
+    return tick.pipe(
+      Effect.ensuring(Effect.sync(() => watching.delete(key))),
+      Effect.forkIn(scope),
+      Effect.asVoid,
+    );
+  };
+
+  /**
    * Startup's intent branch: the labelled session, if `rex new` made it, becomes pending with no
    * holder, so the size-checked reap decides it.
    */
@@ -121,8 +164,11 @@ export const make = Effect.fn("RexSessions.make")(function* () {
     const found = (yield* cli.listSessions()).find((session) => session.label === label);
     yield* store.set(
       cwd,
-      found === undefined ? undefined : { st: "pending", sessionId: found.sessionId, holders: [] },
+      found === undefined
+        ? undefined
+        : { st: "pending", sessionId: found.sessionId, holders: [], saw: false },
     );
+    if (found !== undefined) yield* watchOwner(cwd, found.sessionId);
     yield* reap(cwd);
   });
 
@@ -183,8 +229,9 @@ export const make = Effect.fn("RexSessions.make")(function* () {
     clickId: string,
     sessionId: string,
   ) {
-    yield* store.set(cwd, { st: "pending", sessionId, holders: [clickId] });
+    yield* store.set(cwd, { st: "pending", sessionId, holders: [clickId], saw: false });
     yield* armLease(cwd, clickId);
+    yield* watchOwner(cwd, sessionId);
     return sessionId;
   });
 
@@ -229,6 +276,7 @@ export const make = Effect.fn("RexSessions.make")(function* () {
     if (rec.st === "intent") return yield* resolveIntentOrRetry(cwd, rec.label);
     if (rec.st !== "pending") return;
     for (const holder of rec.holders) yield* armLease(cwd, holder);
+    yield* watchOwner(cwd, rec.sessionId);
     if (rec.holders.length === 0) yield* reap(cwd);
   });
 
