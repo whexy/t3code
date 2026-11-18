@@ -1,5 +1,6 @@
 import {
   postProcessEnvironmentTranscript,
+  transcriptCleanupContext,
   VoiceInputController,
   voiceInputBlocksSubmission,
   type VoiceDraftSnapshot,
@@ -87,18 +88,6 @@ type SessionKey = {
 };
 
 const SILENT_ACTIVITY: VoiceInputSessionActivity = { level: 0, preview: null };
-
-function cleanupContext({ text, selection }: DraftInput): DraftInput {
-  const limit = 1_024;
-  const start = Math.max(0, Math.min(selection.start, text.length));
-  const end = Math.max(start, Math.min(selection.end, text.length));
-  const before = text.slice(Math.max(0, start - limit), start);
-  const selected = text.slice(start, Math.min(end, start + limit));
-  return {
-    text: before + selected + text.slice(end, end + limit),
-    selection: { start: before.length, end: before.length + selected.length },
-  };
-}
 
 /**
  * The browser has one microphone, so every editor shares one dictation per destination. The
@@ -211,7 +200,7 @@ export class VoiceInputSession {
         postProcessEnvironmentTranscript(
           preferences.cleanupPrepared,
           transcript,
-          cleanupContext(options.draft),
+          transcriptCleanupContext(options.draft),
           preferences.cleanup,
           () => hasAudioConsent() && preferences.cleanupGrant === readCleanupGrant(),
         ),
