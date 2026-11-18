@@ -41,6 +41,8 @@ import {
   useSystemWorkspaceTabBar,
 } from "./useSystemWorkspaceTabBar";
 import { openSettings } from "../../settings/settings-navigation";
+import { openSuperThread, useOpenSuperThreadTitle } from "../../super-threads/superThreadLevel";
+import { withNativeGlassHeaderItem } from "../native-glass-header-items";
 
 const TAB_TITLES = WORKSPACE_TAB_LABELS;
 
@@ -66,6 +68,14 @@ function WorkspaceRootTitle(props: {
     </View>
   );
 }
+
+const SUPER_THREAD_BACK_ITEM = withNativeGlassHeaderItem({
+  type: "button" as const,
+  label: "",
+  accessibilityLabel: "Back to super threads",
+  icon: { type: "sfSymbol" as const, name: "chevron.left" as never },
+  onPress: () => openSuperThread(null),
+});
 
 function WorkspaceRootContent() {
   const navigation = useNavigation();
@@ -93,6 +103,10 @@ function WorkspaceRootContent() {
   // Settings is a workspace tab too; its list takes the place of the selected tab's.
   const settingsOpen = workspace.settingsOpen;
   const headerOnly = use(NativeWorkspaceTabActivityContext)?.headerOnly === true;
+  const openSuperThreadTitle = useOpenSuperThreadTitle();
+  // Super thread titles run long, so the bar names the level and carries the title below it.
+  const superThreadTitle =
+    !settingsOpen && state.selectedTab === "threads" ? openSuperThreadTitle : null;
   const renderHeaderTitle = () => (
     <WorkspaceRootTitle
       columnWidth={width}
@@ -126,13 +140,18 @@ function WorkspaceRootContent() {
             width,
             sidebarNavigation,
             enabled.length,
+            superThreadTitle,
           ]}
           options={{
-            title: settingsOpen
-              ? "Settings"
-              : enabled.length
-                ? TAB_TITLES[state.selectedTab]
-                : "Navigation",
+            title:
+              superThreadTitle !== null
+                ? "Super thread"
+                : settingsOpen
+                  ? "Settings"
+                  : enabled.length
+                    ? TAB_TITLES[state.selectedTab]
+                    : "Navigation",
+            unstable_headerSubtitle: superThreadTitle ?? undefined,
             headerShown: true,
             headerTransparent: NATIVE_LIQUID_GLASS_SUPPORTED,
             headerStyle: NATIVE_LIQUID_GLASS_SUPPORTED
@@ -142,13 +161,19 @@ function WorkspaceRootContent() {
             ...(enabled.length === 0
               ? { headerSearchBarOptions: undefined, unstable_headerRightItems: () => [] }
               : {}),
-            unstable_headerLeftItems: () => [],
+            // The folded Duo leads back from its bottom bar instead.
+            unstable_headerLeftItems: () =>
+              superThreadTitle !== null && deviceType !== "duo-folded"
+                ? [SUPER_THREAD_BACK_ITEM]
+                : [],
             // Beside a detail column the tab bar names the tab and the detail header the page,
             // so the sidebar keeps the brand.
             headerTitle:
-              sidebarNavigation || (!settingsOpen && state.selectedTab !== "usage")
-                ? renderHeaderTitle
-                : undefined,
+              superThreadTitle !== null
+                ? undefined
+                : sidebarNavigation || (!settingsOpen && state.selectedTab !== "usage")
+                  ? renderHeaderTitle
+                  : undefined,
           }}
         />
         <SafeAreaInsetsContext value={compactTabs ? { ...insets, bottom: 0 } : insets}>
