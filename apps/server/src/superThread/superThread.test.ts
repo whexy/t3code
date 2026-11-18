@@ -209,6 +209,29 @@ it.layer(layerTest)("super threads", (it) => {
         assert.deepEqual(shell.updatedAt, createdShell.updatedAt);
         assert.isUndefined((yield* shellOf(ordinaryThreadId)).superThread);
 
+        // A member carries its super thread on the shell and to awareness, which keep it quiet.
+        const memberThreadId = ThreadId.make("thread:member");
+        const memberOf = { environmentId: local.environmentId, threadId: superThreadId };
+        yield* orchestrator.dispatch({
+          type: "thread.create",
+          createdBy: "agent",
+          creationSource: "mcp",
+          commandId: CommandId.make("member:create"),
+          threadId: memberThreadId,
+          projectId: ProjectId.make("project:super"),
+          title: "Member",
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          superThreadMemberOf: memberOf,
+        });
+        assert.deepEqual((yield* shellOf(memberThreadId)).superThreadMemberOf, memberOf);
+        const awareness = yield* orchestrator.getAgentAwarenessSnapshot(memberThreadId);
+        assert.deepEqual(awareness.threads[0]?.superThreadMemberOf, memberOf);
+        assert.isUndefined((yield* shellOf(ordinaryThreadId)).superThreadMemberOf);
+
         // The settle cascade guards a member that has no run yet with `null`.
         const settle = (commandId: string, expectedLatestRunId: RunId | null) =>
           orchestrator.dispatch({
