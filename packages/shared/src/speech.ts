@@ -12,7 +12,7 @@ const encodeOptions = Schema.encodeSync(Schema.fromJsonString(SpeechTranscriptio
 
 export function cloudSpeechDisclosure(provider: CloudSpeechProvider, environment: string) {
   if (provider === "whisper")
-    return `After you stop, ${environment} sends your recording and vocabulary hints, including project names, to the Whisper-compatible endpoint configured on ${environment}.`;
+    return `${environment} sends your audio and vocabulary hints, including project names, to the Whisper-compatible endpoint configured on ${environment}: while you speak when it has a streaming URL, otherwise after you stop.`;
   return provider === "openrouter"
     ? `After you stop, ${environment} sends the recording to OpenRouter. OpenRouter chooses who runs your model. T3 requests zero data retention; your OpenRouter account may allow safety retention.`
     : `After you stop, ${environment} sends your recording and vocabulary hints, including project names, to ${CLOUD_SPEECH_PROVIDER_NAMES[provider]}.`;

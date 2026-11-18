@@ -27,6 +27,7 @@ import {
   cloudVoiceConnectionAtom,
   voiceConnectionAtom,
   voiceGrantAtom,
+  voiceSpeechStatusAtom,
   hasEnvironmentVoiceCapture,
 } from "../voice-input/voiceDestination";
 import { LocalModelChoice } from "./VoiceModelSection";
@@ -38,6 +39,7 @@ import { ListActionRow as SettingsActionRow } from "../../components/ui/ListActi
 import { SettingsDragHandle } from "./components/SettingsDragHandle";
 import { SettingsScreen } from "./components/SettingsScreen";
 import { SettingsSection } from "./components/SettingsSection";
+import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
 import {
   deviceMicrophoneOrder,
   localVoiceTranscriberAtom,
@@ -165,6 +167,29 @@ function EnvironmentChoice({
   );
 }
 
+function StreamingTranscriptionRow({ environmentId }: { environmentId: EnvironmentId }) {
+  const status = AsyncResult.getOrElse(
+    useAtomValue(voiceSpeechStatusAtom(environmentId)),
+    () => null,
+  );
+  const preferences = useAtomValue(mobilePreferencesAtom);
+  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
+  const supported = status?.supported === true && status.supportsStreaming;
+  return (
+    <SettingsSwitchRow
+      label="Streaming transcription"
+      subtitle={
+        supported
+          ? "Transcribe while recording. Turn off to transcribe after stopping, which may help when live transcription falls behind."
+          : "This model doesn’t support native streaming."
+      }
+      disabled={!supported || !AsyncResult.isSuccess(preferences)}
+      value={AsyncResult.isSuccess(preferences) && preferences.value.speechStreaming !== false}
+      onValueChange={(speechStreaming) => savePreferences({ speechStreaming })}
+    />
+  );
+}
+
 /** How the selected environment transcribes: its own model or a cloud provider. */
 function EnvironmentMethodSection({
   environment,
@@ -191,6 +216,9 @@ function EnvironmentMethodSection({
         // The user already agreed to send audio to this environment.
         onSelect={() => saveDestination(id)}
       />
+      {destination?.kind === "environment" ? (
+        <StreamingTranscriptionRow environmentId={id} />
+      ) : null}
       {cloudCapable ? (
         <CloudVoiceChoice
           environment={environment}
@@ -323,6 +351,18 @@ export function SettingsVoiceRouteScreen() {
         {!grant && transcriber === null ? (
           <Text className="px-2 text-sm text-foreground-muted">{UNAVAILABLE_EXPLANATION}</Text>
         ) : null}
+        <SettingsSection
+          title="Cleanup"
+          footer="Sends the transcript and nearby draft text, never audio, to the cleanup model of the draft’s environment. Choose that model in the environment’s Voice settings."
+        >
+          <SettingsSwitchRow
+            icon="text.alignleft"
+            label="Clean up transcripts"
+            disabled={!ready}
+            value={ready && preferencesResult.value.transcriptCleanup === true}
+            onValueChange={(transcriptCleanup) => savePreferences({ transcriptCleanup })}
+          />
+        </SettingsSection>
         {permission === "ask" || permission === "denied" ? (
           <>
             <SettingsSection title="Microphone access">

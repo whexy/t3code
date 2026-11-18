@@ -56,10 +56,10 @@ not redirect.
 The endpoint must reply with JSON such as `{"text": "…"}`. Your language, when it isn't
 **Auto**, goes along as `language`, and dictionary terms go along as `prompt`. The
 endpoint handles silence itself. If the service also offers realtime transcription,
-add its `wss://` **Streaming URL**: web and desktop then send audio while you speak, show
+add its `wss://` **Streaming URL**: web, desktop, and mobile then send audio while you speak, show
 the text as it is recognized, and have it ready soon after you stop. The live text can
-change as the service revises what it heard; only the final text goes into your draft. Mobile still sends the finished recording.
-Clear the Streaming URL to go back to sending finished recordings everywhere.
+change as the service revises what it heard; only the final text goes into your draft.
+Clear the Streaming URL to go back to sending finished recordings.
 Change the URL, model, or key later with the key button
 next to **Transcribe with**, or under **Cloud provider** on mobile; **Remove endpoint** turns
 it off for everyone on that environment. When your organization's policy sets the endpoint,
@@ -93,6 +93,7 @@ language; speed is the time to transcribe 30 seconds on a reference GPU. Choose
 environment's CPU; a GPU you picked yourself reports the error instead. Nothing
 is ever retried on another environment. Models marked **Live preview** show
 text while you speak. On web and desktop, turn off **Advanced → Streaming transcription**
+(on mobile, **Streaming transcription** under **Local model** in **Settings → Voice**)
 to transcribe with the same model after stopping instead. This may help when live
 transcription falls behind. The preference is saved on this device and only applies
 to models that support native streaming. Other models can process long recordings in chunks at pauses
@@ -152,7 +153,8 @@ which fixes punctuation, numbers, and spoken corrections such as "make it 42,
 sorry, 24". Depending on the model, that can involve an external service. Audio is never
 sent to it. Use the built-in instructions or write your own, press **Skip**
 while cleanup runs to insert the raw transcript, and if cleanup fails the raw
-transcript is inserted.
+transcript is inserted. On mobile, turn cleanup on in **Settings → Voice → Cleanup**;
+the phone uses the built-in instructions, and the check button skips cleanup while it runs.
 
 Cleanup uses the environment's text generation model unless you pick a
 **Cleanup model** for that environment, for example a cheaper or faster one.

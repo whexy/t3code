@@ -4,6 +4,8 @@ import {
   type CloudSpeechProvider,
   type EnvironmentId,
   DEFAULT_SPEECH_TRANSCRIPTION_OPTIONS,
+  type SpeechPostProcessingOptions,
+  type SpeechStreamText,
   type VoiceTranscriptionDestination,
 } from "@t3tools/contracts";
 import {
@@ -12,9 +14,18 @@ import {
   getCloudSpeechModels,
   requireCloudSpeechKey,
   transcribeCloudPcm,
+  getCloudWhisperSpeechStreamUrl,
   getEnvironmentSpeechStatus,
+  getEnvironmentSpeechStreamUrl,
+  openSpeechStream,
+  postProcessEnvironmentTranscript,
+  streamsCloudSpeech,
+  streamsEnvironmentSpeech,
   transcribeEnvironmentPcm,
+  transcriptCleanupContext,
   VoiceTranscriptionError,
+  type VoiceDraftSnapshot,
+  type VoiceStreamingSession,
 } from "@t3tools/client-runtime/voice-input";
 import { FetchHttpClient, type HttpClient } from "effect/http";
 import type { PreparedConnection } from "@t3tools/client-runtime/connection";
@@ -110,6 +121,52 @@ const voiceConnections = (capability: "voiceTranscription" | "cloudVoiceTranscri
 export const voiceConnectionAtom = voiceConnections("voiceTranscription");
 export const cloudVoiceConnectionAtom = voiceConnections("cloudVoiceTranscription");
 
+/** Cleanup runs on the draft's own environment, never on the audio destination. */
+const cleanupConnectionAtom = Atom.family((id: EnvironmentId) =>
+  Atom.make((get) => {
+    const environment = get(environmentPresentations.presentationAtom(id));
+    const capabilities = environment?.serverConfig?.environment.capabilities;
+    if (
+      environment?.connection.phase !== "connected" ||
+      !(capabilities?.voiceTranscription || capabilities?.cloudVoiceTranscription) ||
+      !sessionHasScope(get(environmentSession.sessionStateAtom(id)), AuthOrchestrationOperateScope)
+    )
+      return null;
+    return Option.getOrNull(get(environmentSession.preparedConnectionValueAtom(id)));
+  }),
+);
+
+// The phone has no instructions, cue or dictionary settings, so cleanup uses web's defaults.
+const CLEANUP_OPTIONS: SpeechPostProcessingOptions = {
+  speechCustomWords: [],
+  speechPostProcessingPrompt: { mode: "default", customInstructions: "" },
+};
+
+export function cleanUpVoiceTranscript(
+  environmentId: EnvironmentId,
+  transcript: string,
+  draft: VoiceDraftSnapshot,
+  signal: AbortSignal,
+  canSend: () => boolean,
+) {
+  const prepared = appAtomRegistry.get(cleanupConnectionAtom(environmentId));
+  if (!prepared)
+    return Promise.reject(
+      new Error("The draft's environment is unavailable for transcript cleanup."),
+    );
+  return runSpeech(
+    postProcessEnvironmentTranscript(
+      prepared,
+      transcript,
+      transcriptCleanupContext(draft),
+      CLEANUP_OPTIONS,
+      canSend,
+    ),
+    signal,
+    canSend,
+  ).then((result) => result.text);
+}
+
 // React Native's XMLHttpRequest fetch follows redirects. Expo's native transport honors redirect: "error".
 export function runSpeech<A, E>(
   effect: Effect.Effect<A, E, HttpClient.HttpClient>,
@@ -135,6 +192,23 @@ export function runSpeech<A, E>(
     { signal },
   );
 }
+type VoiceStreamListeners = {
+  readonly streamingEnabled: () => boolean;
+  readonly onText: (text: SpeechStreamText) => void;
+  readonly onError: (message: string) => void;
+};
+
+let streamListeners: VoiceStreamListeners = {
+  streamingEnabled: () => true,
+  onText: () => {},
+  onError: () => {},
+};
+
+/** The app has one dictation at a time; its session receives every live stream's text and failure. */
+export function listenToVoiceStreams(listeners: VoiceStreamListeners) {
+  streamListeners = listeners;
+}
+
 function environmentTranscriber(
   prepared: PreparedConnection,
   canSend: () => boolean,
@@ -142,12 +216,31 @@ function environmentTranscriber(
 ) {
   const provider = cloud?.provider;
   const model = cloud?.provider === "openrouter" ? cloud.model : undefined;
+  // A failed stream reports its error; it never falls back to batch or another provider.
+  const openStream = async <E>(
+    url: Effect.Effect<string, E, HttpClient.HttpClient>,
+    signal: AbortSignal,
+  ): Promise<VoiceStreamingSession> => {
+    const listeners = streamListeners;
+    return openSpeechStream({
+      url: await runSpeech(url, signal, canSend),
+      options: DEFAULT_SPEECH_TRANSCRIPTION_OPTIONS,
+      signal,
+      canSend,
+      onText: listeners.onText,
+      onError: (error) => listeners.onError(error.message),
+    });
+  };
   return createEnvironmentTranscriber({
     canSend,
     prepare: async (signal) => {
       if (provider) {
-        await runSpeech(requireCloudSpeechKey(prepared, provider), signal, canSend);
-        return "auto";
+        const keys = await runSpeech(requireCloudSpeechKey(prepared, provider), signal, canSend);
+        if (!streamsCloudSpeech(provider, keys)) return { locale: "auto" };
+        return {
+          locale: "auto",
+          streaming: await openStream(getCloudWhisperSpeechStreamUrl(prepared), signal),
+        };
       }
       const status = await runSpeech(getEnvironmentSpeechStatus(prepared), signal, canSend);
       if (!status.supported)
@@ -158,7 +251,7 @@ function environmentTranscriber(
           message:
             "Install a transcription model for this environment in Settings → Voice, then try again.",
         });
-      return status.languages
+      const locale = status.languages
         ? effectiveSpeechLanguage(
             {
               languages: status.languages,
@@ -167,6 +260,11 @@ function environmentTranscriber(
             "auto",
           )
         : "auto";
+      if (!streamsEnvironmentSpeech(status, streamListeners.streamingEnabled())) return { locale };
+      return {
+        locale,
+        streaming: await openStream(getEnvironmentSpeechStreamUrl(prepared), signal),
+      };
     },
     decode: (uri) => {
       if (!native?.decodeRecording)

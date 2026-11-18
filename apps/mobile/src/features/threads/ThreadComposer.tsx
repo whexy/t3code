@@ -120,6 +120,7 @@ import {
   ComposerDictationCancelAction,
   ComposerDictationDraftContent,
   ComposerDictationError,
+  ComposerDictationPreview,
   ComposerDictationPrimaryAction,
   ComposerDictationStartAction,
   ComposerDictationStatus,
@@ -646,6 +647,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
   });
   const voiceInput = useVoiceInputController({
     ownerKey: composerDraftKey,
+    environmentId: props.environmentId,
     label: props.selectedThread.title || "Untitled thread",
     readDraftMessage: () => getComposerDraftSnapshot(composerDraftKey).text,
     selection: composerMenu.selection,
@@ -996,6 +998,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
             error={voiceInput.state.phase === "error" ? voiceInput.state.error : null}
             onDismiss={voiceInput.cancel}
           />
+          <ComposerDictationPreview preview={voiceInput.preview} />
           {isExpanded ? editingAttachments : null}
           <View
             onLayout={(event) => {

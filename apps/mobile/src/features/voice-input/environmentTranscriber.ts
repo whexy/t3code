@@ -2,6 +2,7 @@ import {
   VoiceTranscriptionError,
   VOICE_RECORDING_LIMIT_SECONDS,
   throwIfVoiceTranscriptionAborted,
+  type VoiceStreamingSession,
   type VoiceTranscriber,
 } from "@t3tools/client-runtime/voice-input";
 
@@ -10,7 +11,9 @@ const maxPcmBytes = pcmBytesPerSecond * VOICE_RECORDING_LIMIT_SECONDS;
 
 export function createEnvironmentTranscriber(input: {
   readonly canSend: () => boolean;
-  readonly prepare: (signal: AbortSignal) => Promise<string>;
+  readonly prepare: (
+    signal: AbortSignal,
+  ) => Promise<{ readonly locale: string; readonly streaming?: VoiceStreamingSession }>;
   readonly decode: (uri: string) => Promise<Uint8Array>;
   readonly upload: (pcm: Uint8Array, signal: AbortSignal) => Promise<string>;
 }): VoiceTranscriber {
@@ -26,10 +29,11 @@ export function createEnvironmentTranscriber(input: {
   return {
     async prepare({ signal }) {
       check(signal);
-      const locale = await input.prepare(signal);
+      const { locale, streaming } = await input.prepare(signal);
       check(signal);
       return {
         locale,
+        ...(streaming ? { streaming } : {}),
         async transcribe(uri, { signal }) {
           check(signal);
           const decoded = await input.decode(uri);

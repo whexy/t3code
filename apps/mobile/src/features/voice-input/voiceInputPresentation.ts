@@ -7,6 +7,7 @@ export type VoiceComposerPresentation = {
   readonly statusKind: "active" | "error" | null;
   readonly statusLabel: string | null;
   readonly confirmationEnabled: boolean;
+  readonly confirmationLabel: string;
 };
 
 export function resolveVoiceComposerPresentation(
@@ -22,6 +23,7 @@ export function resolveVoiceComposerPresentation(
         statusKind: null,
         statusLabel: null,
         confirmationEnabled: false,
+        confirmationLabel: "Finish dictation",
       };
     case "error":
       return {
@@ -31,6 +33,7 @@ export function resolveVoiceComposerPresentation(
         statusKind: "error",
         statusLabel: state.error,
         confirmationEnabled: false,
+        confirmationLabel: "Finish dictation",
       };
     case "preparing":
       return {
@@ -40,6 +43,7 @@ export function resolveVoiceComposerPresentation(
         statusKind: "active",
         statusLabel: "Preparing",
         confirmationEnabled: false,
+        confirmationLabel: "Finish dictation",
       };
     case "recording": {
       const seconds = Math.max(0, Math.floor(elapsedSeconds));
@@ -50,10 +54,10 @@ export function resolveVoiceComposerPresentation(
         statusKind: "active",
         statusLabel: `Recording ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`,
         confirmationEnabled: true,
+        confirmationLabel: "Finish dictation",
       };
     }
     case "transcribing":
-    case "post-processing":
       return {
         leadingAction: "cancel",
         trailingAction: "confirm",
@@ -61,6 +65,17 @@ export function resolveVoiceComposerPresentation(
         statusKind: "active",
         statusLabel: "Transcribing",
         confirmationEnabled: false,
+        confirmationLabel: "Finish dictation",
+      };
+    case "post-processing":
+      return {
+        leadingAction: "cancel",
+        trailingAction: "confirm",
+        showsSend: false,
+        statusKind: "active",
+        statusLabel: "Cleaning up",
+        confirmationEnabled: true,
+        confirmationLabel: "Skip cleanup",
       };
   }
 }
