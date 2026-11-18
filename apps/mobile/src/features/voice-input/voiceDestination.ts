@@ -7,6 +7,7 @@ import {
   type CloudSpeechProvider,
   type EnvironmentId,
   DEFAULT_SPEECH_TRANSCRIPTION_OPTIONS,
+  type SpeechPostProcessingOptions,
   type VoiceTranscriptionDestination,
 } from "@t3tools/contracts";
 import {
@@ -16,8 +17,11 @@ import {
   requireCloudSpeechKey,
   transcribeCloudPcm,
   getEnvironmentSpeechStatus,
+  postProcessEnvironmentTranscript,
   transcribeEnvironmentPcm,
+  transcriptCleanupContext,
   VoiceTranscriptionError,
+  type VoiceDraftSnapshot,
 } from "@t3tools/client-runtime/voice-input";
 import { FetchHttpClient, type HttpClient } from "effect/http";
 import type { PreparedConnection } from "@t3tools/client-runtime/connection";
@@ -112,6 +116,52 @@ const voiceConnections = (capability: "voiceTranscription" | "cloudVoiceTranscri
   );
 export const voiceConnectionAtom = voiceConnections("voiceTranscription");
 export const cloudVoiceConnectionAtom = voiceConnections("cloudVoiceTranscription");
+
+/** Cleanup runs on the draft's own environment, never on the audio destination. */
+const cleanupConnectionAtom = Atom.family((id: EnvironmentId) =>
+  Atom.make((get) => {
+    const environment = get(environmentPresentations.presentationAtom(id));
+    const capabilities = environment?.serverConfig?.environment.capabilities;
+    if (
+      environment?.connection.phase !== "connected" ||
+      !(capabilities?.voiceTranscription || capabilities?.cloudVoiceTranscription) ||
+      !sessionHasScope(get(environmentSession.sessionStateAtom(id)), AuthOrchestrationOperateScope)
+    )
+      return null;
+    return Option.getOrNull(get(environmentSession.preparedConnectionValueAtom(id)));
+  }),
+);
+
+// The phone has no instructions, cue or dictionary settings, so cleanup uses web's defaults.
+const CLEANUP_OPTIONS: SpeechPostProcessingOptions = {
+  speechCustomWords: [],
+  speechPostProcessingPrompt: { mode: "default", customInstructions: "" },
+};
+
+export function cleanUpVoiceTranscript(
+  environmentId: EnvironmentId,
+  transcript: string,
+  draft: VoiceDraftSnapshot,
+  signal: AbortSignal,
+  canSend: () => boolean,
+) {
+  const prepared = appAtomRegistry.get(cleanupConnectionAtom(environmentId));
+  if (!prepared)
+    return Promise.reject(
+      new Error("The draft's environment is unavailable for transcript cleanup."),
+    );
+  return runSpeech(
+    postProcessEnvironmentTranscript(
+      prepared,
+      transcript,
+      transcriptCleanupContext(draft),
+      CLEANUP_OPTIONS,
+      canSend,
+    ),
+    signal,
+    canSend,
+  ).then((result) => result.text);
+}
 
 // React Native's XMLHttpRequest fetch follows redirects. Expo's native transport honors redirect: "error".
 export function runSpeech<A, E>(

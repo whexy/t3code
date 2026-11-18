@@ -423,7 +423,7 @@ export function ComposerDictationPrimaryAction(props: {
         size={props.size}
         accessibilityLabel={
           props.presentation.confirmationEnabled
-            ? gt("Finish dictation")
+            ? props.presentation.confirmationLabel
             : (props.presentation.statusLabel ?? gt("Preparing voice input"))
         }
         disabled={!props.presentation.confirmationEnabled}

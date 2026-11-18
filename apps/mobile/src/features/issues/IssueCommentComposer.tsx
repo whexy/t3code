@@ -1,3 +1,4 @@
+import type { EnvironmentId } from "@t3tools/contracts";
 import { useGT } from "gt-react-native";
 import { useRef, useState } from "react";
 import { Platform, View } from "react-native";
@@ -41,6 +42,8 @@ const EDITOR_LEADING_INSET = 14;
 export function IssueCommentComposer(props: {
   /** Names this draft to dictation, so a recording started here lands here. */
   readonly ownerKey: string;
+  /** Transcript cleanup runs on the issue's environment. */
+  readonly environmentId: EnvironmentId;
   readonly label: string;
   readonly blocked: string | null;
   readonly posting: boolean;
@@ -69,6 +72,7 @@ export function IssueCommentComposer(props: {
   const compactEditor = useCompactComposerEditor(bodyText, draft, Platform.OS === "ios" && focused);
   const voiceInput = useVoiceInputController({
     ownerKey: props.ownerKey,
+    environmentId: props.environmentId,
     label: props.label,
     readDraftMessage: () => latestDraft.current,
     selection,
