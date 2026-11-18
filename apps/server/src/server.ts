@@ -94,6 +94,7 @@ import * as TerminalManager from "./terminal/Manager.ts";
 import * as McpHttpServer from "./mcp/McpHttpServer.ts";
 import * as PeerForwarding from "./peer/PeerForwarding.ts";
 import * as SuperThreadLaunches from "./superThread/superThreadLaunches.ts";
+import * as RexSessions from "./rex/RexSessions.ts";
 import * as RemoteDelegation from "./peer/RemoteDelegation.ts";
 import * as PeerLinkRequests from "./peer/PeerLinkRequests.ts";
 import * as PeerLinks from "./peer/PeerLinks.ts";
@@ -835,6 +836,7 @@ const layerRuntimeDependencies = layerRuntimeCoreDependencies.pipe(
   // Layers memoize by reference, so this is the same policy the settings layer reads.
   Layer.provideMerge(AnalyticsService.layer.pipe(Layer.provide(ManagedPolicy.layer))),
   Layer.provideMerge(ExternalLauncher.layer),
+  Layer.provideMerge(RexSessions.layer),
   Layer.provideMerge(RemoteOpenTargets.layer),
   Layer.provideMerge(DirectEndpoints.layer.pipe(Layer.provide(layerServerEnvironment))),
   Layer.provideMerge(ServerLifecycleEvents.layer),
