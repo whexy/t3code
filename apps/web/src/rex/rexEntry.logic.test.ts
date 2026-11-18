@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { OPEN_FROM_DESKTOP, reportFor, rexEntry } from "./rexEntry.logic";
+import {
+  NO_OPERATE_SCOPE,
+  OPEN_FROM_DESKTOP,
+  reportFor,
+  rexEntry,
+  rexLeads,
+} from "./rexEntry.logic";
 
 const available = { available: true, hostId: "host" } as const;
 const down = { available: false, reason: "rex server is not running" } as const;
@@ -20,7 +26,26 @@ describe("rexEntry", () => {
     ["an unanswered host hides it", true, undefined, { kind: "hidden" }],
     ["desktop with Rex on both ends opens", true, available, { kind: "enabled" }],
   ] as const)("%s", (_, macRex, host, expected) => {
-    expect(rexEntry({ macRex, host })).toEqual(expected);
+    expect(rexEntry({ macRex, host, canOperate: true })).toEqual(expected);
+  });
+
+  it("a connection that can't operate the host says why", () => {
+    expect(rexEntry({ macRex: true, host: available, canOperate: false })).toEqual({
+      kind: "disabled",
+      reason: NO_OPERATE_SCOPE,
+    });
+  });
+});
+
+describe("rexLeads", () => {
+  it.each([
+    ["chosen and openable", true, { kind: "enabled" }, true],
+    ["not chosen", false, { kind: "enabled" }, false],
+    ["chosen, but a browser", true, { kind: "disabled", reason: OPEN_FROM_DESKTOP }, false],
+    ["chosen, but no Rex on the host", true, { kind: "disabled", reason: "no rex" }, false],
+    ["chosen, but a file is targeted", true, { kind: "hidden" }, false],
+  ] as const)("%s: %s", (_, preferred, entry, leads) => {
+    expect(rexLeads({ preferred, entry })).toBe(leads);
   });
 });
 
