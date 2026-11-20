@@ -45,6 +45,8 @@ export const issuesSearchFromUrl = (raw: Record<string, unknown>): IssuesSearch 
   label: labels(raw.label),
   assignee: bounded(raw.assignee),
   order: raw.order === "created" ? "created" : undefined,
+  upstreamIssues:
+    raw.upstreamIssues === "only" || raw.upstreamIssues === "hide" ? raw.upstreamIssues : undefined,
   selectedEnvironmentId: bounded(raw.selectedEnvironmentId) as EnvironmentId | undefined,
   selectedProjectId: bounded(raw.selectedProjectId) as ProjectId | undefined,
   selectedHost: bounded(raw.selectedHost),

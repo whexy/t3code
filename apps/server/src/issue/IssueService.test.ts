@@ -5,6 +5,7 @@ import * as Option from "effect/Option";
 import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 import {
   IssueTrackerKind,
+  type IssueListEntry,
   type IssueTrackerProjectBinding,
   SourceControlProviderKind,
   type OrchestrationProjectShell,
@@ -305,30 +306,52 @@ describe("IssueService", () => {
 
       // A fork lists its upstream's issues and its own, counted once, and may write to both.
       const fork = project({ id: "fork", repository: "acme/web" });
-      const forked = yield* makeService({
-        projects: [
-          {
-            ...fork,
-            repositoryIdentity: {
-              ...fork.repositoryIdentity!,
-              origin: { canonicalKey: "github.com/me/web" },
-            },
-          },
-        ],
-        trackers: [
-          fakeTracker({
-            listIssues: (input) =>
-              Effect.succeed({ items: [issue(input.scope)], nextCursor: null }),
-            comment: (input) =>
-              Effect.sync(() => {
-                writes.push(`${input.scope}#${input.key}`);
-              }),
+      const forkProject = {
+        ...fork,
+        repositoryIdentity: {
+          ...fork.repositoryIdentity!,
+          origin: { canonicalKey: "github.com/me/web" },
+        },
+      };
+      const reads: string[] = [];
+      const forkTracker = fakeTracker({
+        listIssues: (input) =>
+          Effect.sync(() => {
+            reads.push(input.scope);
+            return { items: [issue(input.scope)], nextCursor: null };
           }),
-        ],
+        comment: (input) =>
+          Effect.sync(() => {
+            writes.push(`${input.scope}#${input.key}`);
+          }),
       });
+      const forked = yield* makeService({ projects: [forkProject], trackers: [forkTracker] });
+      const scopesOf = (result: { readonly entries: ReadonlyArray<IssueListEntry> }) =>
+        result.entries.map((entry) => [entry.scope, entry.upstream]).sort();
       const listed = yield* forked.list({ state: "open" });
-      expect(listed.entries.map((entry) => entry.scope).sort()).toEqual(["acme/web", "me/web"]);
+      expect(scopesOf(listed)).toEqual([
+        ["acme/web", true],
+        ["me/web", undefined],
+      ]);
       expect(listed.trackers).toEqual([expect.objectContaining({ projectCount: 1 })]);
+      // The upstream filter skips reading the other side.
+      reads.length = 0;
+      expect(scopesOf(yield* forked.list({ state: "open", upstream: "hide" }))).toEqual([
+        ["me/web", undefined],
+      ]);
+      expect(scopesOf(yield* forked.list({ state: "open", upstream: "only" }))).toEqual([
+        ["acme/web", true],
+      ]);
+      expect(reads).toEqual(["me/web", "acme/web"]);
+      // A repository another project reads as its own is nobody's upstream.
+      const cloned = yield* makeService({
+        projects: [forkProject, project({ id: "clone", repository: "acme/web" })],
+        trackers: [forkTracker],
+      });
+      expect(scopesOf(yield* cloned.list({ state: "open", upstream: "hide" }))).toEqual([
+        ["acme/web", undefined],
+        ["me/web", undefined],
+      ]);
       yield* forked.comment({
         ...own,
         projectId: "fork" as ProjectId,

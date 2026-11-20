@@ -180,6 +180,16 @@ export function issueFilterScopes(
           (t) => String(t.tracker) === kind && t.host.toLowerCase() === host.toLowerCase(),
         );
         if (!tracker?.configured || tracker.capabilities === null) continue;
+        // A scope the answer did not read, such as a fork's hidden upstream, offers no choices.
+        if (
+          page.answer.scopes !== undefined &&
+          !page.answer.scopes.some(
+            (read) =>
+              read.scope.toLowerCase() === scope.toLowerCase() &&
+              read.host?.toLowerCase() === host.toLowerCase(),
+          )
+        )
+          continue;
         if (
           scopes.some(
             (s) => s.input.scope.toLowerCase() === scope.toLowerCase() && s.input.host === host,
