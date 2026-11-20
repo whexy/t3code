@@ -111,6 +111,8 @@ interface ProjectTrackerBinding {
   readonly scope: string;
   /** The standalone tracker account the scope is read with; null for git hosts and first accounts. */
   readonly accountId: IssueTrackerAccountId | null;
+  /** The upstream a fork project's identity names, read beside the fork its origin is. */
+  readonly upstream: boolean;
 }
 
 /** A project the registry has a tracker for, ready to serve reads and writes. */
@@ -126,10 +128,12 @@ interface SupportedProject extends ProjectTrackerBinding {
 function resolveGitHostBindings(
   project: OrchestrationProjectShell,
 ): ReadonlyArray<ProjectTrackerBinding> {
-  return sourceControlDefinitions.issueBindings(project.repositoryIdentity).map((binding) => ({
+  const bindings = sourceControlDefinitions.issueBindings(project.repositoryIdentity);
+  return bindings.map((binding, index) => ({
     ...binding,
     tracker: IssueTrackerKind.make(binding.tracker),
     accountId: null,
+    upstream: bindings.length > 1 && index === 0,
   }));
 }
 
@@ -261,6 +265,7 @@ const make = Effect.gen(function* () {
       host,
       scope,
       accountId,
+      upstream: false,
     }));
   };
 
@@ -409,7 +414,14 @@ const make = Effect.gen(function* () {
     for (const project of supported) {
       if (host !== undefined && project.host !== host) continue;
       const key = listCursorKey(project);
-      if (!scopes.has(key)) scopes.set(key, project);
+      const held = scopes.get(key);
+      // A repository some project reads as its own is not anyone's upstream.
+      if (held === undefined || (held.upstream && !project.upstream)) scopes.set(key, project);
+    }
+    if (input.upstream !== undefined) {
+      for (const [key, project] of scopes) {
+        if (project.upstream !== (input.upstream === "only")) scopes.delete(key);
+      }
     }
     const continuing = input.cursors;
     const viewers = new Map<string, string>();
@@ -526,6 +538,7 @@ const make = Effect.gen(function* () {
               scope: project.scope,
               projectId: project.project.id,
               projectTitle: project.project.title,
+              ...(project.upstream ? { upstream: true } : {}),
             });
           }
           if (page.success.nextCursor !== null) nextCursors[key] = page.success.nextCursor;

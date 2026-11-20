@@ -2,11 +2,12 @@ import type { IssueCandidatesTarget } from "@t3tools/client-runtime/state/issues
 import type {
   EnvironmentId,
   IssueInvolvement,
+  IssueListInput,
   IssueListState,
   ProjectId,
 } from "@t3tools/contracts";
 import { FolderGit2Icon, LayersIcon, ListFilterIcon, TagIcon, UserIcon } from "lucide-react";
-import { T, useGT } from "gt-react";
+import { T, useGT, useMessages } from "gt-react";
 import { useState } from "react";
 
 import { Button } from "~/components/ui/button";
@@ -31,6 +32,7 @@ import { ProjectFavicon, type ProjectFaviconProject } from "../ProjectFavicon";
 import {
   PullRequestFilterRadioSubmenu,
   pullRequestProjectKey,
+  UPSTREAM_OPTIONS,
   type PullRequestFilterOption,
 } from "../pullRequest/PullRequestListFilters";
 import { pullRequestLabelColor } from "../pullRequest/pullRequestList.logic";
@@ -39,6 +41,9 @@ import {
   issueFilterLabelChoices,
   matchesIssueFilterQuery,
 } from "./IssueListFilterPickers.logic";
+import { resolveFilterOptions } from "../pullRequest/pullRequestListOptions";
+
+type IssueListUpstream = NonNullable<IssueListInput["upstream"]>;
 
 /** Every issue list filter behind one button, as the pull request page keeps its own. */
 export function IssueFiltersMenu(props: {
@@ -56,13 +61,19 @@ export function IssueFiltersMenu(props: {
   projects: ReadonlyArray<ProjectFaviconProject & { readonly id: ProjectId }>;
   hiddenProjects: ReadonlySet<string>;
   onHiddenProjects: (hidden: ReadonlyArray<readonly [EnvironmentId, ProjectId]>) => void;
+  upstream: IssueListUpstream | undefined;
+  /** Some project's origin is a fork, so the list holds its upstream's rows too. */
+  upstreamAvailable: boolean;
+  onUpstream: (upstream: IssueListUpstream | undefined) => void;
 }) {
   const gt = useGT();
+  const resolve = useMessages();
   const [open, setOpen] = useState(false);
   const count = [
     props.state !== "open",
     props.involvement !== "all",
     props.hiddenProjects.size > 0,
+    props.upstream,
     props.assignee,
     ...props.labels,
   ].filter(Boolean).length;
@@ -113,6 +124,16 @@ export function IssueFiltersMenu(props: {
               />
             </MenuSubPopup>
           </MenuSub>
+        ) : null}
+        {props.upstreamAvailable ? (
+          <PullRequestFilterRadioSubmenu
+            label={gt("Upstream", { $context: "filter menu" })}
+            value={props.upstream ?? "all"}
+            options={resolveFilterOptions(UPSTREAM_OPTIONS, resolve)}
+            onChange={(upstream) =>
+              props.onUpstream(upstream === "all" ? undefined : (upstream as IssueListUpstream))
+            }
+          />
         ) : null}
         <MenuSeparator />
         <MenuSub>

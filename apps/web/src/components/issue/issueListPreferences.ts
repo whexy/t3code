@@ -4,6 +4,7 @@ import {
   EnvironmentId,
   ISSUE_LIST_MAX_EXCLUDED_PROJECTS,
   IssueInvolvement,
+  IssueListInput,
   IssueListState,
   ProjectId,
 } from "@t3tools/contracts";
@@ -25,6 +26,8 @@ export interface IssueListPreferences {
   readonly label?: ReadonlyArray<string> | undefined;
   readonly assignee?: string | undefined;
   readonly order?: "created" | undefined;
+  /** Not `upstream`, which the pull-request page has. */
+  readonly upstreamIssues?: NonNullable<IssueListInput["upstream"]> | undefined;
 }
 
 const DEFAULT_ISSUE_LIST_PREFERENCES = {
@@ -48,6 +51,7 @@ export const IssueListPreferencesSchema = Schema.Struct({
   label: Schema.optional(Schema.Array(BoundedPreference).check(Schema.isMaxLength(20))),
   assignee: Schema.optional(BoundedPreference),
   order: Schema.optional(Schema.Literal("created")),
+  upstreamIssues: IssueListInput.fields.upstream,
 });
 const decodePreferences = Schema.decodeUnknownOption(IssueListPreferencesSchema);
 
@@ -67,6 +71,7 @@ export function issueListPreferences(search: {
   readonly label?: ReadonlyArray<string> | undefined;
   readonly assignee?: string | undefined;
   readonly order?: "created" | undefined;
+  readonly upstreamIssues?: IssueListPreferences["upstreamIssues"];
 }): IssueListPreferences {
   return {
     who: search.who,
@@ -79,6 +84,7 @@ export function issueListPreferences(search: {
     ...(search.label?.length ? { label: search.label } : {}),
     ...(search.assignee ? { assignee: search.assignee } : {}),
     ...(search.order ? { order: search.order } : {}),
+    ...(search.upstreamIssues ? { upstreamIssues: search.upstreamIssues } : {}),
   };
 }
 

@@ -128,6 +128,8 @@ export const IssueListEntry = Schema.Struct({
   ...IssueSummary.fields,
   projectId: ProjectId,
   projectTitle: TrimmedNonEmptyString,
+  /** True when `scope` is the upstream of a project whose origin is a fork. */
+  upstream: Schema.optional(Schema.Boolean),
 });
 export type IssueListEntry = typeof IssueListEntry.Type;
 
@@ -313,6 +315,8 @@ export const IssueListInput = Schema.Struct({
   assignee: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(320))),
   /** Absent means `updated`. */
   sort: Schema.optional(IssueListSort),
+  /** Rows from the upstream repository a fork project's origin was forked from. */
+  upstream: Schema.optional(Schema.Literals(["only", "hide"])),
 });
 export type IssueListInput = typeof IssueListInput.Type;
 
