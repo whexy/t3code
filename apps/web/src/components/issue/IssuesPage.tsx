@@ -220,6 +220,7 @@ export function IssuesPage() {
     ...(search.label?.length ? { labels: search.label } : {}),
     ...(search.assignee ? { assignee: search.assignee } : {}),
     ...(search.order ? { sort: search.order } : {}),
+    ...(search.upstreamIssues ? { upstream: search.upstreamIssues } : {}),
   };
   const everyProjectHidden =
     filterProjects.length > 0 &&
@@ -340,6 +341,7 @@ export function IssuesPage() {
       ...(merged.label?.length ? { label: merged.label } : {}),
       ...(merged.assignee ? { assignee: merged.assignee } : {}),
       ...(merged.order ? { order: merged.order } : {}),
+      ...(merged.upstreamIssues ? { upstreamIssues: merged.upstreamIssues } : {}),
       ...(merged.selectedEnvironmentId
         ? { selectedEnvironmentId: merged.selectedEnvironmentId }
         : {}),
@@ -740,6 +742,14 @@ export function IssuesPage() {
                   projects={filterProjects}
                   hiddenProjects={hiddenProjects}
                   onHiddenProjects={(hideProjects) => updateSearch({ hideProjects })}
+                  upstream={search.upstreamIssues}
+                  upstreamAvailable={
+                    search.upstreamIssues !== undefined ||
+                    [...held.values()].some((page) =>
+                      page.entries.some((entry) => entry.upstream === true),
+                    )
+                  }
+                  onUpstream={(upstreamIssues) => updateSearch({ upstreamIssues })}
                 />
                 <SavedViewsMenu
                   kind={ISSUE_SAVED_VIEWS}
@@ -755,6 +765,7 @@ export function IssuesPage() {
                       label: view.label,
                       assignee: view.assignee,
                       order: view.order,
+                      upstreamIssues: view.upstreamIssues,
                     })
                   }
                 />

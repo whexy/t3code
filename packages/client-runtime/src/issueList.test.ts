@@ -15,6 +15,7 @@ import {
   issueCursorsForHost,
   issueFilterScopes,
 } from "./issueList.ts";
+import type { EnvironmentProject } from "./state/models.ts";
 
 const environmentId = "env-1" as EnvironmentId;
 const api = "api" as ProjectId;
@@ -142,6 +143,44 @@ describe("issueFilterScopes", () => {
       [environmentId, hold(answer({ trackers: [tracker({})], entries: [], scopes: [scope] }))],
     ]);
     expect(issueFilterScopes(held, [])).toEqual([{ environmentId, input: scope }]);
+  });
+
+  it("offers only the scopes the answer read, so a fork's hidden upstream offers nothing", () => {
+    const fork = {
+      id: api,
+      environmentId,
+      title: "web",
+      workspaceRoot: "/w/web",
+      repositoryIdentity: {
+        canonicalKey: "github.com/acme/web",
+        locator: {
+          source: "git-remote",
+          remoteName: "upstream",
+          remoteUrl: "https://github.com/acme/web.git",
+        },
+        provider: "github",
+        displayName: "acme/web",
+        origin: { canonicalKey: "github.com/me/web", remoteUrl: "https://github.com/me/web.git" },
+      },
+    } as unknown as EnvironmentProject;
+    const read = {
+      projectId: api,
+      tracker: "github" as IssueTrackerKind,
+      host: "github.com",
+      scope: "me/web",
+    };
+    const held = new Map([
+      [
+        environmentId,
+        hold(
+          answer({
+            trackers: [tracker({ tracker: "github" as IssueTrackerKind, host: "github.com" })],
+            scopes: [read],
+          }),
+        ),
+      ],
+    ]);
+    expect(issueFilterScopes(held, [fork])).toEqual([{ environmentId, input: read }]);
   });
 
   it("skips a tracker that cannot be read", () => {
