@@ -9,6 +9,7 @@ import { SavedViewIdentity } from "@t3tools/client-runtime/saved-views";
 import {
   EnvironmentId,
   IssueInvolvement,
+  IssueListInput,
   IssueListSort,
   IssueListState,
   PullRequestInvolvement,
@@ -61,6 +62,7 @@ export const IssueSavedView = Schema.Struct({
   assignee: Schema.NullOr(
     Schema.Struct({ login: Schema.String, name: Schema.NullOr(Schema.String) }),
   ),
+  upstream: IssueListInput.fields.upstream,
 });
 export type IssueSavedView = typeof IssueSavedView.Type;
 const isIssueSavedView = Schema.is(IssueSavedView);

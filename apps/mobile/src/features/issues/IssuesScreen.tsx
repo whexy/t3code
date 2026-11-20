@@ -71,6 +71,12 @@ const SORTS = {
   updated: msg("Recently updated"),
   created: msg("Newest", { $context: "sort order" }),
 } as const satisfies Record<IssueListSort, string>;
+type IssueListUpstream = NonNullable<IssueListInput["upstream"]>;
+const UPSTREAM = {
+  all: msg("All repositories"),
+  hide: msg("Hide upstream"),
+  only: msg("Upstream only"),
+} as const satisfies Record<IssueListUpstream | "all", string>;
 // A 12dp inset keeps 16dp chips concentric with Android's 28dp ScreenContent corner.
 const FILTER_ROW_STYLE =
   Platform.OS === "android"
@@ -138,6 +144,7 @@ export function IssuesScreen(
   const [{ labels, assignee }, setFilters] = useAtom(issueListFiltersAtom);
   const { themeAppearance } = useAppearancePreferences();
   const [sort, setSort] = useState<IssueListSort>("updated");
+  const [upstream, setUpstream] = useState<IssueListUpstream | undefined>(undefined);
   const listInput: IssueListInput = {
     ...DEFAULT_ISSUE_LIST_INPUT,
     state,
@@ -146,6 +153,7 @@ export function IssuesScreen(
     ...(labels.length > 0 ? { labels } : {}),
     ...(assignee === null ? {} : { assignee: assignee.login }),
     ...(sort === "updated" ? {} : { sort }),
+    ...(upstream === undefined ? {} : { upstream }),
   };
   const capable = environments.filter(
     (environment) =>
@@ -197,6 +205,11 @@ export function IssuesScreen(
   const groups = groupIssues(held, query, projects, sort);
   const entries = groups.flatMap((group) => group.rows).sort(issueOrder(sort));
   const filterScopes = issueFilterScopes(held, projects);
+  // Some project's origin is a fork, so the list holds its upstream's rows too.
+  const upstreamAvailable =
+    upstream !== undefined || entries.some((entry) => entry.upstream === true);
+  const chooseUpstream = (id: string) =>
+    setUpstream(id === "hide" || id === "only" ? id : undefined);
   const notices = [
     // An environment that failed while another answered: its issues are missing from the rows.
     ...(entries.length > 0 && list.error ? [list.error] : []),
@@ -237,7 +250,8 @@ export function IssuesScreen(
     involvement !== "all" ||
     sort !== "updated" ||
     labels.length > 0 ||
-    assignee !== null;
+    assignee !== null ||
+    upstream !== undefined;
   // The Android header's filter button opens every filter, as the pull request list's does.
   const headerMenu: PullRequestFilterMenu | null =
     Platform.OS === "android"
@@ -267,6 +281,15 @@ export function IssuesScreen(
                   ? gt("Assignee…")
                   : gt("Assignee: {name}…", { name: assignee.name ?? assignee.login }),
             },
+            ...(upstreamAvailable
+              ? [
+                  {
+                    id: "upstream",
+                    title: gt("Upstream", { $context: "filter menu" }),
+                    subactions: choices(UPSTREAM, upstream ?? "all", messages, "upstream"),
+                  },
+                ]
+              : []),
             {
               id: "sort",
               title: gt("Sort", { $context: "noun, sort order menu" }),
@@ -283,12 +306,14 @@ export function IssuesScreen(
             if (field === "state") setState(value as IssueListState);
             if (field === "involvement") setInvolvement(value as IssueInvolvement);
             if (field === "sort") setSort(value as IssueListSort);
+            if (field === "upstream") chooseUpstream(value ?? "all");
             if (field === "labels" || field === "assignee")
               navigation.navigate("IssueFilterSearch", { kind: field, scopes: filterScopes });
             if (field === "reset") {
               setState("open");
               setInvolvement("all");
               setSort("updated");
+              setUpstream(undefined);
               setFilters({ labels: [], assignee: null });
             }
           },
@@ -370,11 +395,13 @@ export function IssuesScreen(
                   sort,
                   labels,
                   assignee,
+                  ...(upstream === undefined ? {} : { upstream }),
                 }}
                 onApply={(view) => {
                   setState(view.state);
                   setInvolvement(view.involvement);
                   setSort(view.sort);
+                  setUpstream(view.upstream);
                   setFilters({ labels: view.labels, assignee: view.assignee });
                   const viewQuery = view.query.trim();
                   workspace.dispatch(
@@ -437,6 +464,22 @@ export function IssuesScreen(
                   })
                 }
               />
+              {upstreamAvailable ? (
+                <ListFilterMenu
+                  label={
+                    upstream === undefined
+                      ? gt("Upstream", { $context: "filter menu" })
+                      : messages(UPSTREAM[upstream])
+                  }
+                  active={upstream !== undefined}
+                  accessibilityLabel={gt("Upstream", { $context: "filter menu" })}
+                  actions={choices(UPSTREAM, upstream ?? "all", messages)}
+                  onSelect={(id) => {
+                    chooseUpstream(id);
+                    scrollToTop();
+                  }}
+                />
+              ) : null}
               <ListFilterMenu
                 label={messages(SORTS[sort])}
                 active={sort !== "updated"}

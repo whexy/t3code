@@ -11,6 +11,7 @@ export function issueViewMatches(view: IssueSavedViewScope, scope: IssueSavedVie
       value.sort,
       [...value.labels].sort(),
       value.assignee?.login ?? null,
+      value.upstream ?? null,
     ]);
   return key(view) === key(scope);
 }

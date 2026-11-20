@@ -196,10 +196,10 @@ const CHECKS_OPTIONS = [
   { value: "failing", label: msg("Failing", { $context: "checks filter" }), Icon: CircleXIcon },
 ] as const satisfies ReadonlyArray<PullRequestFilterOption<string>>;
 
-const UPSTREAM_OPTIONS = [
-  { value: UNFILTERED_VALUE, label: "All", Icon: LayersIcon },
-  { value: "hide", label: "Hide upstream", Icon: EyeOffIcon },
-  { value: "only", label: "Upstream only", Icon: GitForkIcon },
+export const UPSTREAM_OPTIONS = [
+  { value: UNFILTERED_VALUE, label: msg("All repositories"), Icon: LayersIcon },
+  { value: "hide", label: msg("Hide upstream"), Icon: EyeOffIcon },
+  { value: "only", label: msg("Upstream only"), Icon: GitForkIcon },
 ] as const satisfies ReadonlyArray<PullRequestFilterOption<string>>;
 
 function PullRequestFilterRadioGroup<Value extends string>({
@@ -686,9 +686,9 @@ export function PullRequestFiltersMenu({
         />
         {upstreamAvailable ? (
           <PullRequestFilterRadioSubmenu
-            label="Upstream"
+            label={gt("Upstream", { $context: "filter menu" })}
             value={filters.upstream ?? UNFILTERED_VALUE}
-            options={UPSTREAM_OPTIONS}
+            options={resolveFilterOptions(UPSTREAM_OPTIONS, resolve)}
             onChange={(upstream) => updateFilter("upstream", upstream)}
           />
         ) : null}
