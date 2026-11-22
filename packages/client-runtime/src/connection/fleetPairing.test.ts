@@ -1,17 +1,23 @@
 import { describe, expect, it } from "@effect/vitest";
 import { EnvironmentId } from "@t3tools/contracts";
 import { readPairingAppLink } from "@t3tools/shared/remote";
+import * as Effect from "effect/Effect";
 
+import * as RemoteEnvironmentAuthorization from "../authorization/service.ts";
+import * as ManagedRelay from "../relay/managedRelay.ts";
+import * as RpcHttp from "../rpc/http.ts";
 import {
   buildPairingBundleCodes,
   buildPairingBundleLink,
   MAX_QR_LINK_LENGTH,
+  mintPreparedHostPairingUrl,
   readPairingBundle,
   readPairingBundlePart,
   summarizeFleetRedeem,
   unwrapSingleHostLink,
   withDistinctLabels,
 } from "./fleetPairing.ts";
+import { BearerConnectionTarget } from "./model.ts";
 
 const DEIMOS = "https://deimos-t3.example.test/pair#token=aaa";
 const PHOBOS = "https://phobos-t3.example.test/pair#token=bbb";
@@ -131,4 +137,96 @@ describe("fleet redeem summary", () => {
   ] as const)("summarizes %s", (_name, results, outcome, title, details) => {
     expect(summarizeFleetRedeem(results)).toMatchObject({ outcome, title, details });
   });
+});
+
+describe("minting on a connected host", () => {
+  it.effect("signs both requests with a self-renewing DPoP session", () =>
+    Effect.gen(function* () {
+      const target = new BearerConnectionTarget({
+        environmentId: EnvironmentId.make("mudd"),
+        label: "mudd",
+        connectionId: "connection-mudd",
+      });
+      const direct = { connectionId: target.connectionId, httpBaseUrl: "http://100.64.0.1:3773" };
+      const calls: Array<{ readonly url: string; readonly headers: Headers }> = [];
+      const fetchFn: typeof fetch = async (request, init) => {
+        calls.push({ url: String(request), headers: new Headers(init?.headers) });
+        return Response.json(
+          new URL(String(request)).pathname === "/api/auth/session"
+            ? {
+                authenticated: true,
+                auth: {
+                  policy: "remote-reachable",
+                  bootstrapMethods: ["one-time-token"],
+                  sessionMethods: ["dpop-access-token"],
+                  sessionCookieName: "t3_session",
+                },
+                scopes: ["orchestration:read"],
+                sessionMethod: "dpop-access-token",
+              }
+            : { id: "link-1", credential: "fresh-code", expiresAt: "2026-11-22T12:00:00.000Z" },
+        );
+      };
+      const minted = yield* mintPreparedHostPairingUrl(
+        {
+          environmentId: target.environmentId,
+          label: target.label,
+          httpBaseUrl: direct.httpBaseUrl,
+          socketUrl: "ws://100.64.0.1:3773/ws",
+          httpAuthorization: {
+            _tag: "Dpop",
+            accessToken: "access-1",
+            expiresAtEpochMs: 0,
+            directConnection: direct,
+          },
+          target,
+        },
+        "https://mudd-t3.example.test",
+      ).pipe(
+        Effect.provide(RpcHttp.layerRemoteHttpClient(fetchFn)),
+        Effect.provideService(
+          ManagedRelay.ManagedRelayDpopSigner,
+          ManagedRelay.ManagedRelayDpopSigner.of({
+            thumbprint: Effect.succeed("thumbprint"),
+            createProof: (input) => Effect.succeed(`proof ${input.method} ${input.url}`),
+          }),
+        ),
+        Effect.provideService(
+          RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization,
+          RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization.of({
+            authorizeBearer: () => Effect.die("unexpected"),
+            authorizeDpop: () => Effect.die("unexpected"),
+            authorizeDirectDpop: () => Effect.die("unexpected"),
+            authorizeDpopHttp: () => Effect.die("unexpected"),
+            rememberCheckedDescriptor: () => Effect.void,
+            renewDpopBeforeExpiry: () => Effect.die("unexpected"),
+            authorizeDirectDpopHttp: (connection) =>
+              Effect.succeed({
+                _tag: "Dpop" as const,
+                accessToken: "access-1",
+                expiresAtEpochMs: 3_600_000,
+                directConnection: connection,
+              }),
+          }),
+        ),
+      );
+
+      expect(minted.pairingUrl).toBe("https://mudd-t3.example.test/pair#token=fresh-code");
+      expect(
+        calls.map((call) => [
+          new URL(call.url).pathname,
+          call.headers.get("authorization"),
+          call.headers.get("dpop"),
+        ]),
+      ).toEqual([
+        ["/api/auth/session", "DPoP access-1", `proof GET ${direct.httpBaseUrl}/api/auth/session`],
+        [
+          "/api/auth/pairing-token",
+          "DPoP access-1",
+          `proof POST ${direct.httpBaseUrl}/api/auth/pairing-token`,
+        ],
+      ]);
+      expect(minted.expiresAtEpochMs).toBe(Date.parse("2026-11-22T12:00:00.000Z"));
+    }),
+  );
 });
