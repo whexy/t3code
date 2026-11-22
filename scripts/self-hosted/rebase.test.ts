@@ -56,6 +56,8 @@ type Options = {
    */
   readonly nightly?: "dev" | "behind" | "merged" | "stray" | "rebased";
   readonly race?: "once" | "always";
+  /** Passes the stray nightly commit as DROPPED, abbreviated as a person would. */
+  readonly dropStray?: boolean;
   readonly pushUrl?: string;
 };
 type Write = (file: string, content: string) => void;
@@ -112,6 +114,7 @@ function runRebase(options: Options = {}) {
       git("rebase", "-q", "--onto", newer, older);
     }
     const nightly = options.nightly ?? "dev";
+    let strayCommit = "";
     git(
       "branch",
       "self-hosted-nightly",
@@ -124,6 +127,7 @@ function runRebase(options: Options = {}) {
         write("stray.txt", "stray\n");
         git("add", "stray.txt");
         git("commit", "-qm", "fix: pushed straight to nightly");
+        strayCommit = git("rev-parse", "--short", "HEAD");
       }
       git("checkout", "-q", "dev");
     }
@@ -162,6 +166,7 @@ function runRebase(options: Options = {}) {
         STATE_DIR: stateDir,
         ORIGIN: origin,
         RACE: options.race ?? "",
+        DROPPED: options.dropStray ? strayCommit : "",
       },
     });
     const read = (name: string) =>
@@ -286,6 +291,11 @@ it.each([
 it("stops at promote when nightly has a commit dev never had", () => {
   const result = runRebase({ nightly: "stray", tag: olderStable });
   expect(result).toMatchObject({ status: 1, stage: "promote", nightly: "unchanged" });
+});
+
+it("promotes over a nightly commit dev dropped on purpose", () => {
+  const result = runRebase({ nightly: "stray", tag: olderStable, dropStray: true });
+  expect(result).toMatchObject({ status: 0, promote: "pushed", nightly: "dev" });
 });
 
 it("fails as push-race when the lease is rejected twice", () => {
