@@ -11,21 +11,31 @@ them, mostly from a phone, without T3 Connect, ran into five gaps.
 
 ### Super threads
 
-A thread belongs to one project, or to none, but my tasks often span several.
+My tasks rarely stay in one repository, and each one needs a different set.
 Moving OTA publishing onto the cluster's S3 store, for example, touched the
-cluster's manifests, the OTA server, and this repository's CI. Upstream already
-lets a thread launch threads in other projects, or delegate to child threads, so
-one thread can coordinate the rest. It works, but the coordinating thread sits
-in the sidebar among the threads doing the work. With several tasks running at
-once, I had to remember which thread was managing which.
+cluster's manifests, the OTA server, and this repository's CI. Upstream's
+[multi-repo projects](https://github.com/pingdotgg/t3code/blob/main/docs/user/multi-repo-projects.md)
+let one thread work across the repositories a project covers, which fits a set
+that stays the same from task to task.
+
+A super thread's agent picks the set for each task. From its memory of my
+projects, it works out which repositories the task touches and where in them to
+edit, then launches a thread for each piece so the pieces run at once. A piece
+that spans several repositories of one project can itself be a multi-repo
+thread.
+
+Upstream already lets a thread launch threads in other projects, so one thread
+can coordinate the rest. But the coordinating thread sits in the sidebar among
+the threads doing the work, and with several tasks running at once, I had to
+remember which thread was managing which.
 
 A super thread keeps the manager apart from its workers. It gets its own sidebar
 section, with the threads it started listed under it and ordered by which need
-me first. Its agent launches threads instead of doing the work itself, draws its
-plan as a task map beside the conversation, and wakes when one of its threads
-finishes, fails, or asks a question. Settling the super thread settles its whole
-section. Everything underneath is upstream's existing thread launching and
-messaging. See [Super threads](../docs/user/super-threads.md).
+me first. Its agent draws its plan as a task map beside the conversation, and
+wakes when one of its threads finishes, fails, or asks a question. Settling the
+super thread settles its whole section. Everything underneath is upstream's
+existing thread launching and messaging. See
+[Super threads](../docs/user/super-threads.md).
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/super-thread-dark.webp">
@@ -37,15 +47,10 @@ messaging. See [Super threads](../docs/user/super-threads.md).
 ### Pairing a fleet
 
 Without T3 Connect, each client pairs with each environment (a machine running
-a T3 server) by its own link: 48 pairings for my 12 environments and 4 clients,
-and each one expired 30 days after pairing however often I used it. The fork
-fixes both:
-
-- Pairings renew themselves while a client is in use, so a client opened at
-  least every two weeks stays paired.
-- **Pair a device** in Settings turns a client that already reaches the fleet
-  into one link or set of QR codes that pairs a new client with every
-  environment at once.
+a T3 server) by its own link: 48 pairings for my 12 environments and 4 clients.
+**Pair a device** in Settings turns a client that already reaches the fleet
+into one link or set of QR codes that pairs a new client with every
+environment at once.
 
 See [Pair a device with all your environments](../docs/user/fleet-pairing.md).
 
