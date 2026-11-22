@@ -451,7 +451,9 @@ jobs:
       MACOS_PROVISIONING_PROFILE: ${{ secrets.MACOS_PROVISIONING_PROFILE }}
     with:
       label: macOS arm64
-      runner: macos-15
+      # The Apple Speech helper (native/apple-speech) needs the macOS 26 SDK,
+      # and macos-15's default Xcode predates it.
+      runner: macos-26
       platform: mac
       target: dmg
       arch: arm64
