@@ -6,7 +6,8 @@
 #
 # Env: TAG (optional stable tag; default the latest), PUSH_URL (authenticated
 # remote URL), STATE_DIR (the stage, tag, start and result the failure report
-# reads; `stage` names the operation that was running when the script died).
+# reads; `stage` names the operation that was running when the script died),
+# DROPPED (optional commits on the target that dev removed on purpose).
 set -euo pipefail
 
 branch="${BRANCH:-dev}"
@@ -143,7 +144,8 @@ fi
 # The target only ever holds dev commits (matched by author, author date and
 # subject, which survive a rebase of dev; pins are regenerated) and promote
 # merge commits, so replacing it with dev loses nothing; a commit pushed to it
-# any other way stops the promote instead of vanishing.
+# any other way stops the promote instead of vanishing, unless DROPPED names it
+# because a rewrite of dev removed or retitled it on purpose.
 enter promote
 git fetch --no-tags origin "+refs/heads/$target:refs/remotes/origin/$target"
 promoted="$(git rev-parse "refs/remotes/origin/$target")"
@@ -157,6 +159,8 @@ stray="$(
     <(git log --no-merges --format='%H %ae %at %s' --invert-grep \
       --grep='^chore(nix): pin sources for ' "$promoted" --not "$start")
 )"
+dropped="$(for commit in ${DROPPED//,/ }; do git rev-parse --verify "$commit^{commit}" || exit 1; done)"
+stray="$(grep -vxF -f <(printf '%s\n' "$dropped") <<< "$stray" || true)"
 if [[ -n "$stray" ]]; then
   echo "$target has commits $branch never had; land them on $branch first:" >&2
   git log --no-walk --format='%h %s' --stdin <<< "$stray" >&2
