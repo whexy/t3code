@@ -13,7 +13,10 @@ export type SelectAttempt =
   | "ok"
   /** The app is not connected to the Mac's server, or the server is not running. */
   | "appMissing"
-  /** No host the app knows has the session, or one is still connecting. */
+  /**
+   * The app found no host listing the session within its 5 s wait. Rex 0.1.0 (2061) answers this
+   * for a session the host just created, sometimes while already showing it.
+   */
   | "notFound"
   | "error"
   /** Cut off; the app may still act on it. */
@@ -45,10 +48,13 @@ export const selectInApp = Effect.fn("DesktopRex.selectInApp")(function* <E, R>(
   const start = yield* Clock.currentTimeMillis;
   if (start - clickedAt > CLICK_DEADLINE_MS) return "expired" satisfies RexSelectOutcome;
   let launched = false;
+  let attempt: SelectAttempt | undefined;
   while (true) {
     const remaining = SELECT_BUDGET_MS - ((yield* Clock.currentTimeMillis) - start);
-    if (remaining <= 0) return "failed" satisfies RexSelectOutcome;
-    const attempt = yield* deps.select(remaining);
+    if (remaining <= 0) {
+      return (attempt === "notFound" ? "notListed" : "failed") satisfies RexSelectOutcome;
+    }
+    attempt = yield* deps.select(remaining);
     switch (attempt) {
       case "ok":
         // Select shows the session but leaves Rex behind other apps.
@@ -59,7 +65,7 @@ export const selectInApp = Effect.fn("DesktopRex.selectInApp")(function* <E, R>(
       case "error":
         return "failed" satisfies RexSelectOutcome;
       case "notFound":
-        if (!launched) return "failed" satisfies RexSelectOutcome;
+        if (!launched) return "notListed" satisfies RexSelectOutcome;
         break;
       case "appMissing":
         if (!launched) {
