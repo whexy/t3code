@@ -24,6 +24,10 @@ on:
         description: Upstream stable tag, such as v0.1.9; empty takes the latest. Every run also promotes dev
         required: false
         type: string
+      dropped:
+        description: Commits on self-hosted-nightly that a rewrite of dev removed or retitled on purpose, which promote may then replace
+        required: false
+        type: string
 
 # A newer pending run replaces an older one, which is safe: every run resolves
 # the newest release and re-reads the branch head when it starts.
@@ -72,6 +76,7 @@ jobs:
         timeout-minutes: 45
         env:
           TAG: ${{ github.event.client_payload.tag || inputs.tag }}
+          DROPPED: ${{ inputs.dropped }}
           GITHUB_TOKEN: ${{ github.token }}
           TOKEN: ${{ steps.token.outputs.token }}
         run: |
