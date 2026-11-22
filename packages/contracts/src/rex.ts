@@ -61,8 +61,11 @@ const WsRexReportRpc = Rpc.make(REX_WS_METHODS.rexReport, {
 
 export const REX_RPCS = [WsRexStatusRpc, WsRexOpenRpc, WsRexReportRpc] as const;
 
-/** What the Mac's select came to. Only "selected" confirms; "timedOut" reports nothing. */
-export type RexSelectOutcome = "selected" | "failed" | "timedOut" | "expired";
+/**
+ * What the Mac's select came to. Only "selected" confirms; "timedOut" and "notListed" report
+ * nothing, because the app may still show the session.
+ */
+export type RexSelectOutcome = "selected" | "failed" | "timedOut" | "notListed" | "expired";
 
 export interface RexDesktopBridge {
   readonly available: () => Promise<boolean>;

@@ -14,7 +14,7 @@ import { classifySelect, selectInApp, type SelectAttempt } from "./select.ts";
 const REX_BUNDLE_ID = "com.superlogical.rex";
 
 const SelectInput = Schema.Struct({ sessionId: Schema.String, clickedAt: Schema.Number });
-const SelectOutcome = Schema.Literals(["selected", "failed", "timedOut", "expired"]);
+const SelectOutcome = Schema.Literals(["selected", "failed", "timedOut", "notListed", "expired"]);
 
 const make = Effect.gen(function* () {
   const ipc = yield* DesktopIpc.DesktopIpc;

@@ -55,6 +55,7 @@ describe("reportFor", () => {
     ["failed", "abandon"],
     ["expired", "abandon"],
     ["timedOut", null],
+    ["notListed", null],
   ] as const)("%s reports %s", (outcome, report) => {
     expect(reportFor(outcome)).toBe(report);
   });

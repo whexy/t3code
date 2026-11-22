@@ -18,7 +18,13 @@ import { useEnvironmentQuery } from "~/state/query";
 import { useEnvironmentScope } from "~/state/session";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { toastManager } from "../components/ui/toast";
-import { MAC_SIDE_FAILURE, reportFor, rexEntry, type RexEntry } from "./rexEntry.logic";
+import {
+  MAC_SIDE_FAILURE,
+  NOT_LISTED_YET,
+  reportFor,
+  rexEntry,
+  type RexEntry,
+} from "./rexEntry.logic";
 import { useRexPreferred } from "./rexPreference";
 
 declare global {
@@ -99,7 +105,13 @@ export function useRexOpenIn(environmentId: EnvironmentId, cwd: string | null): 
     if (outcomeReport !== null) {
       void report({ environmentId, input: { cwd, clickId, sessionId, outcome: outcomeReport } });
     }
-    if (outcome !== "selected") toastManager.add({ type: "error", title: MAC_SIDE_FAILURE });
+    if (outcome !== "selected") {
+      toastManager.add({
+        type: "error",
+        title: MAC_SIDE_FAILURE,
+        ...(outcome === "notListed" ? { description: NOT_LISTED_YET } : {}),
+      });
+    }
     return outcome === "selected";
   };
 
