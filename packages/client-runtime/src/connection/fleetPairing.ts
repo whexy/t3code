@@ -1,5 +1,8 @@
 import {
+  type AuthCreatePairingCredentialInput,
   type AuthGrantScopes,
+  type AuthPairingCredentialResult,
+  type AuthSessionState,
   AuthStandardClientScopes,
   type EnvironmentId,
 } from "@t3tools/contracts";
@@ -14,9 +17,17 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 import type * as HttpClient from "effect/http/HttpClient";
 
 import { fetchRemoteSessionState } from "../authorization/remote.ts";
+import * as RemoteEnvironmentAuthorization from "../authorization/service.ts";
 import { fetchRemoteEnvironmentDescriptor } from "../environment/descriptor.ts";
 import { environmentEndpointUrl } from "../environment/endpoint.ts";
-import { executeEnvironmentHttpRequest, makeEnvironmentHttpApiGroupClient } from "../rpc/http.ts";
+import * as ManagedRelay from "../relay/managedRelay.ts";
+import {
+  executeEnvironmentHttpRequest,
+  makeEnvironmentHttpApiGroupClient,
+  type RemoteEnvironmentRequestError,
+} from "../rpc/http.ts";
+import { executeAuthenticatedEnvironmentHttpRequest } from "../state/environmentHttpAuth.ts";
+import { fetchEnvironmentSessionState } from "../state/session.ts";
 import { BearerConnectionProfile, type ConnectionCatalogEntry } from "./catalog.ts";
 import { mapRemoteEnvironmentError } from "./errors.ts";
 import type { PreparedConnection } from "./model.ts";
@@ -120,15 +131,6 @@ export function readPairingBundle(value: string): ReadonlyArray<string> | null {
   return urls.length > 0 ? [...new Set(urls)] : null;
 }
 
-function bearerSession(
-  prepared: PreparedConnection,
-): { readonly token: string; readonly connectionId: string } | null {
-  return prepared.target._tag === "BearerConnectionTarget" &&
-    prepared.httpAuthorization?._tag === "Bearer"
-    ? { token: prepared.httpAuthorization.token, connectionId: prepared.target.connectionId }
-    : null;
-}
-
 const isBearerProfile = Schema.is(BearerConnectionProfile);
 
 /** The address the user paired with. A learned route is one the new device learns by itself. */
@@ -157,36 +159,64 @@ export function withDistinctLabels<T extends { readonly label: string }>(
 const hostOf = (httpBaseUrl: string | null) =>
   httpBaseUrl === null || !URL.canParse(httpBaseUrl) ? null : new URL(httpBaseUrl).host;
 
-const issuePairingCredential = Effect.fn("clientRuntime.fleetPairing.issuePairingCredential")(
-  function* (input: {
-    readonly httpBaseUrl: string;
-    readonly bearerToken: string;
-    readonly scopes?: AuthGrantScopes;
-  }) {
+/** The two requests a host answers to mint a pairing link, sent with one session there. */
+interface HostSession<R> {
+  readonly state: Effect.Effect<AuthSessionState, RemoteEnvironmentRequestError, R>;
+  readonly issue: (
+    payload: AuthCreatePairingCredentialInput,
+  ) => Effect.Effect<AuthPairingCredentialResult, RemoteEnvironmentRequestError, R>;
+}
+
+const bearerHostSession = (input: {
+  readonly httpBaseUrl: string;
+  readonly bearerToken: string;
+}): HostSession<HttpClient.HttpClient> => ({
+  state: fetchRemoteSessionState(input),
+  issue: Effect.fnUntraced(function* (payload) {
     const client = yield* makeEnvironmentHttpApiGroupClient(input.httpBaseUrl, "auth");
     return yield* executeEnvironmentHttpRequest(
       environmentEndpointUrl(input.httpBaseUrl, "/api/auth/pairing-token"),
       REQUEST_TIMEOUT_MS,
       client.pairingCredential({
         headers: { authorization: `Bearer ${input.bearerToken}` },
-        payload: input.scopes === undefined ? {} : { scopes: input.scopes },
+        payload,
       }),
     );
-  },
-);
+  }),
+});
+
+/** Whatever session this client paired with: a bearer token, or a DPoP key that renews itself. */
+const preparedHostSession = Effect.fnUntraced(function* (prepared: PreparedConnection) {
+  const auth = {
+    prepared,
+    signer: yield* Effect.serviceOption(ManagedRelay.ManagedRelayDpopSigner),
+    remoteAuthorization: yield* Effect.serviceOption(
+      RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization,
+    ),
+  };
+  return {
+    state: fetchEnvironmentSessionState(auth),
+    issue: (payload) =>
+      executeAuthenticatedEnvironmentHttpRequest({
+        ...auth,
+        group: "auth",
+        method: "POST",
+        url: (urls) => urls.pairingCredential(),
+        timeoutMs: REQUEST_TIMEOUT_MS,
+        request: ({ client, headers }) => client.pairingCredential({ headers, payload }),
+      }),
+  } satisfies HostSession<HttpClient.HttpClient>;
+});
 
 /**
  * Delegates `scopes`. When they cover this build's whole standard set, the host's own standard set
  * is asked for first: a host newer than this client may grant scopes this build cannot name, and
  * listing only the known ones would narrow the new session for good. A refusal falls back to the list.
  */
-const issueWithScopes = (
-  input: { readonly httpBaseUrl: string; readonly bearerToken: string },
-  scopes: AuthGrantScopes,
-) => {
-  const explicit = issuePairingCredential({ ...input, ...(scopes.length === 0 ? {} : { scopes }) });
+const issueWithScopes = <R>(session: HostSession<R>, scopes: AuthGrantScopes) => {
+  const explicit = session.issue(scopes.length === 0 ? {} : { scopes });
   return AuthStandardClientScopes.every((scope) => scopes.includes(scope))
-    ? issuePairingCredential(input).pipe(Effect.catch(() => explicit))
+    ? session.issue({}).pipe(Effect.catch(() => explicit))
     : explicit;
 };
 
@@ -197,9 +227,28 @@ function pairingUrl(httpBaseUrl: string, credential: string): string {
 }
 
 /**
- * Mints a one-time pairing link on one host, delegating what the session holds of the standard
- * set (an older session may lack scopes added since). `pairingBaseUrl` is the address the link
- * should name when it differs from the one the request goes to.
+ * Mints a one-time pairing link naming `pairingBaseUrl`, delegating what the session holds of the
+ * standard set (an older session may lack scopes added since).
+ */
+const mintWithSession = Effect.fnUntraced(function* <R>(
+  session: HostSession<R>,
+  pairingBaseUrl: string,
+) {
+  const state = yield* session.state;
+  const held = new Set(state.permissions ?? state.scopes ?? []);
+  const issued = yield* issueWithScopes(
+    session,
+    AuthStandardClientScopes.filter((scope) => held.has(scope)),
+  );
+  return {
+    pairingUrl: pairingUrl(pairingBaseUrl, issued.credential),
+    expiresAtEpochMs: issued.expiresAt.epochMilliseconds,
+  };
+});
+
+/**
+ * Mints a one-time pairing link on one host with a bearer token. `pairingBaseUrl` is the address
+ * the link should name when it differs from the one the request goes to.
  */
 export const mintHostPairingUrl = Effect.fn("clientRuntime.fleetPairing.mintHostPairingUrl")(
   function* (input: {
@@ -207,18 +256,19 @@ export const mintHostPairingUrl = Effect.fn("clientRuntime.fleetPairing.mintHost
     readonly bearerToken: string;
     readonly pairingBaseUrl?: string;
   }) {
-    const state = yield* fetchRemoteSessionState(input);
-    const held = new Set(state.permissions ?? state.scopes ?? []);
-    const issued = yield* issueWithScopes(
-      input,
-      AuthStandardClientScopes.filter((scope) => held.has(scope)),
+    return yield* mintWithSession(
+      bearerHostSession(input),
+      input.pairingBaseUrl ?? input.httpBaseUrl,
     );
-    return {
-      pairingUrl: pairingUrl(input.pairingBaseUrl ?? input.httpBaseUrl, issued.credential),
-      expiresAtEpochMs: issued.expiresAt.epochMilliseconds,
-    };
   },
 );
+
+/** The same, with this client's own session on a connected host, whichever kind it is. */
+export const mintPreparedHostPairingUrl = Effect.fn(
+  "clientRuntime.fleetPairing.mintPreparedHostPairingUrl",
+)(function* (prepared: PreparedConnection, pairingBaseUrl: string) {
+  return yield* mintWithSession(yield* preparedHostSession(prepared), pairingBaseUrl);
+});
 
 /**
  * Whether this client holds an authenticated session with the host, waiting up to `wait` for one
@@ -299,8 +349,8 @@ export interface FleetPairing {
 }
 
 /**
- * Mints a one-time pairing link on every saved host this client is connected to with a bearer
- * session, and bundles them into one link another device can redeem.
+ * Mints a one-time pairing link on every saved host this client is connected to directly, and
+ * bundles them into one link another device can redeem.
  */
 export const mintFleetPairing = Effect.fn("clientRuntime.fleetPairing.mint")(function* () {
   const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
@@ -319,8 +369,7 @@ export const mintFleetPairing = Effect.fn("clientRuntime.fleetPairing.mint")(fun
       const prepared = Option.getOrUndefined(
         yield* livePrepared(environmentId, entry.enabled ? MINT_CONNECT_WAIT : undefined),
       );
-      const session = prepared === undefined ? null : bearerSession(prepared);
-      if (prepared === undefined || session === null) {
+      if (prepared === undefined) {
         return {
           _tag: "Unavailable",
           environmentId,
@@ -328,12 +377,10 @@ export const mintFleetPairing = Effect.fn("clientRuntime.fleetPairing.mint")(fun
           detail: entry.enabled ? "Not connected" : "Turned off",
         };
       }
-      const pairingBaseUrl = pairedHttpBaseUrl(entry);
-      return yield* mintHostPairingUrl({
-        httpBaseUrl: prepared.httpBaseUrl,
-        bearerToken: session.token,
-        ...(pairingBaseUrl === null ? {} : { pairingBaseUrl }),
-      }).pipe(
+      return yield* mintPreparedHostPairingUrl(
+        prepared,
+        pairedHttpBaseUrl(entry) ?? prepared.httpBaseUrl,
+      ).pipe(
         Effect.map((minted): FleetHostPairing => ({
           _tag: "Minted",
           environmentId,
