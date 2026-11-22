@@ -7,6 +7,7 @@ export type RexEntry =
 
 export const OPEN_FROM_DESKTOP = "Open from the T3 desktop app";
 export const MAC_SIDE_FAILURE = "Couldn't open in Rex";
+export const NOT_LISTED_YET = "Rex didn't find the session in time. It may still open there.";
 export const NO_OPERATE_SCOPE = "This connection can't open Rex here";
 
 /**
@@ -35,6 +36,10 @@ export function rexEntry(input: {
 export const rexLeads = (rex: { readonly preferred: boolean; readonly entry: RexEntry }) =>
   rex.preferred && rex.entry.kind === "enabled";
 
-/** What the client tells the host after the Mac's select; a timed-out select is left to the lease. */
+/** What the client tells the host after the Mac's select; an inconclusive one is left to the lease. */
 export const reportFor = (outcome: RexSelectOutcome): "confirm" | "abandon" | null =>
-  outcome === "selected" ? "confirm" : outcome === "timedOut" ? null : "abandon";
+  outcome === "selected"
+    ? "confirm"
+    : outcome === "timedOut" || outcome === "notListed"
+      ? null
+      : "abandon";

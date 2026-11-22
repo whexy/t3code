@@ -50,7 +50,7 @@ CONSTANTS
   MaxRestarts,    \* T3 server restarts
   MaxOverruns,    \* clicks whose Mac-side work outlasts their lease
   MaxHand,        \* the user selecting a session by hand in a Rex app
-  MaxTimeouts,    \* selects the client times out on (the app may still act)
+  MaxInconclusive, \* selects that end without an answer the client can trust (the app may still act)
   MaxCreateFails, \* `rex new` calls that fail, having made the session or not
   MaxDrops,       \* link drops (Rex or T3, any Mac); early ones count here too
   MaxEarlyDrops,  \* Rex drops before a poll could see the app own the size
@@ -59,7 +59,7 @@ CONSTANTS
   \* Design choices. FALSE everywhere is the design as approved.
   Holders,              \* reuse of a pending session joins it with its own lease; abandon and expiry end only that click's hold
   TakeoverCheck,        \* before killing, read the block's size owner; an app owning it counts as confirmed
-  AbandonOnlyOnFailure, \* a select the client timed out on reports nothing; only a definite failure abandons
+  AbandonOnlyOnFailure, \* an inconclusive select (timed out, or "not found") reports nothing; only a definite failure abandons
   ClientDeadline,       \* the client never starts a select it cannot finish inside the lease
   WorktreeLock,         \* the server serializes check, create, reuse, reports and kill per worktree
   RestartRearm,         \* after a restart, pending sessions get a fresh lease instead of an immediate kill
@@ -182,7 +182,7 @@ Init ==
   /\ killSig = [s \in Sids |-> FALSE]
   /\ net = {}
   /\ faults = [loss |-> 0, ends |-> 0, restarts |-> 0, overruns |-> 0, hand |-> 0,
-               timeouts |-> 0, createFails |-> 0, drops |-> 0, early |-> 0, unattended |-> 0,
+               inconclusive |-> 0, createFails |-> 0, drops |-> 0, early |-> 0, unattended |-> 0,
                watches |-> 0]
 
 LockFree == ~WorktreeLock \/ lock = 0
@@ -260,18 +260,21 @@ SelectOk(r) ==
   /\ UNCHANGED <<got, inWindow, late, ServerVars, rexUp, t3Up,
                  alive, created, killed, confirmed, byHand, owner, desired, GhostVars, faults>>
 
-\* Select fails (session not found, host unreachable); the client abandons.
+\* Select fails (Rex's error, or the app never connected after a launch);
+\* the client abandons.
 SelectFails(r) ==
   /\ cl[r] = "selecting"
   /\ cl' = [cl EXCEPT ![r] = "done"]
   /\ net' = net \cup {Msg("abandon", r, got[r])}
   /\ UNCHANGED <<got, inWindow, late, ServerVars, MacVars, RexVars, GhostVars, faults>>
 
-\* The client's select timeout fires; the app may still act on the select.
-SelectTimesOut(r) ==
+\* The select ends inconclusively: the client's timeout fires, or the app
+\* answers "not found" for a session the host just made (Rex 0.1.0 (2061) does,
+\* even while it shows the session). The app may still act on the select.
+SelectInconclusive(r) ==
   /\ cl[r] = "selecting"
-  /\ faults.timeouts < MaxTimeouts
-  /\ Spend("timeouts")
+  /\ faults.inconclusive < MaxInconclusive
+  /\ Spend("inconclusive")
   /\ cl' = [cl EXCEPT ![r] = "done"]
   /\ late' = [late EXCEPT ![r] = TRUE]
   /\ net' = IF AbandonOnlyOnFailure THEN net ELSE net \cup {Msg("abandon", r, got[r])}
@@ -652,7 +655,7 @@ Lose(x) ==
 Next ==
   \/ \E r \in Reqs :
        \/ Click(r) \/ GetSession(r) \/ WaitTimesOut(r)
-       \/ SelectOk(r) \/ SelectFails(r) \/ SelectTimesOut(r)
+       \/ SelectOk(r) \/ SelectFails(r) \/ SelectInconclusive(r)
        \/ LateSelectLands(r) \/ LateSelectDrops(r)
        \/ WindowCloses(r) \/ Overrun(r)
        \/ ReceiveOpen(r) \/ CheckRecord(r) \/ Reuse(r) \/ WriteIntent(r)

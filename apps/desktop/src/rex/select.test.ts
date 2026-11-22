@@ -64,11 +64,19 @@ describe("selectInApp", () => {
     }),
   );
 
-  it.effect("a session no host has fails at once when the app was already running", () =>
+  it.effect("a session the running app does not list is left to the lease at once", () =>
     Effect.gen(function* () {
       const { calls, deps } = script(["notFound"]);
-      assert.strictEqual(yield* selectInApp(0, deps), "failed");
+      assert.strictEqual(yield* selectInApp(0, deps), "notListed");
       assert.deepStrictEqual(calls, { select: 1, openApp: 0 });
+    }),
+  );
+
+  it.effect("a launched app that never lists the session is left to the lease", () =>
+    Effect.gen(function* () {
+      const { calls, deps } = script(["appMissing", "notFound"]);
+      assert.strictEqual(yield* runFor(selectInApp(0, deps), "11 seconds"), "notListed");
+      assert.strictEqual(calls.openApp, 1);
     }),
   );
 
