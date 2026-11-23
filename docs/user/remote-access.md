@@ -235,9 +235,11 @@ When something other than Tailscale Serve publishes the server on your tailnet,
 such as a userspace Tailscale node on a machine without the Tailscale app, start
 the server with `T3CODE_TAILNET_URL` set to that address, an `https` origin such
 as `https://machine.tailnet.ts.net:8443`. The server reports it as a Tailscale
-route once the address answers as this server, so devices that pair another way
-learn it. It works without `--tailscale-serve`, and when both are set it takes
-the place of the Serve address.
+route without checking it, since the machine itself may have no route to your
+tailnet, so devices that pair another way learn it. Devices try it first and
+fall back to their other routes when it does not answer, so set it only to an
+address that reaches this server. It works without `--tailscale-serve`, and when
+both are set it takes the place of the Serve address.
 
 ### Hosted web app
 

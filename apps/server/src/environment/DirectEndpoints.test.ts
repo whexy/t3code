@@ -457,13 +457,10 @@ describe("DirectEndpoints Tailscale Serve", () => {
       }),
   );
 
-  effectIt.effect("lists a configured tailnet URL once it answers for this server", () =>
+  effectIt.effect("lists a configured tailnet URL without probing it", () =>
     Effect.gen(function* () {
       const probed: Array<string> = [];
-      const resolveConfigured = (
-        overrides: Partial<ServerConfig.ServerConfig["Service"]>,
-        probeStatus: number,
-      ) =>
+      const resolveConfigured = (tailscaleServeEnabled: boolean, probeStatus: number) =>
         Effect.flatMap(DirectEndpoints.DirectEndpoints, (service) => service.resolve()).pipe(
           Effect.provide(
             DirectEndpoints.layer.pipe(
@@ -471,14 +468,12 @@ describe("DirectEndpoints Tailscale Serve", () => {
                 Layer.mergeAll(
                   layerServeConfig("127.0.0.1", {
                     tailnetUrl: "https://mars-relay.tail1234.ts.net:35338/",
-                    ...overrides,
+                    tailscaleServeEnabled,
                   }),
-                  overrides.tailscaleServeEnabled === false
-                    ? Layer.succeed(
-                        ChildProcessSpawner.ChildProcessSpawner,
-                        ChildProcessSpawner.make(() => Effect.die("tailscale must not run")),
-                      )
-                    : layerTailscaleUp,
+                  Layer.succeed(
+                    ChildProcessSpawner.ChildProcessSpawner,
+                    ChildProcessSpawner.make(() => Effect.die("tailscale must not run")),
+                  ),
                   Layer.succeed(
                     HttpClient.HttpClient,
                     HttpClient.make((request) => {
@@ -486,22 +481,22 @@ describe("DirectEndpoints Tailscale Serve", () => {
                       return Effect.succeed(serveProbeResponse(request, probeStatus));
                     }),
                   ),
+                  NodeFileSystem.layer,
                 ),
               ),
             ),
           ),
         );
-      const configured = {
-        kind: "tailnet",
-        httpBaseUrl: "https://mars-relay.tail1234.ts.net:35338/",
-      };
+      const configured = [
+        { kind: "tailnet", httpBaseUrl: "https://mars-relay.tail1234.ts.net:35338/" },
+      ];
 
-      expect(yield* resolveConfigured({ tailscaleServeEnabled: false }, 200)).toEqual([configured]);
-      expect(yield* resolveConfigured({ tailscaleServeEnabled: true }, 200)).toEqual([configured]);
-      expect(yield* resolveConfigured({ tailscaleServeEnabled: false }, 502)).toEqual([]);
-      expect(new Set(probed)).toEqual(
-        new Set(["https://mars-relay.tail1234.ts.net:35338/.well-known/t3/environment"]),
-      );
+      for (const tailscaleServeEnabled of [false, true]) {
+        for (const probeStatus of [200, 502]) {
+          expect(yield* resolveConfigured(tailscaleServeEnabled, probeStatus)).toEqual(configured);
+        }
+      }
+      expect(probed).toEqual([]);
     }),
   );
 
