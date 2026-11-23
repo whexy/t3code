@@ -351,7 +351,10 @@ const layerServeProbe = (status: number) =>
     HttpClient.make((request) => Effect.succeed(serveProbeResponse(request, status))),
   );
 
-const layerServeConfig = (host = "127.0.0.1") =>
+const layerServeConfig = (
+  host = "127.0.0.1",
+  overrides: Partial<ServerConfig.ServerConfig["Service"]> = {},
+) =>
   Layer.effect(
     ServerConfig.ServerConfig,
     Effect.map(ServerConfig.ServerConfig, (config) => ({
@@ -360,6 +363,7 @@ const layerServeConfig = (host = "127.0.0.1") =>
       port: 3773,
       tailscaleServeEnabled: true,
       tailscaleServePort: 443,
+      ...overrides,
     })),
   ).pipe(
     Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-direct-" })),
@@ -451,6 +455,54 @@ describe("DirectEndpoints Tailscale Serve", () => {
         expect(yield* Fiber.join(revalidating)).toEqual([bound]);
         expect(yield* service.resolveAvailable()).toEqual([bound]);
       }),
+  );
+
+  effectIt.effect("lists a configured tailnet URL once it answers for this server", () =>
+    Effect.gen(function* () {
+      const probed: Array<string> = [];
+      const resolveConfigured = (
+        overrides: Partial<ServerConfig.ServerConfig["Service"]>,
+        probeStatus: number,
+      ) =>
+        Effect.flatMap(DirectEndpoints.DirectEndpoints, (service) => service.resolve()).pipe(
+          Effect.provide(
+            DirectEndpoints.layer.pipe(
+              Layer.provide(
+                Layer.mergeAll(
+                  layerServeConfig("127.0.0.1", {
+                    tailnetUrl: "https://mars-relay.tail1234.ts.net:35338/",
+                    ...overrides,
+                  }),
+                  overrides.tailscaleServeEnabled === false
+                    ? Layer.succeed(
+                        ChildProcessSpawner.ChildProcessSpawner,
+                        ChildProcessSpawner.make(() => Effect.die("tailscale must not run")),
+                      )
+                    : layerTailscaleUp,
+                  Layer.succeed(
+                    HttpClient.HttpClient,
+                    HttpClient.make((request) => {
+                      probed.push(request.url);
+                      return Effect.succeed(serveProbeResponse(request, probeStatus));
+                    }),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      const configured = {
+        kind: "tailnet",
+        httpBaseUrl: "https://mars-relay.tail1234.ts.net:35338/",
+      };
+
+      expect(yield* resolveConfigured({ tailscaleServeEnabled: false }, 200)).toEqual([configured]);
+      expect(yield* resolveConfigured({ tailscaleServeEnabled: true }, 200)).toEqual([configured]);
+      expect(yield* resolveConfigured({ tailscaleServeEnabled: false }, 502)).toEqual([]);
+      expect(new Set(probed)).toEqual(
+        new Set(["https://mars-relay.tail1234.ts.net:35338/.well-known/t3/environment"]),
+      );
+    }),
   );
 
   effectIt.effect("leaves the tailnet name out when Serve is not forwarding", () =>
