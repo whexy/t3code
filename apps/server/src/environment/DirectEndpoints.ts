@@ -154,15 +154,24 @@ export const make = Effect.gen(function* () {
 
   const resolve = Effect.gen(function* () {
     // Serve setup can fail without stopping startup; advertise only after it answers as this server.
-    if (config.tailscaleServeEnabled) {
-      const servedUrl = yield* readTailscaleStatus.pipe(
-        Effect.map((status) => status.magicDnsName),
-        Effect.flatMap((magicDnsName) => {
-          if (magicDnsName === null) return Effect.succeed(null);
-          const httpBaseUrl = buildTailscaleHttpsBaseUrl({
-            magicDnsName,
-            servePort: config.tailscaleServePort,
-          });
+    // A configured tailnet URL takes the place of Serve's.
+    if (config.tailnetUrl !== undefined || config.tailscaleServeEnabled) {
+      const candidateUrl =
+        config.tailnetUrl !== undefined
+          ? Effect.succeed(config.tailnetUrl)
+          : readTailscaleStatus.pipe(
+              Effect.map(({ magicDnsName }) =>
+                magicDnsName === null
+                  ? null
+                  : buildTailscaleHttpsBaseUrl({
+                      magicDnsName,
+                      servePort: config.tailscaleServePort,
+                    }),
+              ),
+            );
+      const servedUrl = yield* candidateUrl.pipe(
+        Effect.flatMap((httpBaseUrl) => {
+          if (httpBaseUrl === null) return Effect.succeed(null);
           return probeTailscaleHttpsEndpoint({ baseUrl: httpBaseUrl, environmentId }).pipe(
             Effect.map((reachable) => (reachable ? httpBaseUrl : null)),
           );
