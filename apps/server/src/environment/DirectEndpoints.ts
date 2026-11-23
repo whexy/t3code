@@ -147,28 +147,29 @@ export const make = Effect.gen(function* () {
         onCloudVm: yield* onCloudVm,
       }),
     ];
-    const servedUrl = yield* Ref.get(servedEndpoint);
+    // Reported unprobed: a userspace tailnet node can publish this server on a
+    // host that has no route to the tailnet, so only the operator can vouch for it.
+    const servedUrl =
+      config.tailnetUrl !== undefined
+        ? Option.some(config.tailnetUrl)
+        : yield* Ref.get(servedEndpoint);
     if (Option.isSome(servedUrl)) endpoints.push({ kind: "tailnet", httpBaseUrl: servedUrl.value });
     return endpoints;
   });
 
   const resolve = Effect.gen(function* () {
     // Serve setup can fail without stopping startup; advertise only after it answers as this server.
-    // A configured tailnet URL takes the place of Serve's.
-    if (config.tailnetUrl !== undefined || config.tailscaleServeEnabled) {
-      const candidateUrl =
-        config.tailnetUrl !== undefined
-          ? Effect.succeed(config.tailnetUrl)
-          : readTailscaleStatus.pipe(
-              Effect.map(({ magicDnsName }) =>
-                magicDnsName === null
-                  ? null
-                  : buildTailscaleHttpsBaseUrl({
-                      magicDnsName,
-                      servePort: config.tailscaleServePort,
-                    }),
-              ),
-            );
+    if (config.tailnetUrl === undefined && config.tailscaleServeEnabled) {
+      const candidateUrl = readTailscaleStatus.pipe(
+        Effect.map(({ magicDnsName }) =>
+          magicDnsName === null
+            ? null
+            : buildTailscaleHttpsBaseUrl({
+                magicDnsName,
+                servePort: config.tailscaleServePort,
+              }),
+        ),
+      );
       const servedUrl = yield* candidateUrl.pipe(
         Effect.flatMap((httpBaseUrl) => {
           if (httpBaseUrl === null) return Effect.succeed(null);
