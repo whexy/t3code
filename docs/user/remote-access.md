@@ -35,6 +35,7 @@ Join both devices to a tailnet with [MagicDNS and HTTPS certificates](https://ta
 
 - **Desktop**: Enable **Settings → Sharing & access → Tailscale HTTPS**.
 - **CLI**: Run `t3 serve --tailscale-serve` or `t3 pair --tailscale` (use `--tailscale-serve-port` if 443 is taken; remove with `tailscale serve --https=443 --set-path=/ off`).
+- **Other tailnet publishers**: When something other than Tailscale Serve publishes the server on your tailnet (such as a userspace Tailscale node on a machine without the Tailscale app), start the server with `T3CODE_TAILNET_URL` set to that `https` origin (e.g. `https://machine.tailnet.ts.net:8443`). The server reports it as a Tailscale route once the address answers as this server, so devices that pair another way learn it. It works without `--tailscale-serve` and replaces the Serve address when both are set.
 
 ### Balance new threads across machines
 

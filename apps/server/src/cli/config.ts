@@ -26,6 +26,7 @@ import * as CliError from "effect/cli/CliError";
 import { readBootstrapEnvelope } from "../bootstrap.ts";
 import { resolveServiceLauncherMode } from "../cloud/serviceLauncherClient.ts";
 import * as ServerConfig from "../config.ts";
+import { TailnetUrlConfig } from "../environment/tailnetUrl.ts";
 import { expandHomePath, resolveBaseDir } from "../os-jank.ts";
 import { isProcessAlive, readPersistedServerRuntimeState } from "../serverRuntimeState.ts";
 import { isServerOwnershipHeld } from "../serverOwnership.ts";
@@ -318,6 +319,7 @@ export const resolveServerConfig = Effect.fn("config.resolveServerConfig")(funct
   );
   const devAuthToken =
     mode === "web" && devUrl !== undefined ? yield* DevAuthTokenConfig : undefined;
+  const tailnetUrl = yield* TailnetUrlConfig;
   const explicitBaseDir = resolveOptionPrecedence(
     normalizedFlags.baseDir,
     Option.fromUndefinedOr(env.t3Home),
@@ -539,6 +541,7 @@ export const resolveServerConfig = Effect.fn("config.resolveServerConfig")(funct
     logWebSocketEvents,
     tailscaleServeEnabled,
     tailscaleServePort,
+    ...(tailnetUrl === undefined ? {} : { tailnetUrl }),
   };
 
   return config;
