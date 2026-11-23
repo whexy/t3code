@@ -14,7 +14,7 @@ it.effect("reads T3CODE_TAILNET_URL as an https origin", () =>
     for (const [value, origin] of [
       ["https://mars-relay.tail1234.ts.net:35338", "https://mars-relay.tail1234.ts.net:35338/"],
       ["https://Mars-Relay.tail1234.ts.net:443/", "https://mars-relay.tail1234.ts.net/"],
-    ]) {
+    ] as const) {
       expect(yield* parse({ T3CODE_TAILNET_URL: value })).toEqual(Result.succeed(origin));
     }
     for (const value of [
