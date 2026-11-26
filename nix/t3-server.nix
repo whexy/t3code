@@ -150,6 +150,10 @@ let
       fileset = root + "/native/resource-monitor";
     };
     cargoLock.lockFile = root + "/native/resource-monitor/Cargo.lock";
+    # The test compares against macOS's own ps and BSD date, which the build sandbox lacks.
+    checkFlags = lib.optionals isDarwin [
+      "--skip=mac_process_identities::reports_the_same_process_group_and_start_second_as_ps"
+    ];
   };
 in
 stdenv.mkDerivation (finalAttrs: {

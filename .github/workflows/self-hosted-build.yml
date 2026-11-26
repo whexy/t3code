@@ -371,6 +371,10 @@ jobs:
           node scripts/update-release-package-versions.ts "$VERSION"
           vp run build:desktop:bundle
 
+      # release-desktop.yml restores this; upload-artifact skips the hidden .vite directory.
+      - name: Stage web asset manifest
+        run: cp apps/server/dist/client/.vite/manifest.json apps/server/dist/client/vite-manifest.release.json
+
       - uses: actions/upload-artifact@v7
         with:
           name: js-bundle
