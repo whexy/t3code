@@ -34,6 +34,10 @@ export const HIDDEN_SETTINGS: ReadonlyMap<string, string> = new Map([
     "defaultThemeSetAt",
     "State the server keeps: it stamps each `t3 theme` change so clients apply it.",
   ],
+  [
+    "defaultAppearanceSetAt",
+    "State the server keeps: it stamps each `t3 theme` appearance change so clients apply it.",
+  ],
   ["backgroundActivity.schemaVersion", "The format version of backgroundActivity, not a choice."],
   ["automaticGitFetchInterval", legacy("backgroundActivity.overrides.automaticGitFetchInterval")],
   [
@@ -73,8 +77,6 @@ export interface SettingRow {
   readonly section: string;
   readonly group: string | null;
   readonly title: string;
-  /** False when T3's Settings page has no control for this path. */
-  readonly onSettingsPage: boolean;
   readonly description: string | null;
   readonly control: SettingControl;
   /** The encoded built-in default, what "not set" means. Undefined when T3 decides at run time. */
@@ -228,7 +230,6 @@ function buildCatalog(): ReadonlyArray<SettingSection> {
       section: copy?.section ?? OTHER_SECTION.id,
       group: copy?.group ?? null,
       title: copy?.title ?? path,
-      onSettingsPage: copy !== undefined,
       description: copy?.description ?? null,
       control: controlFor(shape, copy),
       builtIn: getPath(BUILT_IN_SETTINGS, segments),

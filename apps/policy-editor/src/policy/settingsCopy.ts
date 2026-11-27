@@ -1,5 +1,8 @@
 // Copied from the web app's Settings page (apps/web/src/components/settings), in its order.
+// Settings managed outside that page (Usage tab, `t3 theme`, thread tags) get sections of their own.
 // A path missing here still shows, under "Other settings", with a control from its schema.
+
+import { MAX_WORKFLOW_SKIPPED_RUNS_KEPT } from "@t3tools/contracts";
 
 import { SPEECH_MODELS } from "../../../server/src/speech/model.ts";
 
@@ -29,7 +32,10 @@ export interface SettingCopy {
 export const SETTINGS_SECTIONS: ReadonlyArray<{ readonly id: string; readonly label: string }> = [
   { id: "/settings/voice", label: "Voice" },
   { id: "/settings/providers", label: "Providers" },
+  { id: "usage", label: "Usage" },
   { id: "/settings/threads", label: "Threads" },
+  { id: "thread-tags", label: "Thread tags" },
+  { id: "theme", label: "Theme" },
   { id: "/settings/browser", label: "Browser" },
   { id: "/settings/devices", label: "Devices" },
   { id: "/settings/projects", label: "Projects" },
@@ -170,6 +176,15 @@ export const SETTINGS_COPY: ReadonlyArray<SettingCopy> = [
     control: "json",
   },
   {
+    path: "textGenerators",
+    section: "/settings/providers",
+    group: "Text generators",
+    title: "Text generators",
+    description:
+      "Model APIs that write thread titles, commit messages, and other short text without starting a coding agent. Hosts fetch policies from a public URL, so name a secret instead of writing a key here.",
+    control: "json",
+  },
+  {
     path: "backgroundActivity.overrides.providerHealthRefreshInterval",
     section: "/settings/providers",
     group: "Advanced",
@@ -194,6 +209,42 @@ export const SETTINGS_COPY: ReadonlyArray<SettingCopy> = [
       { value: "beforeCacheExpires", label: "Before the cache expires (beta)" },
       { value: "off", label: "Never" },
     ],
+  },
+  {
+    path: "usageHistoryRetentionDays",
+    section: "usage",
+    group: null,
+    title: "Usage history retention",
+    description:
+      'Days of scanned usage history the server keeps, or "unlimited". The Usage tab shows up to 90 days.',
+    control: "json",
+  },
+  {
+    path: "usagePriceOverrides",
+    section: "usage",
+    group: "Model prices",
+    title: "Custom model prices",
+    description:
+      "USD per million input, output, and cache tokens, by model ID, as set in Usage → Model prices.",
+    control: "json",
+  },
+  {
+    path: "usageModelAliases",
+    section: "usage",
+    group: "Model prices",
+    title: "Model mapping",
+    description:
+      "Counts each model ID toward another model's totals, such as a preview model, as Map to does in Usage → Model prices.",
+    control: "json",
+  },
+  {
+    path: "usageModelFilter",
+    section: "usage",
+    group: "Model prices",
+    title: "Model filter",
+    description:
+      "Models the Usage tab includes or excludes, by provider and model ID, applied before model mapping.",
+    control: "json",
   },
   {
     path: "addProjectBaseDirectory",
@@ -363,6 +414,46 @@ export const SETTINGS_COPY: ReadonlyArray<SettingCopy> = [
     ],
   },
   {
+    path: "hideTaggedThreads",
+    section: "thread-tags",
+    group: null,
+    title: "Hide tagged threads",
+    description:
+      "Clients hide threads that carry any of the hidden tags, such as while recording a screen.",
+    control: "switch",
+  },
+  {
+    path: "hiddenThreadTags",
+    section: "thread-tags",
+    group: null,
+    title: "Hidden tags",
+    description: "Tags whose threads clients hide while Hide tagged threads is on.",
+    control: "json",
+  },
+  {
+    path: "defaultTheme",
+    section: "theme",
+    group: null,
+    title: "Default theme",
+    description:
+      "A theme ID, built in or from the server's themes folder, that connected clients switch to once, as `t3 theme set` does. People can change theme afterwards. Empty sets none.",
+    control: "text",
+  },
+  {
+    path: "defaultAppearance",
+    section: "theme",
+    group: null,
+    title: "Default appearance",
+    description: "The light or dark mode connected clients switch to once.",
+    control: "select",
+    options: [
+      { value: "", label: "None" },
+      { value: "system", label: "System" },
+      { value: "light", label: "Light" },
+      { value: "dark", label: "Dark" },
+    ],
+  },
+  {
     path: "enableAgentBrowserAccess",
     section: "/settings/browser",
     group: "Agent access",
@@ -458,6 +549,15 @@ export const SETTINGS_COPY: ReadonlyArray<SettingCopy> = [
     group: "Source control providers",
     title: "Host credentials",
     description: null,
+    control: "json",
+  },
+  {
+    path: "offeredSourceControlProviders",
+    section: "/settings/source-control",
+    group: "Source control providers",
+    title: "Offer when adding or publishing a project",
+    description:
+      "Hosts the add and publish project pickers offer, by kind. A host left out is off, except the default one.",
     control: "json",
   },
   {
@@ -707,6 +807,24 @@ export const SETTINGS_COPY: ReadonlyArray<SettingCopy> = [
     ],
   },
   {
+    path: "requireConnectDeviceApproval",
+    section: "/settings/access",
+    group: "This machine",
+    title: "Require approval for new devices",
+    description:
+      "Devices that sign in to your T3 Connect account wait until someone already connected here approves them.",
+    control: "switch",
+  },
+  {
+    path: "enablePreviewTunnel",
+    section: "/settings/access",
+    group: "This machine",
+    title: "Preview tunnel",
+    description:
+      "Lets other devices open this machine's local servers: browser tabs loaded on the device, Open on this device, and port forwarding. Off: browser tabs stream from this machine.",
+    control: "switch",
+  },
+  {
     path: "secretProviders",
     section: "/settings/secrets",
     group: "Secret providers",
@@ -842,6 +960,15 @@ export const SETTINGS_COPY: ReadonlyArray<SettingCopy> = [
     control: "switch",
   },
   {
+    path: "keepAwakeWhileAgentsWork",
+    section: "/settings/maintenance",
+    group: "Background activity",
+    title: "Keep awake while agents work",
+    description:
+      "Stop the computer from going to sleep while agents are working, and let it sleep once they finish. Closing a laptop lid still puts it to sleep.",
+    control: "switch",
+  },
+  {
     path: "storageCleanup.browserArtifactsAfterDays",
     section: "/settings/maintenance",
     group: "Artifacts and logs",
@@ -885,6 +1012,35 @@ export const SETTINGS_COPY: ReadonlyArray<SettingCopy> = [
     control: "switch",
   },
   {
+    path: "workflowsEnabled",
+    section: "/settings/labs",
+    group: "Beta",
+    title: "Workflows",
+    description:
+      "Run multi-step workflows from files in the workflows folder of this server's T3 home. Open them from the command palette. While off, nothing in that folder runs; runs wait until it is on again.",
+    control: "switch",
+  },
+  {
+    path: "workflowSkippedRunsKept",
+    section: "/settings/labs",
+    group: "Beta",
+    title: "Skipped runs kept",
+    description:
+      "How many skipped runs each workflow keeps in its history. Older skipped runs are deleted; runs that did something are always kept.",
+    control: "number",
+    min: 0,
+    max: MAX_WORKFLOW_SKIPPED_RUNS_KEPT,
+  },
+  {
+    path: "promptSuggestionsEnabled",
+    section: "/settings/labs",
+    group: "Beta",
+    title: "Suggest next prompt",
+    description:
+      "Show a predicted next message in the empty composer after a Claude or Codex turn. Tab uses it. Each is an extra cached request on your plan. Needs Codex 0.165+. Claude threads update on restart.",
+    control: "switch",
+  },
+  {
     path: "simlockDeviceHostsEnabled",
     section: "/settings/labs",
     group: "Beta",
@@ -892,5 +1048,37 @@ export const SETTINGS_COPY: ReadonlyArray<SettingCopy> = [
     description:
       "Let the Device panel lease simulators and emulators from your own Simlock pool, added in Devices. An alpha that may change or break. T3 Code never installs Simlock.",
     control: "switch",
+  },
+  {
+    path: "fastWorktreeCheckout",
+    section: "/settings/labs",
+    group: "Beta",
+    title: "Fast worktree checkout",
+    description:
+      "On a Mac, clone new worktrees from a checkout cached in the T3 home folder instead of writing every file. Uses Git’s normal checkout when it can’t. Turning it off deletes the cache.",
+    control: "switch",
+  },
+  {
+    path: "agentFeedback.mode",
+    section: "/settings/labs",
+    group: "Beta",
+    title: "Agent feedback",
+    description: "Agents send no feedback to the T3 team.",
+    control: "select",
+    options: [
+      { value: "off", label: "Off", description: "Agents send no feedback to the T3 team." },
+      {
+        value: "on-request",
+        label: "When I ask",
+        description:
+          "When you ask, agents show you a short report about T3 Code and send it to the T3 team if you approve.",
+      },
+      {
+        value: "auto",
+        label: "Automatic",
+        description:
+          "Agents also report T3 Code problems they hit on their own, such as a T3 tool that failed.",
+      },
+    ],
   },
 ];
