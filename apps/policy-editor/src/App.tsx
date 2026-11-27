@@ -1,5 +1,6 @@
 import {
   BotIcon,
+  ChartColumnIcon,
   CheckIcon,
   CircleAlertIcon,
   ClipboardPasteIcon,
@@ -17,6 +18,7 @@ import {
   type LucideIcon,
   MessagesSquareIcon,
   MicIcon,
+  PaletteIcon,
   PanelsTopLeftIcon,
   RefreshCwIcon,
   SaveIcon,
@@ -25,6 +27,7 @@ import {
   ShieldIcon,
   SlidersHorizontalIcon,
   SmartphoneIcon,
+  TagIcon,
   Trash2Icon,
   UsersIcon,
   WrenchIcon,
@@ -95,7 +98,10 @@ import { SettingsGroupHeading, SettingsRow, SettingsSection } from "./ui/setting
 const SECTION_ICONS: Record<string, LucideIcon> = {
   "/settings/voice": MicIcon,
   "/settings/providers": BotIcon,
+  usage: ChartColumnIcon,
   "/settings/threads": MessagesSquareIcon,
+  "thread-tags": TagIcon,
+  theme: PaletteIcon,
   "/settings/browser": GlobeIcon,
   "/settings/devices": SmartphoneIcon,
   "/settings/projects": PanelsTopLeftIcon,
@@ -902,7 +908,7 @@ export function App({ initialOpen }: { readonly initialOpen: Promise<Opened> }) 
               id={sectionAnchor(section.id)}
               title={section.label}
               {...(section.id === "other"
-                ? { description: "Settings with no control on T3 Code's Settings page." }
+                ? { description: "Settings T3 Code added since the editor last described them." }
                 : {})}
             >
               {section.rows.map((row, index) => (
